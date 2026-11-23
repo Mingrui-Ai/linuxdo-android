@@ -742,14 +742,14 @@ private fun UserSummaryView(
             )
 
             val stats = listOf(
-                "访问天数" to formatCount(summary.daysVisited),
-                "阅读时长" to formatTimeRead(summary.timeRead),
-                "已读帖子" to formatCount(summary.postsReadCount),
-                "浏览话题" to formatCount(summary.topicsEntered),
-                "建立话题" to formatCount(summary.topicCount),
-                "发表回复" to formatCount(summary.postCount),
-                "获得点赞" to formatCount(summary.likesReceived),
-                "送出点赞" to formatCount(summary.likesGiven),
+                "📅 访问天数" to formatCount(summary.daysVisited),
+                "⏱️ 阅读时长" to formatTimeRead(summary.timeRead),
+                "📖 已读帖子" to formatCount(summary.postsReadCount),
+                "👀 浏览话题" to formatCount(summary.topicsEntered),
+                "📝 建立话题" to formatCount(summary.topicCount),
+                "💬 发表回复" to formatCount(summary.postCount),
+                "❤️ 获得点赞" to formatCount(summary.likesReceived),
+                "👍 送出点赞" to formatCount(summary.likesGiven),
             )
 
             stats.chunked(4).forEachIndexed { index, row ->
