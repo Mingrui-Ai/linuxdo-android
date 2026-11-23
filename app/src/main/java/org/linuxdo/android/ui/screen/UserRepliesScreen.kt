@@ -65,6 +65,9 @@ import androidx.compose.ui.text.AnnotatedString
 import android.widget.Toast
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.foundation.text.BasicText
+import androidx.compose.foundation.text.TextAutoSize
+import androidx.compose.ui.text.style.TextAlign
 import org.linuxdo.android.data.UserSummaryData
 import org.linuxdo.android.data.SummaryTopicItem
 import org.linuxdo.android.data.SummaryReplyItem
@@ -537,14 +540,11 @@ fun UserProfileScreen(
         header = {
             Column {
                 ProfileHeader(
-                    username = username, card = userCard, summary = summaryData,
+                    username = username, card = userCard,
                     initialAvatarUrl = initialAvatarUrl, initialStaticAvatarUrl = initialStaticAvatarUrl,
                     onBack = onBack, onSwitchAccount = onSwitchAccount, onEditProfile = onEditProfile,
                     onChat = onChat?.let { callback -> { callback(username) } },
                     onPrivateMessage = onComposePrivateMessage?.let { callback -> { callback(username) } },
-                    onAbout = { selectedProfileTab = UserProfileTab.Summary },
-                    onTopics = { selectedProfileTab = UserProfileTab.Topics },
-                    onReplies = { selectedProfileTab = UserProfileTab.Replies },
                     onRefresh = { refreshGeneration++ }, menuActions = menuActions,
                     communityScore = communityScore, onOpenCommunityScore = onOpenCommunityScore,
                     onOpenLevel = onOpenLevel,
@@ -731,8 +731,8 @@ private fun UserSummaryView(
                 .clip(RoundedCornerShape(16.dp))
                 .background(cardBg)
                 .border(0.5.dp, cardBorder, RoundedCornerShape(16.dp))
-                .padding(16.dp),
-            verticalArrangement = Arrangement.spacedBy(12.dp),
+                .padding(12.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp),
         ) {
             Text(
                 text = "社区记录",
@@ -742,36 +742,39 @@ private fun UserSummaryView(
             )
 
             val stats = listOf(
-                Triple("访问天数", formatCount(summary.daysVisited), "📅"),
-                Triple("阅读时长", formatTimeRead(summary.timeRead), "⏱️"),
-                Triple("已读帖子", formatCount(summary.postsReadCount), "📖"),
-                Triple("浏览话题", formatCount(summary.topicsEntered), "👀"),
-                Triple("建立话题", formatCount(summary.topicCount), "📝"),
-                Triple("发表回复", formatCount(summary.postCount), "💬"),
-                Triple("获得点赞", formatCount(summary.likesReceived), "❤️"),
-                Triple("送出点赞", formatCount(summary.likesGiven), "👍"),
+                "访问天数" to formatCount(summary.daysVisited),
+                "阅读时长" to formatTimeRead(summary.timeRead),
+                "已读帖子" to formatCount(summary.postsReadCount),
+                "浏览话题" to formatCount(summary.topicsEntered),
+                "建立话题" to formatCount(summary.topicCount),
+                "发表回复" to formatCount(summary.postCount),
+                "获得点赞" to formatCount(summary.likesReceived),
+                "送出点赞" to formatCount(summary.likesGiven),
             )
 
-            for (row in stats.chunked(2)) {
+            stats.chunked(4).forEachIndexed { index, row ->
+                if (index > 0) IosDivider()
                 Row(
                     modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(10.dp),
+                    horizontalArrangement = Arrangement.spacedBy(4.dp),
                 ) {
-                    for ((label, value, icon) in row) {
-                        Row(
+                    for ((label, value) in row) {
+                        Column(
                             modifier = Modifier
                                 .weight(1f)
-                                .clip(RoundedCornerShape(10.dp))
-                                .background(if (isDark) Color(0xFF222226) else Color(0xFFF9FAFB))
-                                .padding(horizontal = 12.dp, vertical = 10.dp),
-                            verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                                .padding(horizontal = 2.dp, vertical = 4.dp),
+                            horizontalAlignment = Alignment.CenterHorizontally,
+                            verticalArrangement = Arrangement.spacedBy(4.dp),
                         ) {
-                            Text(icon, fontSize = 16.sp)
-                            Column {
-                                Text(label, fontSize = 11.5.sp, color = textSecondary)
-                                Text(value, fontSize = 15.sp, fontWeight = FontWeight.Bold, color = textPrimary)
-                            }
+                            Text(label, fontSize = 11.sp, color = textSecondary, textAlign = TextAlign.Center)
+                            BasicText(
+                                text = value,
+                                modifier = Modifier.fillMaxWidth(),
+                                style = IosTheme.type.body.copy(fontSize = 14.sp, lineHeight = 18.sp,
+                                    fontWeight = FontWeight.SemiBold, color = textPrimary, textAlign = TextAlign.Center),
+                                maxLines = 1,
+                                autoSize = TextAutoSize.StepBased(minFontSize = 10.sp, maxFontSize = 14.sp, stepSize = 0.5.sp),
+                            )
                         }
                     }
                 }

@@ -39,7 +39,6 @@ data class ProfileMenuAction(val label: String, val icon: ImageVector, val onCli
 internal fun ProfileHeader(
     username: String,
     card: UserCardData?,
-    summary: UserSummaryData?,
     initialAvatarUrl: String?,
     initialStaticAvatarUrl: String?,
     onBack: (() -> Unit)?,
@@ -47,9 +46,6 @@ internal fun ProfileHeader(
     onEditProfile: (() -> Unit)?,
     onChat: (() -> Unit)?,
     onPrivateMessage: (() -> Unit)?,
-    onAbout: () -> Unit,
-    onTopics: () -> Unit,
-    onReplies: () -> Unit,
     onRefresh: () -> Unit,
     menuActions: List<ProfileMenuAction>,
     communityScore: Int?,
@@ -155,12 +151,7 @@ internal fun ProfileHeader(
             UserBioText(card?.bioExcerpt, "还没有填写个人简介", IosTheme.type.body.copy(fontSize = 13.sp), colors.label,
                 maxLines = 2, emptyColor = colors.secondaryLabel,
                 modifier = Modifier.fillMaxWidth().padding(top = 8.dp).clickable { showBio = true })
-            Row(Modifier.fillMaxWidth().padding(top = 10.dp, bottom = 12.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                ProfileMetric(summary?.likesReceived ?: card?.likesReceived, "获赞", Modifier.weight(1f), onAbout)
-                ProfileMetric(summary?.topicCount ?: card?.topicCount, "话题", Modifier.weight(1f), onTopics)
-                ProfileMetric(summary?.postCount ?: card?.postCount, "回复", Modifier.weight(1f), onReplies)
-                ProfileMetric(summary?.daysVisited, "访问天数", Modifier.weight(1f), onAbout)
-            }
+            Spacer(Modifier.height(12.dp))
         }
     }
     if (showBio) {
@@ -174,14 +165,6 @@ internal fun ProfileHeader(
             onBadgeClick = { selectedBadge = it }, onDismiss = { showBadges = false })
     }
     selectedBadge?.let { BadgeDetailDialog(it) { selectedBadge = null } }
-}
-
-@Composable
-private fun ProfileMetric(value: Int?, label: String, modifier: Modifier, onClick: () -> Unit) {
-    Column(modifier.clickable(onClick = onClick), verticalArrangement = Arrangement.spacedBy(2.dp)) {
-        Text(value?.let(::formatCount) ?: "—", color = IosTheme.colors.label, fontWeight = FontWeight.SemiBold, fontSize = 17.sp)
-        Text(label, color = IosTheme.colors.secondaryLabel, fontSize = 11.sp)
-    }
 }
 
 @Composable
