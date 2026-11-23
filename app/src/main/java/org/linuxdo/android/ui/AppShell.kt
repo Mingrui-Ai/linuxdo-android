@@ -1748,6 +1748,7 @@ private fun MainNavigation(state: UiState, viewModel: MainViewModel, lifecycle: 
                                 onRefreshNotifications = { viewModel.loadProfile(org.linuxdo.android.data.ProfileSection.Notifications, refresh = true) },
                                 onMore = { viewModel.loadProfile(org.linuxdo.android.data.ProfileSection.Notifications, more = true) },
                                 onMarkAllRead = viewModel::markAllNotificationsRead,
+                                onMarkAllChatRead = viewModel::markAllChatRead,
                                 onRead = viewModel::readNotification,
                                 onRefreshChat = { viewModel.loadChatChannels(refresh = true) },
                                 onOpenChannel = { stack.push(Route.ChatRoom(it.id, it.displayTitle)) },

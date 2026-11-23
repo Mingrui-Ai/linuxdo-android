@@ -10,13 +10,12 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Close
-import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
+import androidx.compose.material3.AlertDialog
 import androidx.compose.runtime.*
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
@@ -56,6 +55,7 @@ internal fun MessagesScreen(
     onRefreshNotifications: () -> Unit,
     onMore: () -> Unit,
     onMarkAllRead: () -> Unit,
+    onMarkAllChatRead: () -> Unit,
     onRead: (Long) -> Unit,
     onOpenTopic: (Long, String, Int?) -> Unit,
     onOpenUser: (String) -> Unit,
@@ -63,7 +63,9 @@ internal fun MessagesScreen(
     onOpenChannel: (ChatChannelSummary) -> Unit,
 ) {
     var confirmRead by rememberSaveable { mutableStateOf(false) }
-    var showSearch by rememberSaveable { mutableStateOf(false) }
+    var showSearch by rememberSaveable(section) { mutableStateOf(false) }
+    var notificationQuery by rememberSaveable { mutableStateOf("") }
+    LaunchedEffect(showSearch) { if (!showSearch) notificationQuery = "" }
     val headerState = rememberCollapsingHeaderState()
     LaunchedEffect(scrollToTopRequest) {
         if (scrollToTopRequest > 0) headerState.expand()
@@ -84,22 +86,19 @@ internal fun MessagesScreen(
         swipeContent = false,
         collapsingHeader = headerState,
         unread = { if (it == MessageSection.Chat.ordinal) unreadChannels.isNotEmpty() else unreadNotifications > 0 },
-        actionWidth = if (chatOpen) 76.dp else 48.dp,
+        actionWidth = 76.dp,
         actions = {
             Row {
-                if (chatOpen) {
-                    IconButton(onClick = { showSearch = !showSearch }, modifier = Modifier.width(38.dp)) {
-                        Icon(if (showSearch) Icons.Default.Close else Icons.Default.Search,
-                            if (showSearch) "关闭搜索" else "搜索聊天", tint = IosTheme.colors.label)
-                    }
-                    IconButton(onClick = onRefreshChat, enabled = !chat.loadingChannels, modifier = Modifier.width(38.dp)) {
-                        Icon(Icons.Default.Refresh, "刷新聊天", tint = IosTheme.colors.label)
-                    }
-                } else {
-                    IconButton(onClick = { confirmRead = true },
-                        modifier = Modifier.semantics { contentDescription = "将通知全部标为已读" }) {
-                        BroomGlyph(IosTheme.colors.label)
-                    }
+                IconButton(onClick = { confirmRead = true },
+                    modifier = Modifier.width(38.dp).semantics {
+                        contentDescription = if (chatOpen) "将聊天全部标为已读" else "将通知全部标为已读"
+                    }) {
+                    BroomGlyph(IosTheme.colors.label)
+                }
+                IconButton(onClick = { showSearch = !showSearch }, modifier = Modifier.width(38.dp)) {
+                    Icon(Icons.Default.Search,
+                        if (showSearch) "关闭搜索" else if (chatOpen) "搜索聊天" else "搜索通知",
+                        tint = if (showSearch) IosTheme.colors.accent else IosTheme.colors.label)
                 }
             }
         },
@@ -144,11 +143,21 @@ internal fun MessagesScreen(
                 }
                 NotificationList(pageState, feedDisplayMode, active && !chatOpen && current,
                     if (!chatOpen && current) scrollToTopRequest else 0,
-                    onRefreshNotifications, onMore, onRead, onOpenTopic, onOpenUser)
+                    onRefreshNotifications, onMore, onRead, onOpenTopic, onOpenUser,
+                    showSearch, notificationQuery, { notificationQuery = it })
             }
         }
     }
-    if (confirmRead) ConfirmReadNotifications(onDismiss = { confirmRead = false }, onConfirm = onMarkAllRead)
+    if (confirmRead) {
+        if (chatOpen) AlertDialog(
+            onDismissRequest = { confirmRead = false },
+            title = { Text("标记为已读") },
+            text = { Text("将所有频道和直接消息中的当前未读消息标记为已读？") },
+            confirmButton = { TextButton(onClick = { confirmRead = false; onMarkAllChatRead() }) { Text("确定") } },
+            dismissButton = { TextButton(onClick = { confirmRead = false }) { Text("取消") } },
+            containerColor = IosTheme.colors.card,
+        ) else ConfirmReadNotifications(onDismiss = { confirmRead = false }, onConfirm = onMarkAllRead)
+    }
 }
 
 /** Both header and list drive the same pager. Publish the new filter only after settling. */
@@ -257,32 +266,55 @@ private fun NotificationList(
     onRead: (Long) -> Unit,
     onOpenTopic: (Long, String, Int?) -> Unit,
     onOpenUser: (String) -> Unit,
+    showSearch: Boolean,
+    query: String,
+    onQuery: (String) -> Unit,
 ) {
     val list = rememberLazyListState()
+    var refreshRequested by remember { mutableStateOf(false) }
+    LaunchedEffect(state.loading) { if (!state.loading) refreshRequested = false }
     ScrollToTopOnRequest(list, scrollToTopRequest)
-    val entries = state.content.entries
+    val searchQuery = if (showSearch) query.trim() else ""
+    val entries = remember(state.content.entries, searchQuery) {
+        state.content.entries.filter { entry ->
+            searchQuery.isEmpty() || entry.title.contains(searchQuery, ignoreCase = true) ||
+                entry.actor?.contains(searchQuery, ignoreCase = true) == true ||
+                entry.subtitle.contains(searchQuery, ignoreCase = true)
+        }
+    }
+    LaunchedEffect(searchQuery) { list.scrollToItem(0) }
     val nearEnd by remember { derivedStateOf {
         val layout = list.layoutInfo
         layout.visibleItemsInfo.any { it.index >= layout.totalItemsCount - 3 }
     } }
     val canLoadMore = state.loaded && !state.loading && state.error == null && state.content.hasMore
-    LaunchedEffect(active, nearEnd, canLoadMore, entries.size) {
-        if (active && nearEnd && canLoadMore && entries.size >= 20) onMore()
+    LaunchedEffect(active, nearEnd, canLoadMore, entries.size, searchQuery) {
+        if (active && searchQuery.isEmpty() && nearEnd && canLoadMore && entries.size >= 20) onMore()
     }
-    LazyColumn(state = list, modifier = Modifier.fillMaxSize().scrollListBars(list, active), contentPadding = PaddingValues(bottom = 72.dp)) {
-        itemsIndexed(entries, key = { _, entry -> entry.id }) { index, entry ->
-            NotificationRow(entry, onOpenTopic, onRead, onOpenUser)
-            if (index < entries.lastIndex) FeedItemDivider(feedDisplayMode)
-        }
-        state.error?.let { message -> item { ErrorNotice(message, onRefresh) } }
-        if (state.loading) item { IosLoadingBox() }
-        if (canLoadMore && entries.size < 20) item {
-            Box(Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
-                TextButton(onClick = onMore) { Text("加载更早的记录") }
+    Column(Modifier.fillMaxSize()) {
+        if (showSearch) MessageSearchField(query, onQuery, "搜索已加载的通知…")
+        MessageListRefresh(state.loading && refreshRequested, active,
+            { if (!state.loading) { refreshRequested = true; onRefresh() } }, Modifier.fillMaxWidth().weight(1f)) {
+            LazyColumn(state = list, modifier = Modifier.fillMaxSize().scrollListBars(list, active), contentPadding = PaddingValues(bottom = 72.dp)) {
+                itemsIndexed(entries, key = { _, entry -> entry.id }) { index, entry ->
+                    NotificationRow(entry, onOpenTopic, onRead, onOpenUser)
+                    if (index < entries.lastIndex) FeedItemDivider(feedDisplayMode)
+                }
+                state.error?.let { message -> item { ErrorNotice(message, onRefresh) } }
+                if (state.loading && !refreshRequested) item { IosLoadingBox() }
+                if (canLoadMore && (entries.size < 20 || searchQuery.isNotEmpty())) item {
+                    Box(Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
+                        TextButton(onClick = onMore) { Text("加载更早的记录") }
+                    }
+                }
+                if (state.loaded && entries.isEmpty() && !state.loading && state.error == null) {
+                    item {
+                        if (searchQuery.isNotEmpty()) Box(Modifier.fillMaxWidth().padding(24.dp), contentAlignment = Alignment.Center) {
+                            Text("已加载的通知中没有匹配项", color = IosTheme.colors.secondaryLabel)
+                        } else if (!state.content.hasMore) EmptyNotice()
+                    }
+                }
             }
-        }
-        if (state.loaded && entries.isEmpty() && !state.loading && state.error == null && !state.content.hasMore) {
-            item { EmptyNotice() }
         }
     }
 }

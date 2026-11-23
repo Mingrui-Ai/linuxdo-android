@@ -5,7 +5,6 @@ import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.PickVisualMediaRequest
 import androidx.activity.result.contract.ActivityResultContracts
-import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -15,6 +14,7 @@ import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxHeight
@@ -35,7 +35,6 @@ import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.material.icons.Icons
@@ -74,7 +73,6 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Path
-import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.StrokeJoin
 import androidx.compose.ui.graphics.drawscope.Stroke
@@ -99,7 +97,6 @@ import org.linuxdo.android.data.ChatMessageSummary
 import org.linuxdo.android.data.avatarUrlOf
 import org.linuxdo.android.ui.ChatUiState
 import org.linuxdo.android.ui.design.IosActivityIndicator
-import org.linuxdo.android.ui.design.LocalListBars
 import org.linuxdo.android.ui.design.scrollListBars
 import org.linuxdo.android.ui.design.FeedItemDivider
 import org.linuxdo.android.ui.design.MessageFeedRow
@@ -107,6 +104,8 @@ import org.linuxdo.android.ui.design.UserAvatar
 import org.linuxdo.android.ui.design.IosDivider
 import org.linuxdo.android.ui.design.IosNavBar
 import org.linuxdo.android.ui.design.IosTheme
+import org.linuxdo.android.ui.design.MessageListRefresh
+import org.linuxdo.android.ui.design.MessageSearchField
 import org.linuxdo.android.ui.design.FullscreenDialog
 import org.linuxdo.android.ui.format.RelativeTime
 
@@ -136,59 +135,36 @@ internal fun ChatList(
     }
 
     Column(Modifier.fillMaxSize().background(IosTheme.colors.groupedBackground)) {
-        // 搜索栏展开
-        AnimatedVisibility(visible = showSearch && LocalListBars.current?.value != false) {
-            Column(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .background(IosTheme.colors.card)
-                    .padding(horizontal = 14.dp, vertical = 8.dp),
-            ) {
-                BasicTextField(
-                    value = searchQuery,
-                    onValueChange = { queryText = it },
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .clip(RoundedCornerShape(8.dp))
-                        .background(IosTheme.colors.fieldBackground)
-                        .padding(horizontal = 10.dp, vertical = 8.dp),
-                    textStyle = TextStyle(fontSize = 14.sp, color = IosTheme.colors.label),
-                    singleLine = true,
-                    cursorBrush = SolidColor(IosTheme.colors.accent),
-                    decorationBox = { innerTextField ->
-                        if (searchQuery.isEmpty()) {
-                            Text(
-                                if (!directMessages) "搜索频道..." else "搜索直接消息...",
-                                style = TextStyle(fontSize = 14.sp, color = IosTheme.colors.tertiaryLabel),
-                            )
-                        }
-                        innerTextField()
-                    },
-                )
-            }
+        if (showSearch) {
+            MessageSearchField(queryText, { queryText = it }, if (directMessages) "搜索直接消息…" else "搜索频道…")
         }
-
-        // 频道/消息列表内容
-        Box(modifier = Modifier.weight(1f).fillMaxWidth()) {
-            when {
-                state.loadingChannels && state.channels.isEmpty() -> {
-                    Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+        val list = rememberLazyListState()
+        org.linuxdo.android.ui.design.ScrollToTopOnRequest(list, scrollToTopRequest)
+        LaunchedEffect(searchQuery) { list.scrollToItem(0) }
+        MessageListRefresh(state.loadingChannels && state.channels.isNotEmpty(), active, onRefresh,
+            Modifier.weight(1f).fillMaxWidth()) {
+            LazyColumn(
+                state = list,
+                contentPadding = PaddingValues(bottom = 72.dp),
+                modifier = Modifier.fillMaxSize().scrollListBars(list, active),
+            ) {
+                if (state.loadingChannels && state.channels.isEmpty()) item {
+                    Box(Modifier.fillMaxWidth().padding(24.dp), contentAlignment = Alignment.Center) {
                         IosActivityIndicator(diameter = 24.dp, color = IosTheme.colors.accent)
                     }
                 }
-                state.channelsError != null && state.channels.isEmpty() -> {
+                state.channelsError?.let { message -> item {
                     Column(
-                        Modifier.fillMaxSize().padding(24.dp),
+                        Modifier.fillMaxWidth().padding(24.dp),
                         horizontalAlignment = Alignment.CenterHorizontally,
-                        verticalArrangement = Arrangement.Center,
                     ) {
-                        Text(state.channelsError, style = IosTheme.type.footnote, color = IosTheme.colors.secondaryLabel)
+                        Text(message, style = IosTheme.type.footnote, color = IosTheme.colors.secondaryLabel)
                         Spacer(Modifier.height(12.dp))
                         TextButton(onClick = onRefresh) { Text("重试") }
                     }
-                }
-                currentList.isEmpty() -> {
-                    Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                } }
+                if (currentList.isEmpty() && !state.loadingChannels && state.channelsError == null) item {
+                    Box(Modifier.fillMaxWidth().padding(24.dp), contentAlignment = Alignment.Center) {
                         Text(
                             text = if (searchQuery.isNotBlank()) "未搜索到匹配项"
                             else if (!directMessages) "暂无公共频道" else "暂无直接消息",
@@ -197,19 +173,9 @@ internal fun ChatList(
                         )
                     }
                 }
-                else -> {
-                    val list = rememberLazyListState()
-                    org.linuxdo.android.ui.design.ScrollToTopOnRequest(list, scrollToTopRequest)
-                    LazyColumn(
-                        state = list,
-                        contentPadding = androidx.compose.foundation.layout.PaddingValues(bottom = 72.dp),
-                        modifier = Modifier.fillMaxSize().scrollListBars(list, active),
-                    ) {
-                        itemsIndexed(currentList, key = { _, channel -> channel.id }) { index, channel ->
-                            ChatChannelRow(channel, onClick = { onOpenChannel(channel) })
-                            if (index < currentList.lastIndex) FeedItemDivider(feedDisplayMode)
-                        }
-                    }
+                itemsIndexed(currentList, key = { _, channel -> channel.id }) { index, channel ->
+                    ChatChannelRow(channel, onClick = { onOpenChannel(channel) })
+                    if (index < currentList.lastIndex) FeedItemDivider(feedDisplayMode)
                 }
             }
         }

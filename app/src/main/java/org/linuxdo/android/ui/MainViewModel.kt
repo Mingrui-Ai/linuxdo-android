@@ -1260,6 +1260,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     fun setChatForeground(active: Boolean) = container.chatRealtime.setForeground(active)
     fun setVisibleChatChannel(channelId: Long?) { container.chatRealtime.visibleChannelId = channelId }
     fun markChatMessagesVisible(channelId: Long, messageId: Long) = container.chatRealtime.markRead(channelId, messageId)
+    fun markAllChatRead() = container.chatRealtime.markAllRead()
     private val _treeView = MutableStateFlow(container.preferences.getBoolean("tree_view", true))
     val treeView = _treeView.asStateFlow()
     private val _showUnreadDot = MutableStateFlow(container.preferences.getBoolean("show_post_unread_dot", true))

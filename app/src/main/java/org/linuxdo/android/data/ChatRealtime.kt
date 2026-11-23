@@ -48,6 +48,8 @@ class ChatRealtime(
     private val channelRevisions = mutableMapOf<Long, Long>()
     private val readJobs = mutableMapOf<Long, Job>()
     private val pendingReads = mutableMapOf<Long, Long>()
+    private val explicitReadChannels = mutableSetOf<Long>()
+    private var allReadJob: Job? = null
     var visibleChannelId: Long? = null
 
     fun setForeground(active: Boolean) {
@@ -67,6 +69,8 @@ class ChatRealtime(
         job?.cancel(); job = null
         refreshJob?.cancel(); refreshJob = null
         readJobs.values.forEach { it.cancel() }; readJobs.clear()
+        allReadJob?.cancel(); allReadJob = null
+        explicitReadChannels.clear()
         pendingReads.clear()
         visibleChannelId = null
         lastRefresh = 0L
@@ -263,27 +267,54 @@ class ChatRealtime(
         updateChannel(channel.copy(membership = membership.copy(muted = muted)))
     }
 
-    fun markRead(channelId: Long, messageId: Long) {
-        if (!foreground || visibleChannelId != channelId) return
-        pendingReads[channelId] = maxOf(messageId, pendingReads[channelId] ?: 0L)
-        if (readJobs[channelId]?.isActive == true) return
+    /** 用户主动批量已读只提交点击时的最新消息，后到消息仍保留未读。 */
+    fun markAllRead() {
+        val generation = store.sessionGeneration
+        if (!current(generation) || _state.value.generation != generation || allReadJob?.isActive == true) return
+        val targets = _state.value.channels.filter { it.unreadCount > 0 }
+            .mapNotNull { channel -> channel.lastMessage?.id?.takeIf { it > 0 }?.let { channel.id to it } }
+        _state.update { it.copy(error = null) }
+        allReadJob = scope.launch {
+            for ((channelId, messageId) in targets) {
+                if (!current(generation)) return@launch
+                enqueueRead(channelId, messageId, explicit = true)
+                readJobs[channelId]?.join()
+            }
+        }
+    }
+
+    fun markRead(channelId: Long, messageId: Long) = enqueueRead(channelId, messageId, explicit = false)
+
+    private fun enqueueRead(channelId: Long, messageId: Long, explicit: Boolean) {
+        if (!explicit && (!foreground || visibleChannelId != channelId)) return
         val channel = _state.value.channels.firstOrNull { it.id == channelId } ?: return
         if (messageId <= (channel.membership?.lastReadMessageId ?: 0L)) return
+        if (explicit) explicitReadChannels.add(channelId)
+        pendingReads[channelId] = maxOf(messageId, pendingReads[channelId] ?: 0L)
+        if (readJobs[channelId]?.isActive == true) return
         val generation = store.sessionGeneration
         readJobs[channelId] = scope.launch {
             try {
-                while (foreground && visibleChannelId == channelId && current(generation)) {
+                while (current(generation) && (channelId in explicitReadChannels || foreground && visibleChannelId == channelId)) {
                     val target = pendingReads.remove(channelId) ?: break
                     repository.markChatChannelRead(channelId, target)
                     if (!current(generation)) return@launch
                     val fresh = _state.value.channels.firstOrNull { it.id == channelId } ?: return@launch
                     updateChannel(fresh.copy(
-                        membership = (fresh.membership ?: ChatMembership()).copy(lastReadMessageId = target),
+                        membership = (fresh.membership ?: ChatMembership()).copy(
+                            lastReadMessageId = maxOf(target, fresh.membership?.lastReadMessageId ?: 0L)),
                         unreadCount = if (target >= (fresh.lastMessage?.id ?: 0L)) 0 else fresh.unreadCount,
                     ))
                 }
             } catch (cancelled: CancellationException) { throw cancelled }
-            catch (_: Exception) { /* 保留未读，下一次可见状态变化时重试。 */ }
+            catch (error: Exception) {
+                if (current(generation) && channelId in explicitReadChannels) {
+                    _state.update { it.copy(error = "部分聊天标记已读失败，请重试") }
+                }
+                // 保留未读，下一次可见状态变化或主动操作时重试。
+            } finally {
+                if (current(generation)) explicitReadChannels.remove(channelId)
+            }
         }
     }
 }
