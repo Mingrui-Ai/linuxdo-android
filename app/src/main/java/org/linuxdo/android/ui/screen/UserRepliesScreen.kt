@@ -79,7 +79,6 @@ import org.linuxdo.android.data.UserCardData
 import org.linuxdo.android.data.avatarUrlOf
 import org.linuxdo.android.ui.design.IosDivider
 import org.linuxdo.android.ui.design.IosLoadingBox
-import org.linuxdo.android.ui.design.ListNavigationHeader
 import org.linuxdo.android.ui.design.scrollListBars
 import org.linuxdo.android.ui.design.IosLargeTitleScaffold
 import org.linuxdo.android.ui.design.IosTheme
@@ -471,7 +470,8 @@ fun UserProfileScreen(
             .fillMaxSize()
             .background(if (isDark) Color(0xFF0F0F10) else Color(0xFFF7F8FA))
     ) {
-        ListNavigationHeader {
+        // 个人资料和分类固定在列表上方，不跟随全局导航栏的滚动显隐。
+        Column {
             // 顶部黑色星空微光头部卡片 (Header)
             Box(
                 modifier = Modifier
