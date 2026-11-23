@@ -1,5 +1,13 @@
 package org.linuxdo.android.ui
 
+import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.WindowInsetsSides
+import androidx.compose.foundation.layout.displayCutout
+import androidx.compose.foundation.layout.systemBars
+import androidx.compose.foundation.layout.only
+import androidx.compose.foundation.layout.union
+import androidx.compose.foundation.layout.windowInsetsPadding
+
 import android.app.Activity
 import android.content.Context
 import android.content.ContextWrapper
@@ -7021,6 +7029,7 @@ fun TopicCreatorSheet(
         modifier = Modifier
             .fillMaxSize()
             .background(IosTheme.colors.card)
+            .windowInsetsPadding(WindowInsets.systemBars.union(WindowInsets.displayCutout).only(WindowInsetsSides.Top))
             .clickable(
                 interactionSource = remember { MutableInteractionSource() },
                 indication = null,
@@ -9291,7 +9300,7 @@ private fun SingleBadgeItemView(
 }
 
 @Composable
-private fun DiscourseBadgeIcon(
+internal fun DiscourseBadgeIcon(
     iconName: String?,
     imageUrl: String?,
     isEarned: Boolean,

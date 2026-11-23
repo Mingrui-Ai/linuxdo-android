@@ -29,11 +29,13 @@ import androidx.compose.ui.unit.sp
 import coil.compose.AsyncImage
 import org.linuxdo.android.Config
 import org.linuxdo.android.data.*
+import org.linuxdo.android.ui.BadgeDetailDialog
 import org.linuxdo.android.ui.design.*
 
 data class ProfileMenuAction(val label: String, val icon: ImageVector, val onClick: () -> Unit)
 
 /** 自己与他人的主页共用资料头部；账号工具只在自己的页面出现。 */
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 internal fun ProfileHeader(
     username: String,
@@ -51,11 +53,20 @@ internal fun ProfileHeader(
     onReplies: () -> Unit,
     onRefresh: () -> Unit,
     menuActions: List<ProfileMenuAction>,
+    communityScore: Int?,
+    onOpenCommunityScore: (() -> Unit)?,
+    onOpenLevel: (() -> Unit)?,
+    badges: List<UserBadgeItem>?,
+    badgesLoading: Boolean,
+    badgesError: String?,
+    onRefreshBadges: () -> Unit,
 ) {
     val colors = IosTheme.colors
     val context = LocalContext.current
     var showMenu by remember(username) { mutableStateOf(false) }
     var showBio by remember(username) { mutableStateOf(false) }
+    var showBadges by remember(username) { mutableStateOf(false) }
+    var selectedBadge by remember(username) { mutableStateOf<UserBadgeItem?>(null) }
     val surface = if (colors.isDark) Color(0xFF101113) else Color.White
     val animated = card?.animatedAvatar ?: AvatarCache.get(username)
         ?: initialAvatarUrl?.takeIf(::isAnimatedAvatarPath)
@@ -78,7 +89,8 @@ internal fun ProfileHeader(
                 Box(Modifier.matchParentSize().background(Brush.verticalGradient(
                     listOf(Color.Black.copy(alpha = .3f), Color.Transparent, surface))))
             }
-            Column(Modifier.statusBarsPadding().padding(horizontal = 16.dp)) {
+            Column(Modifier.windowInsetsPadding(WindowInsets.systemBars.union(WindowInsets.displayCutout)
+                .only(WindowInsetsSides.Top)).padding(horizontal = 16.dp)) {
                 Row(Modifier.fillMaxWidth().height(52.dp), verticalAlignment = Alignment.CenterVertically) {
                     if (onBack != null) {
                         ProfileHeaderButton(Icons.AutoMirrored.Filled.ArrowBack, "返回", onBack)
@@ -132,9 +144,27 @@ internal fun ProfileHeader(
             Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 Text(card?.cleanDisplayName ?: username, fontSize = 24.sp, fontWeight = FontWeight.Bold,
                     color = colors.label, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f, false))
-                card?.trustLevel?.let { LevelBadge(it) }
+                card?.trustLevel?.let { level ->
+                    Box(Modifier.heightIn(min = 32.dp)
+                        .then(if (onOpenLevel != null) Modifier.clickable(onClickLabel = "等级与积分", onClick = onOpenLevel) else Modifier),
+                        contentAlignment = Alignment.Center) {
+                        LevelBadge(level)
+                    }
+                }
             }
-            Text("@$username", color = colors.secondaryLabel, fontSize = 12.sp, modifier = Modifier.padding(top = 2.dp))
+            FlowRow(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                Box(Modifier.heightIn(min = 32.dp), contentAlignment = Alignment.CenterStart) {
+                    Text("@$username", color = colors.secondaryLabel, fontSize = 12.sp)
+                }
+                if (onOpenCommunityScore != null) {
+                    Row(Modifier.heightIn(min = 32.dp).clickable(onClickLabel = "查看社区分", onClick = onOpenCommunityScore),
+                        verticalAlignment = Alignment.CenterVertically) {
+                        Text("社区分 ${communityScore ?: "—"}", color = colors.secondaryLabel, fontSize = 12.sp)
+                        Icon(Icons.Default.KeyboardArrowRight, null, tint = colors.secondaryLabel, modifier = Modifier.size(13.dp))
+                    }
+                }
+                ProfileBadgePreview(badges, badgesLoading) { showBadges = true }
+            }
             UserBioText(card?.bioExcerpt, "还没有填写个人简介", IosTheme.type.body.copy(fontSize = 13.sp), colors.label,
                 maxLines = 2, emptyColor = colors.secondaryLabel,
                 modifier = Modifier.fillMaxWidth().padding(top = 8.dp).clickable { showBio = true })
@@ -158,6 +188,11 @@ internal fun ProfileHeader(
             ProfileMenuAction("刷新个人主页", Icons.Default.Refresh, onRefresh),
         )) { showMenu = false }
     }
+    if (showBadges) {
+        ProfileBadgesSheet(badges, badgesLoading, badgesError, onRefreshBadges,
+            onBadgeClick = { selectedBadge = it }, onDismiss = { showBadges = false })
+    }
+    selectedBadge?.let { BadgeDetailDialog(it) { selectedBadge = null } }
 }
 
 @Composable

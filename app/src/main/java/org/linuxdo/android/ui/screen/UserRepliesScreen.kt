@@ -285,9 +285,9 @@ private fun UserReplyCard(
 }
 
 enum class UserProfileTab(val label: String, val filter: String?) {
+    Summary("关于", null),
     Topics("话题", "4"),
     Replies("回复", "5"),
-    Summary("关于", null),
     Activity("动态", null),
     Likes("赞", "1"),
     Reactions("回应", null),
@@ -309,14 +309,19 @@ fun UserProfileScreen(
     onSwitchAccount: (() -> Unit)? = null,
     onEditProfile: (() -> Unit)? = null,
     menuActions: List<ProfileMenuAction> = emptyList(),
-    aboutContent: (@Composable () -> Unit)? = null,
+    communityScore: Int? = null,
+    onOpenCommunityScore: (() -> Unit)? = null,
+    onOpenLevel: (() -> Unit)? = null,
     scrollToTopRequest: Int = 0,
 ) {
     val context = LocalContext.current
     val coroutineScope = rememberCoroutineScope()
     val repo = (context.applicationContext as? App)?.container?.topicRepository
     var userCard by remember(username) { mutableStateOf<UserCardData?>(repo?.getCachedUserCard(username)) }
-    var selectedTab by rememberSaveable(username) { mutableIntStateOf(0) }
+    var selectedProfileTab by androidx.compose.runtime.key("profile-tab-by-name") {
+        rememberSaveable(username) { mutableStateOf(UserProfileTab.Summary) }
+    }
+    val selectedTab = selectedProfileTab.ordinal
     var refreshGeneration by remember(username) { mutableIntStateOf(0) }
     var profileError by remember(username) { mutableStateOf<String?>(null) }
     val tabEntries = remember { UserProfileTab.entries }
@@ -324,6 +329,25 @@ fun UserProfileScreen(
     var summaryData by remember(username) { mutableStateOf<UserSummaryData?>(null) }
     var summaryLoading by remember(username) { mutableStateOf(false) }
     var summaryError by remember(username) { mutableStateOf<String?>(null) }
+    var badges by remember(username) { mutableStateOf(repo?.getCachedUserBadges(username)) }
+    var badgesLoading by remember(username) { mutableStateOf(false) }
+    var badgesError by remember(username) { mutableStateOf<String?>(null) }
+    var badgeRefresh by remember(username) { mutableIntStateOf(0) }
+
+    LaunchedEffect(username, refreshGeneration, badgeRefresh) {
+        if (repo == null) return@LaunchedEffect
+        badgesLoading = true
+        badgesError = null
+        try {
+            badges = repo.fetchUserBadges(username, forceRefresh = refreshGeneration > 0 || badgeRefresh > 0)
+        } catch (e: kotlinx.coroutines.CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            badgesError = e.message ?: "徽章加载失败"
+        } finally {
+            badgesLoading = false
+        }
+    }
 
     var beforeBoostId by remember(username, selectedTab) { mutableStateOf<Long?>(null) }
     var beforeReactionId by remember(username, selectedTab) { mutableStateOf<Long?>(null) }
@@ -504,10 +528,14 @@ fun UserProfileScreen(
                 onBack = onBack, onSwitchAccount = onSwitchAccount, onEditProfile = onEditProfile,
                 onChat = onChat?.let { callback -> { callback(username) } },
                 onPrivateMessage = onComposePrivateMessage?.let { callback -> { callback(username) } },
-                onAbout = { selectedTab = tabEntries.indexOf(UserProfileTab.Summary) },
-                onTopics = { selectedTab = tabEntries.indexOf(UserProfileTab.Topics) },
-                onReplies = { selectedTab = tabEntries.indexOf(UserProfileTab.Replies) },
+                onAbout = { selectedProfileTab = UserProfileTab.Summary },
+                onTopics = { selectedProfileTab = UserProfileTab.Topics },
+                onReplies = { selectedProfileTab = UserProfileTab.Replies },
                 onRefresh = { refreshGeneration++ }, menuActions = menuActions,
+                communityScore = communityScore, onOpenCommunityScore = onOpenCommunityScore,
+                onOpenLevel = onOpenLevel,
+                badges = badges, badgesLoading = badgesLoading, badgesError = badgesError,
+                onRefreshBadges = { badgeRefresh++ },
             )
             profileError?.let { message ->
                 TextButton(onClick = { refreshGeneration++ }) {
@@ -535,7 +563,7 @@ fun UserProfileScreen(
                     val selected = selectedTab == index
                     Tab(
                         selected = selected,
-                        onClick = { selectedTab = index },
+                        onClick = { selectedProfileTab = tab },
                         text = {
                             Text(
                                 text = tab.label,
@@ -577,7 +605,6 @@ fun UserProfileScreen(
                         onOpenTopic = onOpenTopic,
                         onOpenUser = { u -> onOpenUser?.invoke(u) },
                         scrollState = aboutScroll,
-                        aboutContent = aboutContent,
                     )
                 }
                 else -> {
@@ -663,7 +690,6 @@ private fun UserSummaryView(
     onOpenTopic: (Long, String, Int?) -> Unit,
     onOpenUser: (String) -> Unit,
     scrollState: androidx.compose.foundation.ScrollState,
-    aboutContent: (@Composable () -> Unit)?,
 ) {
     val context = LocalContext.current
     val isDark = IosTheme.colors.isDark
@@ -681,8 +707,6 @@ private fun UserSummaryView(
             .padding(16.dp),
         verticalArrangement = Arrangement.spacedBy(16.dp),
     ) {
-        aboutContent?.invoke()
-
         // 核心统计与历史总结内容完整保留。
         Column(
             modifier = Modifier
@@ -1007,50 +1031,6 @@ private fun UserSummaryView(
                             fontSize = 12.5.sp,
                             color = textSecondary,
                         )
-                    }
-                }
-            }
-        }
-
-        // 7. 徽章展示
-        if (summary.badges.isNotEmpty()) {
-            Column(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .clip(RoundedCornerShape(16.dp))
-                    .background(cardBg)
-                    .border(0.5.dp, cardBorder, RoundedCornerShape(16.dp))
-                    .padding(16.dp),
-                verticalArrangement = Arrangement.spacedBy(10.dp),
-            ) {
-                Text(
-                    text = "🏅 获得徽章 (${summary.badges.size})",
-                    fontSize = 15.sp,
-                    fontWeight = FontWeight.Bold,
-                    color = textPrimary,
-                )
-                FlowRow(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(8.dp),
-                    verticalArrangement = Arrangement.spacedBy(8.dp),
-                ) {
-                    summary.badges.forEach { badge ->
-                        Row(
-                            modifier = Modifier
-                                .clip(RoundedCornerShape(8.dp))
-                                .background(if (isDark) Color(0xFF222226) else Color(0xFFF3F4F6))
-                                .padding(horizontal = 10.dp, vertical = 6.dp),
-                            verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.spacedBy(6.dp),
-                        ) {
-                            Text("🎖️", fontSize = 13.sp)
-                            Text(
-                                text = badge.name,
-                                fontSize = 12.5.sp,
-                                fontWeight = FontWeight.Medium,
-                                color = textPrimary,
-                            )
-                        }
                     }
                 }
             }

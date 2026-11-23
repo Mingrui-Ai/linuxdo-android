@@ -63,8 +63,12 @@ import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.ime
 import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.systemBarsPadding
-import androidx.compose.foundation.layout.displayCutoutPadding
+import androidx.compose.foundation.layout.WindowInsetsSides
+import androidx.compose.foundation.layout.displayCutout
+import androidx.compose.foundation.layout.systemBars
+import androidx.compose.foundation.layout.only
+import androidx.compose.foundation.layout.union
+import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.material3.Text
 import org.linuxdo.android.ui.screen.PostAction
@@ -222,8 +226,9 @@ fun AppShell(viewModel: MainViewModel, browser: BrowserSession) {
             Modifier
                 .fillMaxSize()
                 .background(IosTheme.colors.groupedBackground)
-                .systemBarsPadding()
-                .displayCutoutPadding()
+                // 顶部间距由每个导航页面处理，个人主页可将背景画到状态栏后方。
+                .windowInsetsPadding(WindowInsets.systemBars.union(WindowInsets.displayCutout)
+                    .only(WindowInsetsSides.Horizontal + WindowInsetsSides.Bottom))
                 .imePadding()
                 .clipToBounds(),
         ) {
@@ -241,6 +246,7 @@ fun AppShell(viewModel: MainViewModel, browser: BrowserSession) {
                     dark = dark,
                     modifier = Modifier
                         .align(Alignment.TopCenter)
+                        .windowInsetsPadding(WindowInsets.systemBars.union(WindowInsets.displayCutout).only(WindowInsetsSides.Top))
                         .padding(top = IosMetrics.navBarHeight + 4.dp, start = 12.dp, end = 12.dp)
                         .zIndex(1f),
                 )
@@ -248,19 +254,22 @@ fun AppShell(viewModel: MainViewModel, browser: BrowserSession) {
 
             // 原生登录页面。
             if (state.screen == Screen.Login) {
-                LoginScreen(
-                    state = loginUiState,
-                    onPasswordLogin = viewModel::loginWithPassword,
-                    onSendEmailCode = viewModel::sendLoginEmail,
-                    onEmailCodeLogin = viewModel::loginWithEmailCode,
-                    onDismissError = viewModel::dismissLoginError,
-                    onResetSecondFactor = viewModel::resetSecondFactor,
-                    onOpenWebLogin = viewModel::openWebLoginModal,
-                    onStartWebAuth = viewModel::startWebAuth,
-                    onDismissRiskControl = viewModel::dismissRiskControlDialog,
-                    onCancelWebAuth = viewModel::cancelWebAuth,
-                    onCancel = if (viewModel.canCancelAddAccount()) viewModel::cancelAddAccount else null,
-                )
+                Box(Modifier.fillMaxSize().windowInsetsPadding(
+                    WindowInsets.systemBars.union(WindowInsets.displayCutout).only(WindowInsetsSides.Top))) {
+                    LoginScreen(
+                        state = loginUiState,
+                        onPasswordLogin = viewModel::loginWithPassword,
+                        onSendEmailCode = viewModel::sendLoginEmail,
+                        onEmailCodeLogin = viewModel::loginWithEmailCode,
+                        onDismissError = viewModel::dismissLoginError,
+                        onResetSecondFactor = viewModel::resetSecondFactor,
+                        onOpenWebLogin = viewModel::openWebLoginModal,
+                        onStartWebAuth = viewModel::startWebAuth,
+                        onDismissRiskControl = viewModel::dismissRiskControlDialog,
+                        onCancelWebAuth = viewModel::cancelWebAuth,
+                        onCancel = if (viewModel.canCancelAddAccount()) viewModel::cancelAddAccount else null,
+                    )
+                }
             }
 
             // CF 的全屏验证和后台 WebView 使用全局页面内 AndroidView；登录人机验证在弹框中。
@@ -268,6 +277,7 @@ fun AppShell(viewModel: MainViewModel, browser: BrowserSession) {
                 Box(
                     modifier = Modifier
                         .fillMaxSize()
+                        .windowInsetsPadding(WindowInsets.systemBars.union(WindowInsets.displayCutout).only(WindowInsetsSides.Top))
                         .zIndex(if (showWeb) 2f else -1f)
                         .then(if (showWeb) Modifier.background(IosTheme.colors.groupedBackground) else Modifier),
                     contentAlignment = Alignment.TopCenter,
@@ -356,6 +366,7 @@ fun AppShell(viewModel: MainViewModel, browser: BrowserSession) {
                 ) + fadeOut(animationSpec = tween(durationMillis = 180)),
                 modifier = Modifier
                     .align(Alignment.TopCenter)
+                    .windowInsetsPadding(WindowInsets.systemBars.union(WindowInsets.displayCutout).only(WindowInsetsSides.Top))
                     .padding(top = 10.dp, start = 14.dp, end = 14.dp)
                     .widthIn(max = 420.dp)
                     .zIndex(8f),
@@ -643,8 +654,6 @@ private fun MainNavigation(state: UiState, viewModel: MainViewModel, lifecycle: 
     }
     val searchHistory by viewModel.searchHistory.collectAsStateWithLifecycle()
     val profile by viewModel.profile.collectAsStateWithLifecycle()
-    val userBadges by viewModel.userBadges.collectAsStateWithLifecycle()
-    val isUserBadgesLoading by viewModel.isUserBadgesLoading.collectAsStateWithLifecycle()
     val notificationFilter by viewModel.notificationFilter.collectAsStateWithLifecycle()
     val composer by viewModel.composer.collectAsStateWithLifecycle()
     val topicCreator by viewModel.topicCreator.collectAsStateWithLifecycle()
@@ -864,6 +873,10 @@ private fun MainNavigation(state: UiState, viewModel: MainViewModel, lifecycle: 
                     IosNavHost(stack,
                         interactive = browsing && !topicCreator.open && !showSavedTopics && !topicSearch.open && !metadataEditor.open,
                         listBars = listBars.takeIf { browsing && listForeground && !isDetailRoute && !isKeyboardOpen },
+                        contentWindowInsets = { route ->
+                            if (route == Route.Profile || route is Route.UserProfile) WindowInsets(0)
+                            else WindowInsets.systemBars.union(WindowInsets.displayCutout).only(WindowInsetsSides.Top)
+                        },
                     ) { route ->
                         val active = browsing && stack.current == route
                         // 仅回写标题时保持加载身份，避免保存后重新按阅读游标跳楼。
@@ -1421,9 +1434,6 @@ private fun MainNavigation(state: UiState, viewModel: MainViewModel, lifecycle: 
                                         onOpenLdcStore = { globalBrowserUrl = org.linuxdo.android.ui.screen.ProfileWebApp.Store.url },
                                         onOpenLdcMail = { globalBrowserUrl = org.linuxdo.android.ui.screen.ProfileWebApp.Mail.url },
                                         onEditProfile = { globalBrowserUrl = "${Config.BASE_URL}/my/preferences/profile" },
-                                        userBadges = userBadges,
-                                        isUserBadgesLoading = isUserBadgesLoading,
-                                        onRefreshUserBadges = { viewModel.loadUserBadges() },
                                         cdkScore = cdkScoreState.score.takeIf { cdkScoreState.username.equals(profileUsername, ignoreCase = true) },
                                         onLoadCdkScore = { viewModel.loadCdkScore() },
                                         scrollToTopRequest = scrollToTopRequest,

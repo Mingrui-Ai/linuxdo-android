@@ -10,6 +10,8 @@ import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.gestures.awaitHorizontalTouchSlopOrCancellation
 import androidx.compose.foundation.gestures.horizontalDrag
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.offset
@@ -18,6 +20,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.MutableState
 import org.linuxdo.android.ui.design.LocalListBars
+import org.linuxdo.android.ui.design.IosTheme
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateOf
@@ -69,6 +72,7 @@ fun IosNavHost(
     modifier: Modifier = Modifier,
     interactive: Boolean = true,
     listBars: MutableState<Boolean>? = null,
+    contentWindowInsets: @Composable (Route) -> WindowInsets = { WindowInsets(0) },
     content: @Composable (Route) -> Unit,
 ) {
     val scope = rememberCoroutineScope()
@@ -190,7 +194,10 @@ fun IosNavHost(
 
                     holder.SaveableStateProvider(entry.id) {
                         CompositionLocalProvider(LocalListBars provides listBars.takeIf { entry.id == stack.entries.last().id }) {
-                            content(entry.route)
+                            Box(Modifier.fillMaxSize().background(IosTheme.colors.groupedBackground)
+                                .windowInsetsPadding(contentWindowInsets(entry.route))) {
+                                content(entry.route)
+                            }
                         }
                     }
 
