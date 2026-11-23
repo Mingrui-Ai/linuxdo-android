@@ -734,13 +734,6 @@ private fun UserSummaryView(
                 .padding(12.dp),
             verticalArrangement = Arrangement.spacedBy(8.dp),
         ) {
-            Text(
-                text = "社区记录",
-                fontSize = 15.sp,
-                fontWeight = FontWeight.Bold,
-                color = textPrimary,
-            )
-
             val stats = listOf(
                 "📅 访问天数" to formatCount(summary.daysVisited),
                 "⏱️ 阅读时长" to formatTimeRead(summary.timeRead),
