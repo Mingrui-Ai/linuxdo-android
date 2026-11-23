@@ -152,7 +152,7 @@ class NotificationKeepAliveService : Service() {
 
         val notification = NotificationCompat.Builder(this, NotificationHelper.CHANNEL_ID_KEEPALIVE)
             .setSmallIcon(config.smallIconResId)
-            .setContentTitle("LINUX DO 实时通知")
+            .setContentTitle("${getString(org.linuxdo.android.R.string.app_name)} 实时通知")
             .setContentText("亮屏实时推送 · 息屏低功耗智能守护")
             .setStyle(
                 NotificationCompat.BigTextStyle()

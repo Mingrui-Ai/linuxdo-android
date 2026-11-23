@@ -1,12 +1,12 @@
-# LinuxDo Android
+# LinuxDo 增强版
 
-## Mingrui-Ai 独立测试版
+## Mingrui-Ai 独立版本
 
 本分支在 [xuemk/linuxdo-android](https://github.com/xuemk/linuxdo-android) 的基础上独立维护，开发分支为 [`independent/main`](https://github.com/Mingrui-Ai/linuxdo-android/tree/independent/main)。后续优化在此分支推进，向上游贡献时再单独整理 PR。
 
 当前基线保留统一顶栏与横滑导航、通知和实时聊天整合、选楼与边缘滑条、列表优化，以及站内用户链接、个人主页固定简介、简介表情和导航点击穿透修复。
 
-测试版使用包名 `org.linuxdo.android.debug`，名称为“LinuxDo 测试版”，可与正式版共存。本机继续使用原来的签名覆盖安装即可保留测试版数据。此分支暂未发布独立 Release；下文的上游下载链接不包含本分支的全部改动。
+当前测试构建使用包名 `org.linuxdo.android.debug`，名称为“LinuxDo 增强版”，可与正式版共存。本机继续使用原来的签名覆盖安装即可保留测试版数据。此分支暂未发布独立 Release；下文的上游下载链接不包含本分支的全部改动。
 
 ### 构建与 USB 安装
 

@@ -5450,10 +5450,11 @@ fun DiagnosticsScreen(state: UiState, viewModel: MainViewModel, onBack: () -> Un
                     // 与屏幕一致按新→旧排列：粘贴目标（笔记、聊天）截断长文本时丢掉的是最旧的部分，
                     // 按文件顺序复制会把最新几分钟截没。
                     val newestFirst = viewModel.diagnostics.readLatestLines(300).asReversed()
+                    val logTitle = "${context.getString(org.linuxdo.android.R.string.app_name)} 诊断日志"
                     val range = if (newestFirst.isEmpty()) "" else
-                        "LinuxDo 诊断日志（新→旧，${newestFirst.first().take(14)} ~ ${newestFirst.last().take(14)}，共 ${newestFirst.size} 行）\n"
+                        "$logTitle（新→旧，${newestFirst.first().take(14)} ~ ${newestFirst.last().take(14)}，共 ${newestFirst.size} 行）\n"
                     context.getSystemService(android.content.ClipboardManager::class.java)
-                        ?.setPrimaryClip(android.content.ClipData.newPlainText("LinuxDo 诊断日志", range + newestFirst.joinToString("\n")))
+                        ?.setPrimaryClip(android.content.ClipData.newPlainText(logTitle, range + newestFirst.joinToString("\n")))
                     Toast.makeText(context, "已复制最新${newestFirst.size}行日志（新→旧）", Toast.LENGTH_SHORT).show()
                 }) {
                     Text("复制当前日志", style = IosTheme.type.body, color = IosTheme.colors.accent)
