@@ -1,7 +1,10 @@
 package org.linuxdo.android.data
 
+import androidx.compose.runtime.snapshots.Snapshot
 import java.io.ByteArrayOutputStream
 import java.io.InputStream
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 import kotlinx.serialization.KSerializer
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
@@ -1979,6 +1982,8 @@ object ExcerptCache {
     }
 
     /** 只读内存态、不碰本地库；在组合中读取可订阅后续 [record] 写入，适合每次重组都调用。 */
+    fun peekExcerpt(topicId: Long): String? = excerptMap[topicId]
+
     fun peekCoverImage(topicId: Long): String? = coverMap[topicId]
 
     fun getCoverImage(topicId: Long): String? {
@@ -1993,18 +1998,19 @@ object ExcerptCache {
         return null
     }
 
-    /**
-     * 批量从本地持久库载入内存，用于列表刷新后 0ms 瞬间把历史正文和首图直接填满内存 Compose State。
-     */
-    fun loadBatchFromStore(topicIds: Collection<Long>) {
+    /** IO 线程批量读取，回到调用方后一次性发布正文和封面。 */
+    suspend fun loadBatchFromStore(topicIds: Collection<Long>) {
         val store = opStore ?: return
-        val records = store.getAll(topicIds)
-        records.forEach { (id, record) ->
-            if (record.excerpt != null && !excerptMap.containsKey(id)) {
-                excerptMap[id] = record.excerpt
-            }
-            if (record.coverImageUrl != null && !coverMap.containsKey(id)) {
-                coverMap[id] = record.coverImageUrl
+        if (topicIds.isEmpty()) return
+        val records = withContext(Dispatchers.IO) { store.getAll(topicIds) }
+        Snapshot.withMutableSnapshot {
+            records.forEach { (id, record) ->
+                if (record.excerpt != null && !excerptMap.containsKey(id)) {
+                    excerptMap[id] = record.excerpt
+                }
+                if (record.coverImageUrl != null && !coverMap.containsKey(id)) {
+                    coverMap[id] = record.coverImageUrl
+                }
             }
         }
     }

@@ -253,6 +253,16 @@ class ChatRealtime(
             .sortedByDescending { it.lastMessage?.createdAt.orEmpty() }) }
     }
 
+    suspend fun setChannelMuted(channelId: Long, muted: Boolean) {
+        val generation = store.sessionGeneration
+        if (!current(generation)) return
+        repository.setChatChannelMuted(channelId, muted)
+        if (!current(generation)) return
+        val channel = _state.value.channels.firstOrNull { it.id == channelId } ?: return
+        val membership = channel.membership ?: return
+        updateChannel(channel.copy(membership = membership.copy(muted = muted)))
+    }
+
     fun markRead(channelId: Long, messageId: Long) {
         if (!foreground || visibleChannelId != channelId) return
         pendingReads[channelId] = maxOf(messageId, pendingReads[channelId] ?: 0L)

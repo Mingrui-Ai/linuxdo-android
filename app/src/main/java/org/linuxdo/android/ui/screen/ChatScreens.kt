@@ -37,9 +37,13 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.Notifications
 import androidx.compose.material.icons.filled.Search
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.Surface
@@ -245,7 +249,9 @@ private fun ChatChannelRow(channel: ChatChannelSummary, onClick: () -> Unit) {
             }
         },
         badge = {
-            if (channel.unreadCount > 0) {
+            if (!direct && channel.membership?.muted == true) {
+                Text("免打扰", style = IosTheme.type.caption, color = IosTheme.colors.secondaryLabel)
+            } else if (channel.unreadCount > 0) {
                 val count = channel.unreadCount
                 Text(if (count > 99) "99+" else count.toString(), style = IosTheme.type.caption.copy(fontSize = 11.sp),
                     color = Color.White, modifier = Modifier.background(IosTheme.colors.accent, CircleShape)
@@ -264,6 +270,7 @@ fun ChatRoomScreen(
     currentUsername: String? = null,
     onLoad: (Long, Boolean) -> Unit,
     onLoadPast: (Long) -> Unit = {},
+    onSetChannelMuted: (Long, Boolean) -> Unit,
     onMessagesVisible: (Long, Long) -> Unit = { _, _ -> },
     onSend: (Long, String, List<Long>, () -> Unit) -> Unit,
     onUploadAttachment: (Long, Uri, (AttachedMedia) -> Unit, (String) -> Unit) -> Unit = { _, _, _, _ -> },
@@ -373,6 +380,17 @@ fun ChatRoomScreen(
             IosNavBar(
                 title = channel.displayTitle,
                 onBack = onBack,
+                trailing = {
+                    val membership = channel.membership
+                    if (!channel.isDirectMessage && membership != null) {
+                        ChatChannelNotificationMenu(
+                            channelId = channelId,
+                            muted = membership.muted,
+                            enabled = channelId !in state.updatingMuteChannelIds,
+                            onSetMuted = { onSetChannelMuted(channelId, it) },
+                        )
+                    }
+                },
             )
 
         // 错误提示
@@ -658,6 +676,35 @@ fun ChatRoomScreen(
 }
 
 @Composable
+private fun ChatChannelNotificationMenu(
+    channelId: Long,
+    muted: Boolean,
+    enabled: Boolean,
+    onSetMuted: (Boolean) -> Unit,
+) {
+    var expanded by remember(channelId) { mutableStateOf(false) }
+    Box {
+        IconButton(onClick = { expanded = true }, enabled = enabled) {
+            Icon(
+                imageVector = Icons.Filled.Notifications,
+                contentDescription = if (muted) "频道通知设置，已开启消息免打扰" else "频道通知设置",
+                tint = if (enabled && !muted) IosTheme.colors.accent else IosTheme.colors.secondaryLabel,
+            )
+        }
+        DropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
+            DropdownMenuItem(
+                text = { Text(if (muted) "关闭消息免打扰" else "开启消息免打扰") },
+                enabled = enabled,
+                onClick = {
+                    expanded = false
+                    onSetMuted(!muted)
+                },
+            )
+        }
+    }
+}
+
+@Composable
 private fun ChatMessageBubble(
     message: ChatMessageSummary,
     isMe: Boolean,
@@ -725,10 +772,12 @@ private fun ChatMessageBubble(
             ) {
                 Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
                     if (textContent.isNotBlank()) {
-                        Text(
-                            text = textContent,
-                            style = TextStyle(fontSize = 15.sp, color = Color.White, lineHeight = 21.sp),
-                        )
+                        SelectionContainer {
+                            Text(
+                                text = textContent,
+                                style = TextStyle(fontSize = 15.sp, color = Color.White, lineHeight = 21.sp),
+                            )
+                        }
                     }
                     // 渲染图片附件（缩略图点击可全屏查看）
                     imageUploads.forEach { upload ->
@@ -808,10 +857,12 @@ private fun ChatMessageBubble(
                 ) {
                     Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
                         if (textContent.isNotBlank()) {
-                            Text(
-                                text = textContent,
-                                style = TextStyle(fontSize = 15.sp, color = IosTheme.colors.label, lineHeight = 21.sp),
-                            )
+                            SelectionContainer {
+                                Text(
+                                    text = textContent,
+                                    style = TextStyle(fontSize = 15.sp, color = IosTheme.colors.label, lineHeight = 21.sp),
+                                )
+                            }
                         }
                         // 渲染图片附件（缩略图点击可全屏查看）
                         imageUploads.forEach { upload ->

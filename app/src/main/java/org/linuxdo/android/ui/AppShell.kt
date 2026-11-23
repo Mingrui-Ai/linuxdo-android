@@ -930,7 +930,6 @@ private fun MainNavigation(state: UiState, viewModel: MainViewModel, lifecycle: 
                                     viewModel.openUserCard(username, primaryAvatarUrl, staticAvatarUrl, displayName)
                                 },
                                 onPrefetchExcerpt = viewModel::prefetchTopicExcerpt,
-                                onPrefetchExcerpts = viewModel::prefetchTopicExcerpts,
                                 onScrollBusyChanged = viewModel::setTopicListScrollBusy,
                                 active = active && listForeground,
                                 scrollToTopRequest = scrollToTopRequest,
@@ -1230,7 +1229,6 @@ private fun MainNavigation(state: UiState, viewModel: MainViewModel, lifecycle: 
                                         viewModel.openUserCard(username, primaryAvatarUrl, staticAvatarUrl, displayName)
                                     },
                                     onPrefetchExcerpt = viewModel::prefetchTopicExcerpt,
-                                    onPrefetchExcerpts = viewModel::prefetchTopicExcerpts,
                                     onScrollBusyChanged = viewModel::setTopicListScrollBusy,
                                     onBack = { stack.pop() },
                                     active = active && listForeground,
@@ -1308,7 +1306,6 @@ private fun MainNavigation(state: UiState, viewModel: MainViewModel, lifecycle: 
                                         viewModel.openUserCard(username, primaryAvatarUrl, staticAvatarUrl, displayName)
                                     },
                                     onPrefetchExcerpt = viewModel::prefetchTopicExcerpt,
-                                    onPrefetchExcerpts = viewModel::prefetchTopicExcerpts,
                                     onScrollBusyChanged = viewModel::setTopicListScrollBusy,
                                     onBack = { stack.pop() },
                                     active = active && listForeground,
@@ -1491,6 +1488,7 @@ private fun MainNavigation(state: UiState, viewModel: MainViewModel, lifecycle: 
                                     currentUsername = currentUsername,
                                     onLoad = viewModel::loadChatRoom,
                                     onLoadPast = viewModel::loadMoreChatHistory,
+                                    onSetChannelMuted = viewModel::setChatChannelMuted,
                                     onMessagesVisible = viewModel::markChatMessagesVisible,
                                     onSend = viewModel::sendChatMessage,
                                     onUploadAttachment = viewModel::uploadChatAttachment,

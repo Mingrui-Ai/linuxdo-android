@@ -1,5 +1,34 @@
 # LinuxDo Android
 
+## Mingrui-Ai 独立测试版
+
+本分支在 [xuemk/linuxdo-android](https://github.com/xuemk/linuxdo-android) 的基础上独立维护，开发分支为 [`independent/main`](https://github.com/Mingrui-Ai/linuxdo-android/tree/independent/main)。后续优化在此分支推进，向上游贡献时再单独整理 PR。
+
+当前基线保留统一顶栏与横滑导航、通知和实时聊天整合、选楼与边缘滑条、列表优化，以及站内用户链接、个人主页固定简介、简介表情和导航点击穿透修复。
+
+测试版使用包名 `org.linuxdo.android.debug`，名称为“LinuxDo 测试版”，可与正式版共存。本机继续使用原来的签名覆盖安装即可保留测试版数据。此分支暂未发布独立 Release；下文的上游下载链接不包含本分支的全部改动。
+
+### 构建与 USB 安装
+
+使用 JDK 21、Android SDK 36，在本地 `local.properties` 配置 `sdk.dir`；该文件不提交。Windows 下执行：
+
+```powershell
+# 只编译，APK 位于 app/build/outputs/apk/debug/app-debug.apk
+.\gradlew.bat :app:assembleDebug
+
+# 编译、覆盖安装并启动；多设备时必须指定序列号
+.\run-debug.ps1 -DeviceSerial <设备序列号>
+
+# 日常性能体验：关闭 debuggable，并在设备上执行 ART 预编译
+.\run-debug.ps1 -DeviceSerial <设备序列号> -Performance
+```
+
+只有一台已授权设备时可省略 `-DeviceSerial`。如需代理，通过脚本参数 `-ProxyUrl` 传入本机 HTTP 代理地址，不写入共享配置。安装不会清除数据，手机上的 USB 安装确认需手动允许。
+
+---
+
+以下保留原项目介绍与上游 v1.6.1 发布信息。
+
 专为 L 站（`linux.do`）打造的 Android 原生客户端，兼顾极致流畅度与长效会话稳定性。
 
 > **直连免梯 · 长效不掉盾 · 热门级高颜值 · 多账号秒切 · 极致丝滑**  
@@ -74,7 +103,7 @@
 
 ---
 
-## 📥 最新版本下载
+## 📥 上游 v1.6.1 下载（非独立测试版）
 
 - **当前版本**：`v1.6.1`
 - **APK 下载**：[前往 Releases 下载 `linuxdo-1.6.1-release.apk`](https://github.com/xuemk/linuxdo-android/releases/latest)

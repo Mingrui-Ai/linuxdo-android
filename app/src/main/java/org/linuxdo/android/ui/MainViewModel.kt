@@ -28,6 +28,7 @@ import java.io.ByteArrayOutputStream
 import java.io.File
 import java.util.Collections
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
@@ -120,6 +121,8 @@ import org.linuxdo.android.data.AutoRefreshInterval
 import org.linuxdo.android.data.NotificationPollInterval
 import org.linuxdo.android.data.NotificationScope
 import org.linuxdo.android.net.HttpStatusException
+import org.linuxdo.android.data.resolveTopicFloor
+import org.linuxdo.android.data.resolveLoadedTopicFloor
 import org.linuxdo.android.net.LoginRejectedException
 import org.linuxdo.android.net.NeedsInteractiveVerification
 import org.linuxdo.android.net.NetworkPath
@@ -601,6 +604,7 @@ data class ChatUiState(
     val loadingChannels: Boolean = false,
     val loadingChannelId: Long? = null,
     val sendingChannelId: Long? = null,
+    val updatingMuteChannelIds: Set<Long> = emptySet(),
     val error: String? = null,
     val channelsError: String? = null,
 )
@@ -3966,6 +3970,32 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         container.chatRealtime.refresh()
     }
 
+    fun setChatChannelMuted(channelId: Long, muted: Boolean) {
+        val state = _chat.value
+        val channel = state.channels.firstOrNull { it.id == channelId } ?: return
+        val membership = channel.membership ?: return
+        if (channel.isDirectMessage || membership.muted == muted || channelId in state.updatingMuteChannelIds) return
+
+        val generation = accountScopeGeneration
+        _chat.update { it.copy(updatingMuteChannelIds = it.updatingMuteChannelIds + channelId) }
+        pageJobs["chatMute:$channelId"] = viewModelScope.launch {
+            try {
+                container.chatRealtime.setChannelMuted(channelId, muted)
+            } catch (error: CancellationException) {
+                throw error
+            } catch (error: Exception) {
+                if (generation == accountScopeGeneration) {
+                    Toast.makeText(getApplication(), error.message ?: "消息免打扰设置失败", Toast.LENGTH_LONG).show()
+                    handlePageFailure(error) { setChatChannelMuted(channelId, muted) }
+                }
+            } finally {
+                if (generation == accountScopeGeneration) {
+                    _chat.update { it.copy(updatingMuteChannelIds = it.updatingMuteChannelIds - channelId) }
+                }
+            }
+        }
+    }
+
     fun loadChatRoom(channelId: Long, refresh: Boolean = false) {
         val jobKey = "chatRoom:$channelId"
         if (pageJobs[jobKey]?.isActive == true) return
@@ -4671,7 +4701,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         if (current.loading || current.refreshing || current.reactingPosts.isNotEmpty()) return
         if (pageJobs["topic:$id"]?.isActive == true) return
         val generation = accountScopeGeneration
-        pageJobs["topic:$id"] = viewModelScope.launch {
+        pageJobs["topic:$id"] = viewModelScope.launch(start = CoroutineStart.LAZY) {
             if (!silent) {
                 _details.update { states ->
                     states[id]?.let { states + (id to it.copy(refreshing = true, error = null)) } ?: states
@@ -4739,13 +4769,16 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                     handlePageFailure(error) { refreshTopic(id, silent = false, includeLatestPosts = includeLatestPosts) }
                 }
             } finally {
-                _details.update { states ->
-                    states[id]?.let { states + (id to it.copy(refreshing = false)) } ?: states
+                if (pageJobs["topic:$id"] === coroutineContext[Job]) {
+                    _details.update { states ->
+                        states[id]?.let { states + (id to it.copy(refreshing = false)) } ?: states
+                    }
+                    pageJobs.remove("topic:$id")
+                    topicLiveSessions[id]?.updates?.trySend(Unit)
                 }
-                if (pageJobs["topic:$id"] === coroutineContext[Job]) pageJobs.remove("topic:$id")
-                topicLiveSessions[id]?.updates?.trySend(Unit)
             }
         }
+        pageJobs["topic:$id"]?.start()
     }
 
     fun loadTopic(
@@ -4824,7 +4857,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         if (more && current.remaining.isEmpty()) return
         if (previous && current.previousIds.isEmpty()) return
         pageJobs["topic:$id"]?.cancel()
-        pageJobs["topic:$id"] = viewModelScope.launch {
+        // 先登记任务再启动，立即失败时 finally 也能识别当前请求并收尾。
+        pageJobs["topic:$id"] = viewModelScope.launch(start = CoroutineStart.LAZY) {
             _details.update { it + (id to current.copy(loading = true, error = null)) }
             try {
                 if (more || previous) {
@@ -4841,7 +4875,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                         val latest = mergeRealtimePosts(original, posts.filter { post -> post.id in original.realtimePostIds })
                         it + (id to latest.copy(
                             posts = (latest.posts + posts).distinctBy { post -> post.id }.sortedBy { post -> post.postNumber },
-                            consumedIds = latest.consumedIds + posts.map { post -> post.id } + if (previous) requested else emptyList(),
+                            // 成功请求但没有返回的 ID 已删除或不可见，两个方向都标记为已处理，避免原地重试。
+                            consumedIds = latest.consumedIds + posts.map { post -> post.id } + requested,
                             windowStartId = if (previous) requested.first() else current.windowStartId,
                             error = null, failedLoad = DetailLoad.Topic,
                         ))
@@ -4866,17 +4901,25 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                             effectiveTargetPostNumber = posts.maxOfOrNull { it.postNumber }
                         }
                     }
-                    val missing = requestPostNumber != null && posts.none { it.postNumber == requestPostNumber }
+                    // /t/{id}/{floor} 返回的是目标附近的有效窗口。目标被删除不代表加载失败。
+                    // 只从这次服务器返回的窗口解析，不能把额外保留的旧主帖当成跳转结果。
+                    val resolvedTarget = effectiveTargetPostNumber?.let { resolveTopicFloor(topic.postStream.posts, it) }
+                    if (resolvedTarget != null && requestPostNumber != null) {
+                        effectiveTargetPostNumber = resolvedTarget.postNumber
+                    }
                     val newLocateVersion = if (effectiveTargetPostNumber != null) (current.locateVersion + 1) else current.locateVersion
                     _details.update {
                         it + (id to DetailUiState(topic, posts, posts.map { post -> post.id }.toSet(), category,
-                            error = if (missing) "目标楼层 #$requestPostNumber 已删除或不可访问" else null,
+                            error = if (requestPostNumber != null && resolvedTarget == null) "当前没有可访问的楼层，请稍后重试" else null,
                             emojiUrls = emojis, windowStartId = topic.postStream.posts.minByOrNull { it.postNumber }?.id,
                             locateVersion = newLocateVersion,
-                            locatePostNumber = if (isNotificationJump) effectiveTargetPostNumber else effectivePostNumber,
+                            locatePostNumber = if (isNotificationJump || effectivePostNumber != null) effectiveTargetPostNumber else null,
                             confirmedReadPostNumbers = container.reading.confirmedPostNumbers(id),
                             filterUserId = restoredPosition?.filterUserId,
                             descending = restoredPosition?.descending ?: false))
+                    }
+                    if (requestPostNumber != null && resolvedTarget != null && resolvedTarget.postNumber != requestPostNumber) {
+                        setNoticeMessage(id, "第 $requestPostNumber 楼不可用，已定位到第 ${resolvedTarget.postNumber} 楼")
                     }
                     val scopeGeneration = accountScopeGeneration
                     viewModelScope.launch {
@@ -4918,7 +4961,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             } catch (error: RateLimitException) {
                 if (current.topic != null) {
                     diagnostics.log("话题 $id 刷新遭遇限流: ${error.message}，保持展示本地缓存")
-                    _details.update { it + (id to current.copy(loading = false, error = null)) }
+                    _details.update { it + (id to current.copy(loading = false,
+                        error = if (targetPostNumber != null) error.message else null)) }
                 } else {
                     _details.update { it + (id to current.copy(error = error.message, failedLoad = DetailLoad.Topic)) }
                 }
@@ -4936,11 +4980,15 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                     )
                 }
             } finally {
-                _details.update { states -> states[id]?.let { states + (id to it.copy(loading = false)) } ?: states }
-                if (pageJobs["topic:$id"] === coroutineContext[Job]) pageJobs.remove("topic:$id")
-                topicLiveSessions[id]?.updates?.trySend(Unit)
+                // 被新选楼请求取消的旧任务不能清掉新任务的 loading 状态。
+                if (pageJobs["topic:$id"] === coroutineContext[Job]) {
+                    _details.update { states -> states[id]?.let { states + (id to it.copy(loading = false)) } ?: states }
+                    pageJobs.remove("topic:$id")
+                    topicLiveSessions[id]?.updates?.trySend(Unit)
+                }
             }
         }
+        pageJobs["topic:$id"]?.start()
     }
 
     /**
@@ -4967,7 +5015,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             return
         }
         pageJobs["topic:$topicId"]?.cancel()
-        pageJobs["topic:$topicId"] = viewModelScope.launch {
+        pageJobs["topic:$topicId"] = viewModelScope.launch(start = CoroutineStart.LAZY) {
             _details.update { it + (topicId to current.copy(loading = true, error = null, descending = true)) }
             try {
                 val fetched = repository.fetchPosts(topicId, tailMissing)
@@ -5000,9 +5048,13 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 }
                 handlePageFailure(error) { toggleCommentOrder(topicId) }
             } finally {
-                _details.update { states -> states[topicId]?.let { states + (topicId to it.copy(loading = false)) } ?: states }
+                if (pageJobs["topic:$topicId"] === coroutineContext[Job]) {
+                    _details.update { states -> states[topicId]?.let { states + (topicId to it.copy(loading = false)) } ?: states }
+                    pageJobs.remove("topic:$topicId")
+                }
             }
         }
+        pageJobs["topic:$topicId"]?.start()
     }
 
     fun react(topicId: Long, postId: Long, reaction: String) {
@@ -6146,11 +6198,6 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
-    /** 列表批次只复用原生字段与本地缓存，不再额外搜索或拉取每条话题。 */
-    fun prefetchTopicExcerpts(topics: List<Topic>) {
-        ExcerptCache.loadBatchFromStore(topics.map { it.id })
-    }
-
     private fun clearExcerptPrefetchState() {
         excerptPrefetchJob?.cancel()
         // 保留句柄供下一次请求等待取消完成，避免传输层尚未退出就启动另一条请求。
@@ -6645,8 +6692,29 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     /** 快速跳转到指定楼层（抢占式单飞请求，自动取消旧在途任务，杜绝并发与 CF 风控）。 */
     fun jumpToFloor(topicId: Long, postNumber: Int) {
         val current = _details.value[topicId] ?: return
-        pageJobs["topic:$topicId"]?.cancel()
-        loadTopic(topicId, postNumber = postNumber)
+        pageJobs.remove("topic:$topicId")?.cancel()
+        val ready = current.copy(loading = false, refreshing = false, error = null)
+        val loadedTarget = resolveLoadedTopicFloor(ready.posts, ready.topic?.postStream?.stream.orEmpty(), postNumber)
+        if (loadedTarget != null) {
+            // 已加载楼层只更新定位，不重新进入话题、刷新缓存或发起网络请求。
+            _details.update { it + (topicId to ready.copy(
+                locatePostNumber = loadedTarget.postNumber,
+                locateVersion = ready.locateVersion + 1,
+            )) }
+            updateCachedTopicDetail(topicId, refreshTtl = false)
+            if (loadedTarget.postNumber != postNumber) {
+                setNoticeMessage(topicId, "第 $postNumber 楼不可用，已定位到第 ${loadedTarget.postNumber} 楼")
+            }
+            return
+        }
+        _details.update { it + (topicId to ready) }
+        updateCachedTopicDetail(topicId, refreshTtl = false)
+        loadTopic(topicId, postNumber = postNumber, restoredPosition = TopicReadingPosition(
+            postNumber = postNumber,
+            atTop = false,
+            filterUserId = ready.filterUserId,
+            descending = ready.descending,
+        ))
     }
 
     fun loadReplies(topicId: Long, postId: Long) {
@@ -6911,6 +6979,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                     beforeDispatch = ::checkBeforeDispatch,
                 )
                 ApiQuotaPool.INCOMING_PROBE.onSuccess()
+                scrollBusySignal.awaitIdle()
                 if (!canProbe() || probeGen != incomingProbeGeneration) return
                 updateListCounters(freshPage.items)
                 val latestCategoryState = _categoryTopics.value[categoryId] ?: return
@@ -6923,8 +6992,9 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 }
                 if (incoming.isNotEmpty()) {
                     val incomingIds = incoming.map { it.topic.id }.toSet()
-                    // 1. 先从本地持久库快速载入已有缓存
                     ExcerptCache.loadBatchFromStore(freshPage.items.map { it.topic.id })
+                    scrollBusySignal.awaitIdle()
+                    if (!canProbe() || probeGen != incomingProbeGeneration) return
                     _categoryTopics.update { current ->
                         val existing = current[categoryId] ?: return@update current
                         current + (categoryId to existing.copy(
@@ -6943,6 +7013,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                     beforeDispatch = ::checkBeforeDispatch,
                 )
                 ApiQuotaPool.INCOMING_PROBE.onSuccess()
+                scrollBusySignal.awaitIdle()
                 if (!canProbe() || probeGen != incomingProbeGeneration) return
                 updateListCounters(freshPage.items)
                 val latestFeedState = _feedStates.value[feed] ?: return
@@ -6955,8 +7026,9 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 }
                 if (incoming.isNotEmpty()) {
                     val incomingIds = incoming.map { it.topic.id }.toSet()
-                    // 1. 先从本地持久库快速载入已有缓存
                     ExcerptCache.loadBatchFromStore(freshPage.items.map { it.topic.id })
+                    scrollBusySignal.awaitIdle()
+                    if (!canProbe() || probeGen != incomingProbeGeneration) return
                     _feedStates.update { current ->
                         val existing = current[feed] ?: return@update current
                         current + (feed to existing.copy(
@@ -6997,7 +7069,6 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 }
                 return
             }
-            ExcerptCache.loadBatchFromStore(pending.items.map { it.topic.id })
             val newItems = (pending.items + current.items).distinctBy { it.topic.id }
             val refreshedIds = pending.items.map { it.topic.id }.toSet()
             val highlightJobKey = "incoming-highlight:category:$categoryId"
@@ -7030,7 +7101,6 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 }
                 return
             }
-            ExcerptCache.loadBatchFromStore(pending.items.map { it.topic.id })
             val newItems = (pending.items + current.items).distinctBy { it.topic.id }
             // 高亮表示本轮刷新覆盖的整批话题，不能复用仅用于提示计数的“新动态”子集。
             val refreshedIds = pending.items.map { it.topic.id }.toSet()
@@ -7249,21 +7319,28 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 val sortAscending = _topicSortAscending.value.takeIf { sortOrder != null }
                 val result = repository.fetchCategoryTopics(slug, id, page, order = sortOrder, ascending = sortAscending)
                 ExcerptCache.loadBatchFromStore(result.items.map { it.topic.id })
-                val items = if (more) (previous.items + result.items).distinctBy { it.topic.id } else result.items
                 // 对齐通知分页：防死循环检测页码推进，而非条目增加。高频重叠由页码单调递增穿透。
                 val hasMore = result.hasMore && result.items.isNotEmpty() && (!more || page > previous.page)
-                _categoryTopics.update { it + (id to TopicListUiState(
-                    items = items,
-                    page = page,
-                    hasMore = hasMore,
-                    initialLoading = false,
-                    pendingPage = if (page == 0) null else previous.pendingPage,
-                    incomingTopicIds = if (page == 0) emptySet() else previous.incomingTopicIds,
-                )) }
+                _categoryTopics.update { states ->
+                    val latest = states[id] ?: return@update states
+                    val items = if (more) (latest.items + result.items).distinctBy { it.topic.id } else result.items
+                    states + (id to TopicListUiState(
+                        items = items,
+                        page = page,
+                        hasMore = hasMore,
+                        initialLoading = false,
+                        pendingPage = if (more) latest.pendingPage else null,
+                        incomingTopicIds = if (more) latest.incomingTopicIds else emptySet(),
+                        highlightedTopicIds = if (more) latest.highlightedTopicIds else emptySet(),
+                    ))
+                }
             } catch (error: CancellationException) {
                 throw error
             } catch (error: Exception) {
-                _categoryTopics.update { it + (id to previous.copy(initialLoading = false, error = error.message ?: "加载失败")) }
+                _categoryTopics.update { states ->
+                    val latest = states[id] ?: return@update states
+                    states + (id to latest.copy(initialLoading = false, error = error.message ?: "加载失败"))
+                }
                 handlePageFailure(error) { loadCategory(id, slug, refresh = !more, more = more) }
             } finally {
                 _categoryTopics.update { states -> states[id]?.let {
@@ -9412,16 +9489,18 @@ fun openTopicSearch(topicId: Long, title: String) {
                     if (cat != item.category) item.copy(category = cat) else item
                 }
             } else result.items
-            val existing = _feedStates.value[feed]?.items ?: emptyList()
             ExcerptCache.loadBatchFromStore(freshItems.map { it.topic.id })
+            if (requestScopeGeneration != accountScopeGeneration) return
+            // 分页等待期间可能已经合并了提示条的新话题，使用当前状态。
+            val latest = _feedStates.value[feed] ?: loadingState
             val merged = if (page == 0) {
                 freshItems.distinctBy { it.topic.id }
             } else {
-                (existing + freshItems).distinctBy { it.topic.id }
+                (latest.items + freshItems).distinctBy { it.topic.id }
             }
             // 对齐通知分页：防死循环检测页码推进，而非条目增加。高频重叠由页码单调递增穿透。
             val hasMore = result.hasMore && result.items.isNotEmpty() && (page == 0 || page > current.page)
-            val newState = current.copy(
+            val newState = latest.copy(
                 items = merged,
                 page = page,
                 hasMore = hasMore,
@@ -9429,8 +9508,9 @@ fun openTopicSearch(topicId: Long, title: String) {
                 loadingMore = false,
                 initialLoading = false,
                 error = null,
-                pendingPage = if (page == 0) null else current.pendingPage,
-                incomingTopicIds = if (page == 0) emptySet() else current.incomingTopicIds,
+                pendingPage = if (page == 0) null else latest.pendingPage,
+                incomingTopicIds = if (page == 0) emptySet() else latest.incomingTopicIds,
+                highlightedTopicIds = if (page == 0) emptySet() else latest.highlightedTopicIds,
             )
             _feedStates.update { it + (feed to newState) }
             if (_state.value.homeFeed == feed) {
