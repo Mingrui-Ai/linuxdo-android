@@ -7,21 +7,20 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -90,35 +89,36 @@ internal fun ProfileHeader(
                     listOf(Color.Black.copy(alpha = .3f), Color.Transparent, surface))))
             }
             Column(Modifier.windowInsetsPadding(WindowInsets.systemBars.union(WindowInsets.displayCutout)
-                .only(WindowInsetsSides.Top)).padding(horizontal = 16.dp)) {
-                Row(Modifier.fillMaxWidth().height(52.dp), verticalAlignment = Alignment.CenterVertically) {
-                    if (onBack != null) {
-                        ProfileHeaderButton(Icons.AutoMirrored.Filled.ArrowBack, "返回", onBack)
-                    } else {
-                        Row(
-                            Modifier.clip(RoundedCornerShape(24.dp)).background(Color(0x99101C2A))
-                                .then(if (onSwitchAccount != null) Modifier.clickable(onClick = onSwitchAccount) else Modifier)
-                                .padding(horizontal = 14.dp, vertical = 10.dp).weight(1f, fill = false),
-                            verticalAlignment = Alignment.CenterVertically,
-                        ) {
-                            Text(username, color = Color.White, fontWeight = FontWeight.SemiBold,
-                                maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f, false))
-                            if (onSwitchAccount != null) Icon(Icons.Default.KeyboardArrowDown, "切换账号", tint = Color.White,
-                                modifier = Modifier.padding(start = 6.dp).size(18.dp))
+                .only(WindowInsetsSides.Top))) {
+                IosNavBar(
+                    title = "", onBack = onBack, background = Color.Transparent, showDivider = false,
+                    trailing = {
+                        Box {
+                            TextButton(onClick = { showMenu = true },
+                                modifier = Modifier.width(44.dp).semantics { contentDescription = "个人主页菜单" }) {
+                                Text("⋯", color = colors.accent, fontSize = 22.sp)
+                            }
+                            ProfileMenu(
+                                expanded = showMenu,
+                                actions = listOfNotNull(
+                                    onSwitchAccount?.let { ProfileMenuAction("切换账号", Icons.Default.Person, it) },
+                                    ProfileMenuAction("分享个人主页", Icons.Default.Share) {
+                                        context.startActivity(Intent.createChooser(Intent(Intent.ACTION_SEND).apply {
+                                            type = "text/plain"
+                                            putExtra(Intent.EXTRA_TEXT, "${Config.BASE_URL}/u/${android.net.Uri.encode(username)}")
+                                        }, "分享个人主页"))
+                                    },
+                                ) + menuActions + listOfNotNull(
+                                    onChat?.let { ProfileMenuAction("发起聊天", Icons.Default.Send, it) },
+                                    ProfileMenuAction("刷新个人主页", Icons.Default.Refresh, onRefresh),
+                                ),
+                                onDismiss = { showMenu = false },
+                            )
                         }
-                    }
-                    Spacer(Modifier.weight(1f))
-                    ProfileHeaderButton(Icons.Default.Share, "分享个人主页") {
-                        context.startActivity(Intent.createChooser(Intent(Intent.ACTION_SEND).apply {
-                            type = "text/plain"
-                            putExtra(Intent.EXTRA_TEXT, "${Config.BASE_URL}/u/${android.net.Uri.encode(username)}")
-                        }, "分享个人主页"))
-                    }
-                    Spacer(Modifier.width(8.dp))
-                    ProfileHeaderButton(Icons.Default.Menu, "个人主页菜单") { showMenu = true }
-                }
+                    },
+                )
                 Spacer(Modifier.height(24.dp))
-                Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.Bottom) {
+                Row(Modifier.fillMaxWidth().padding(horizontal = 16.dp), verticalAlignment = Alignment.Bottom) {
                     UserAvatar(avatarUrl = avatar, fallbackUrl = staticAvatar, username = username,
                         modifier = Modifier.size(78.dp).border(3.dp, surface, CircleShape), cornerRadius = 39.dp)
                     Spacer(Modifier.weight(1f))
@@ -182,12 +182,6 @@ internal fun ProfileHeader(
                 maxLines = Int.MAX_VALUE, modifier = Modifier.heightIn(max = 360.dp).verticalScroll(rememberScrollState())) },
             confirmButton = { TextButton(onClick = { showBio = false }) { Text("完成") } }, containerColor = colors.card)
     }
-    if (showMenu) {
-        ProfileMenuSheet(username, menuActions + listOfNotNull(
-            onChat?.let { ProfileMenuAction("发起聊天", Icons.Default.Send, it) },
-            ProfileMenuAction("刷新个人主页", Icons.Default.Refresh, onRefresh),
-        )) { showMenu = false }
-    }
     if (showBadges) {
         ProfileBadgesSheet(badges, badgesLoading, badgesError, onRefreshBadges,
             onBadgeClick = { selectedBadge = it }, onDismiss = { showBadges = false })
@@ -204,28 +198,21 @@ private fun ProfileMetric(value: Int?, label: String, modifier: Modifier, onClic
 }
 
 @Composable
-private fun ProfileHeaderButton(icon: ImageVector, label: String, onClick: () -> Unit) {
-    IconButton(onClick, Modifier.size(40.dp).background(Color(0x99101C2A), CircleShape)) {
-        Icon(icon, label, tint = Color.White, modifier = Modifier.size(21.dp))
-    }
-}
-
-@OptIn(ExperimentalMaterial3Api::class)
-@Composable
-private fun ProfileMenuSheet(username: String, actions: List<ProfileMenuAction>, onDismiss: () -> Unit) {
-    ModalBottomSheet(onDismissRequest = onDismiss, sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true),
-        containerColor = IosTheme.colors.card) {
-        Column(Modifier.fillMaxWidth().verticalScroll(rememberScrollState()).padding(bottom = 24.dp)) {
-            Text(username, color = IosTheme.colors.label, fontWeight = FontWeight.Bold, fontSize = 20.sp,
-                modifier = Modifier.padding(horizontal = 24.dp, vertical = 10.dp))
-            actions.forEach { action ->
-                Row(Modifier.fillMaxWidth().clickable { onDismiss(); action.onClick() }
-                    .padding(horizontal = 24.dp, vertical = 13.dp), verticalAlignment = Alignment.CenterVertically) {
-                    Icon(action.icon, null, tint = IosTheme.colors.secondaryLabel, modifier = Modifier.size(21.dp))
-                    Text(action.label, color = IosTheme.colors.label, modifier = Modifier.padding(start = 18.dp).weight(1f))
-                    Icon(Icons.Default.KeyboardArrowRight, null, tint = IosTheme.colors.tertiaryLabel, modifier = Modifier.size(18.dp))
-                }
-            }
+private fun ProfileMenu(expanded: Boolean, actions: List<ProfileMenuAction>, onDismiss: () -> Unit) {
+    val background = if (IosTheme.colors.isDark) IosTheme.colors.card else Color.White
+    DropdownMenu(expanded = expanded, onDismissRequest = onDismiss, containerColor = background,
+        tonalElevation = 0.dp, modifier = Modifier.background(background)) {
+        actions.forEach { action ->
+            DropdownMenuItem(
+                text = {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Icon(action.icon, null, tint = IosTheme.colors.secondaryLabel, modifier = Modifier.size(18.dp))
+                        Spacer(Modifier.width(8.dp))
+                        Text(action.label, color = IosTheme.colors.label)
+                    }
+                },
+                onClick = { onDismiss(); action.onClick() },
+            )
         }
     }
 }
