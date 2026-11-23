@@ -4,25 +4,26 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
-import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
-import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.KeyboardArrowRight
 import androidx.compose.material.icons.filled.Star
 import androidx.compose.material3.*
-import androidx.compose.runtime.Composable
-import androidx.compose.runtime.remember
+import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import org.linuxdo.android.App
 import org.linuxdo.android.data.UserBadgeItem
+import org.linuxdo.android.ui.BadgeDetailDialog
 import org.linuxdo.android.ui.DiscourseBadgeIcon
 import org.linuxdo.android.ui.UserBadgesSectionCard
 import org.linuxdo.android.ui.design.IosTheme
+import org.linuxdo.android.ui.design.IosLargeTitleScaffold
 
 @Composable
 internal fun ProfileBadgePreview(badges: List<UserBadgeItem>?, loading: Boolean, onClick: () -> Unit) {
@@ -57,22 +58,65 @@ internal fun ProfileBadgePreview(badges: List<UserBadgeItem>?, loading: Boolean,
     }
 }
 
-@OptIn(ExperimentalMaterial3Api::class)
 @Composable
-internal fun ProfileBadgesSheet(
-    badges: List<UserBadgeItem>?, loading: Boolean, error: String?, onRefresh: () -> Unit,
-    onBadgeClick: (UserBadgeItem) -> Unit, onDismiss: () -> Unit,
+fun ProfileBadgesScreen(
+    username: String,
+    onBack: () -> Unit,
 ) {
-    ModalBottomSheet(onDismissRequest = onDismiss,
-        sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true),
-        containerColor = IosTheme.colors.groupedBackground) {
-        Column(Modifier.fillMaxWidth().heightIn(max = 600.dp).verticalScroll(rememberScrollState())
-            .padding(start = 16.dp, end = 16.dp, bottom = 24.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-            if (error != null) {
-                Text(error, color = IosTheme.colors.secondaryLabel)
-                TextButton(onClick = onRefresh, enabled = !loading) { Text("重新加载") }
-            }
-            UserBadgesSectionCard(badges, loading, onRefresh.takeUnless { loading }, onBadgeClick)
+    val context = LocalContext.current
+    val repo = (context.applicationContext as? App)?.container?.topicRepository
+    var badges by remember(username) { mutableStateOf(repo?.getCachedUserBadges(username)) }
+    var loading by remember(username) { mutableStateOf(true) }
+    var error by remember(username) { mutableStateOf<String?>(null) }
+    var refreshGeneration by remember(username) { mutableIntStateOf(0) }
+    var selectedBadge by remember(username) { mutableStateOf<UserBadgeItem?>(null) }
+
+    LaunchedEffect(username, refreshGeneration) {
+        loading = true
+        error = null
+        try {
+            checkNotNull(repo) { "暂时无法加载徽章" }
+            badges = repo.fetchUserBadges(username, forceRefresh = refreshGeneration > 0)
+        } catch (e: kotlinx.coroutines.CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            error = e.message ?: "徽章加载失败"
+        } finally {
+            loading = false
         }
     }
+
+    IosLargeTitleScaffold(
+        title = "徽章展示",
+        showLargeTitle = false,
+        onBack = onBack,
+        trailing = {
+            TextButton(onClick = { refreshGeneration++ }, enabled = !loading) {
+                Text(if (loading) "加载中" else "刷新")
+            }
+        },
+    ) {
+        item("user") {
+            Text("@$username", color = IosTheme.colors.secondaryLabel,
+                style = IosTheme.type.footnote, modifier = Modifier.padding(horizontal = 16.dp, vertical = 12.dp))
+        }
+        if (error != null) {
+            item("error") {
+                Column(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp)) {
+                    Text(error.orEmpty(), color = IosTheme.colors.secondaryLabel)
+                    TextButton(onClick = { refreshGeneration++ }, enabled = !loading) { Text("重新加载") }
+                }
+            }
+        }
+        item("badges") {
+            UserBadgesSectionCard(
+                badges = badges,
+                isLoading = loading,
+                onRefresh = { refreshGeneration++; Unit }.takeUnless { loading },
+                onBadgeClick = { selectedBadge = it },
+                modifier = Modifier.padding(horizontal = 16.dp),
+            )
+        }
+    }
+    selectedBadge?.let { BadgeDetailDialog(it) { selectedBadge = null } }
 }

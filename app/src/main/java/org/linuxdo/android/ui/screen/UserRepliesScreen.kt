@@ -314,6 +314,7 @@ fun UserProfileScreen(
     initialAvatarUrl: String? = null,
     initialStaticAvatarUrl: String? = null,
     onOpenTopic: (Long, String, Int?) -> Unit,
+    onOpenBadges: () -> Unit,
     onOpenUser: ((String) -> Unit)? = null,
     onChat: ((String) -> Unit)? = null,
     onComposePrivateMessage: ((String) -> Unit)? = null,
@@ -343,19 +344,16 @@ fun UserProfileScreen(
     var summaryError by remember(username) { mutableStateOf<String?>(null) }
     var badges by remember(username) { mutableStateOf(repo?.getCachedUserBadges(username)) }
     var badgesLoading by remember(username) { mutableStateOf(false) }
-    var badgesError by remember(username) { mutableStateOf<String?>(null) }
-    var badgeRefresh by remember(username) { mutableIntStateOf(0) }
 
-    LaunchedEffect(username, refreshGeneration, badgeRefresh) {
+    LaunchedEffect(username, refreshGeneration) {
         if (repo == null) return@LaunchedEffect
         badgesLoading = true
-        badgesError = null
         try {
-            badges = repo.fetchUserBadges(username, forceRefresh = refreshGeneration > 0 || badgeRefresh > 0)
+            badges = repo.fetchUserBadges(username, forceRefresh = refreshGeneration > 0)
         } catch (e: kotlinx.coroutines.CancellationException) {
             throw e
         } catch (e: Exception) {
-            badgesError = e.message ?: "徽章加载失败"
+            // 头部保留缓存预览；详细错误与重试在独立徽章页显示。
         } finally {
             badgesLoading = false
         }
@@ -548,8 +546,7 @@ fun UserProfileScreen(
                     onRefresh = { refreshGeneration++ }, menuActions = menuActions,
                     communityScore = communityScore, onOpenCommunityScore = onOpenCommunityScore,
                     onOpenLevel = onOpenLevel,
-                    badges = badges, badgesLoading = badgesLoading, badgesError = badgesError,
-                    onRefreshBadges = { badgeRefresh++ },
+                    badges = badges, badgesLoading = badgesLoading, onOpenBadges = onOpenBadges,
                 )
                 profileError?.let { message ->
                     TextButton(onClick = { refreshGeneration++ }) {

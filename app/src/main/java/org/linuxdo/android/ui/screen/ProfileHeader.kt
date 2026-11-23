@@ -28,7 +28,6 @@ import androidx.compose.ui.unit.sp
 import coil.compose.AsyncImage
 import org.linuxdo.android.Config
 import org.linuxdo.android.data.*
-import org.linuxdo.android.ui.BadgeDetailDialog
 import org.linuxdo.android.ui.design.*
 
 data class ProfileMenuAction(val label: String, val icon: ImageVector, val onClick: () -> Unit)
@@ -53,15 +52,12 @@ internal fun ProfileHeader(
     onOpenLevel: (() -> Unit)?,
     badges: List<UserBadgeItem>?,
     badgesLoading: Boolean,
-    badgesError: String?,
-    onRefreshBadges: () -> Unit,
+    onOpenBadges: () -> Unit,
 ) {
     val colors = IosTheme.colors
     val context = LocalContext.current
     var showMenu by remember(username) { mutableStateOf(false) }
     var showBio by remember(username) { mutableStateOf(false) }
-    var showBadges by remember(username) { mutableStateOf(false) }
-    var selectedBadge by remember(username) { mutableStateOf<UserBadgeItem?>(null) }
     val surface = if (colors.isDark) Color(0xFF101113) else Color.White
     val animated = card?.animatedAvatar ?: AvatarCache.get(username)
         ?: initialAvatarUrl?.takeIf(::isAnimatedAvatarPath)
@@ -146,7 +142,7 @@ internal fun ProfileHeader(
                         Icon(Icons.Default.KeyboardArrowRight, null, tint = colors.secondaryLabel, modifier = Modifier.size(13.dp))
                     }
                 }
-                ProfileBadgePreview(badges, badgesLoading) { showBadges = true }
+                ProfileBadgePreview(badges, badgesLoading, onOpenBadges)
             }
             UserBioText(card?.bioExcerpt, "还没有填写个人简介", IosTheme.type.body.copy(fontSize = 13.sp), colors.label,
                 maxLines = 2, emptyColor = colors.secondaryLabel,
@@ -160,11 +156,6 @@ internal fun ProfileHeader(
                 maxLines = Int.MAX_VALUE, modifier = Modifier.heightIn(max = 360.dp).verticalScroll(rememberScrollState())) },
             confirmButton = { TextButton(onClick = { showBio = false }) { Text("完成") } }, containerColor = colors.card)
     }
-    if (showBadges) {
-        ProfileBadgesSheet(badges, badgesLoading, badgesError, onRefreshBadges,
-            onBadgeClick = { selectedBadge = it }, onDismiss = { showBadges = false })
-    }
-    selectedBadge?.let { BadgeDetailDialog(it) { selectedBadge = null } }
 }
 
 @Composable

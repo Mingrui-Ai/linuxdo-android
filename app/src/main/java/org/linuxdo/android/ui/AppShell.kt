@@ -141,6 +141,7 @@ import org.linuxdo.android.ui.screen.FollowListScreen
 import org.linuxdo.android.ui.screen.BlacklistScreen
 import org.linuxdo.android.ui.screen.UserCardBottomSheet
 import org.linuxdo.android.ui.screen.UserProfileScreen
+import org.linuxdo.android.ui.screen.ProfileBadgesScreen
 import org.linuxdo.android.ui.screen.PrivateMessageComposeSheet
 import org.linuxdo.android.ui.nav.MainTab
 import org.linuxdo.android.ui.nav.TabBar
@@ -1423,6 +1424,7 @@ private fun MainNavigation(state: UiState, viewModel: MainViewModel, lifecycle: 
                                         onAddAccount = viewModel::addAccount,
                                         onOpenTopic = { id, title, post -> stack.push(Route.TopicDetail(id, title, post)) },
                                         onOpenUser = { stack.push(Route.UserProfile(it)) },
+                                        onOpenBadges = { stack.push(Route.UserBadges(it)) },
                                         onBookmarks = { profileUsername?.let { stack.push(Route.UserTopics(it, "我的收藏", true)) } },
                                         onOpenDrafts = { stack.push(Route.Drafts) },
                                         onSettings = { stack.push(Route.Settings) },
@@ -1446,12 +1448,18 @@ private fun MainNavigation(state: UiState, viewModel: MainViewModel, lifecycle: 
                                         initialStaticAvatarUrl = profileRoute.initialStaticAvatarUrl,
                                         onOpenTopic = { id, title, post -> stack.push(Route.TopicDetail(id, title, post)) },
                                         onOpenUser = { stack.push(Route.UserProfile(it)) },
+                                        onOpenBadges = { stack.push(Route.UserBadges(profileRoute.username)) },
                                         onChat = { target -> viewModel.openChatWithUser(target) { stack.push(it) } },
                                         onComposePrivateMessage = { privateMessageRecipient = it },
                                         onBack = { stack.pop() },
                                     )
                                 }
                             }
+
+                            is Route.UserBadges -> ProfileBadgesScreen(
+                                username = route.username,
+                                onBack = { stack.pop() },
+                            )
 
                             Route.Drafts -> DraftsScreen(
                                 state = drafts,
