@@ -1128,18 +1128,17 @@ data class UserCardData(
     @SerialName("gamification_score") val gamificationScore: Int? = null,
     val badges: List<SummaryBadgeItem> = emptyList(),
 ) {
-    /** 与 FluxDO 一致：优先个人主页背景，其次资料卡背景。 */
-    val backgroundUrl: String?
-        get() {
-            val path = profileBackgroundUploadUrl?.trim()?.takeIf { it.isNotEmpty() }
-                ?: cardBackgroundUploadUrl?.trim()?.takeIf { it.isNotEmpty() }
-                ?: return null
+    val profileBackgroundUrl: String? get() = resolveBackgroundUrl(profileBackgroundUploadUrl)
+    val cardBackgroundUrl: String? get() = resolveBackgroundUrl(cardBackgroundUploadUrl)
+
+    private fun resolveBackgroundUrl(value: String?): String? {
+            val path = value?.trim()?.takeIf { it.isNotEmpty() } ?: return null
             return when {
                 path.startsWith("//") -> "https:$path"
                 path.startsWith("https://", ignoreCase = true) || path.startsWith("http://", ignoreCase = true) -> path
                 else -> Config.BASE_URL + "/" + path.trimStart('/')
             }
-        }
+    }
 
     val topicPostCount: Int?
         get() = when (val elem = rawTopicPostCount) {

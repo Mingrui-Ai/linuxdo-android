@@ -78,7 +78,7 @@ fun UserCardBottomSheet(
                 .wrapContentHeight()
         ) {
             val user = state.user
-            val backgroundUrl = user?.backgroundUrl
+            val backgroundUrl = user?.cardBackgroundUrl
             if (backgroundUrl != null) {
                 val bgRequest = org.linuxdo.android.ui.design.rememberAnimatedImageRequest(backgroundUrl)
                 AsyncImage(

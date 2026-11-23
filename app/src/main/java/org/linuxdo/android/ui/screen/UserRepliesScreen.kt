@@ -285,10 +285,10 @@ private fun UserReplyCard(
 }
 
 enum class UserProfileTab(val label: String, val filter: String?) {
-    Summary("总结", null),
-    Activity("动态", null),
     Topics("话题", "4"),
     Replies("回复", "5"),
+    Summary("关于", null),
+    Activity("动态", null),
     Likes("赞", "1"),
     Reactions("回应", null),
     Boost("Boost", null),
@@ -305,15 +305,20 @@ fun UserProfileScreen(
     onOpenUser: ((String) -> Unit)? = null,
     onChat: ((String) -> Unit)? = null,
     onComposePrivateMessage: ((String) -> Unit)? = null,
-    onBack: () -> Unit,
+    onBack: (() -> Unit)? = null,
+    onSwitchAccount: (() -> Unit)? = null,
+    onEditProfile: (() -> Unit)? = null,
+    menuActions: List<ProfileMenuAction> = emptyList(),
+    aboutContent: (@Composable () -> Unit)? = null,
+    scrollToTopRequest: Int = 0,
 ) {
     val context = LocalContext.current
-    val clipboard = LocalClipboardManager.current
     val coroutineScope = rememberCoroutineScope()
     val repo = (context.applicationContext as? App)?.container?.topicRepository
     var userCard by remember(username) { mutableStateOf<UserCardData?>(repo?.getCachedUserCard(username)) }
     var selectedTab by rememberSaveable(username) { mutableIntStateOf(0) }
-    var bioExpanded by rememberSaveable(username) { mutableStateOf(false) }
+    var refreshGeneration by remember(username) { mutableIntStateOf(0) }
+    var profileError by remember(username) { mutableStateOf<String?>(null) }
     val tabEntries = remember { UserProfileTab.entries }
 
     var summaryData by remember(username) { mutableStateOf<UserSummaryData?>(null) }
@@ -331,39 +336,46 @@ fun UserProfileScreen(
     var cursor by remember(username, selectedTab) { mutableIntStateOf(0) }
     var hasMore by remember(username, selectedTab) { mutableStateOf(true) }
 
-    LaunchedEffect(username) {
+    LaunchedEffect(username, refreshGeneration) {
+        profileError = null
         if (repo == null) return@LaunchedEffect
         try {
-            val card = repo.fetchUserCard(username)
+            val card = repo.fetchUserCard(username, forceRefresh = refreshGeneration > 0)
             userCard = card
             if (card.animatedAvatar.isNullOrBlank() || !isAnimatedAvatarPath(card.animatedAvatar)) {
                 userCard = repo.enrichUserCardAvatar(username, card)
             }
         } catch (error: kotlinx.coroutines.CancellationException) {
             throw error
-        } catch (_: Exception) {
-            // 保留 card.json 的首屏和现有错误兜底；完整资料补全失败不影响资料页可用性。
+        } catch (e: Exception) {
+            if (userCard == null) profileError = e.message ?: "资料加载失败"
         }
     }
 
-    LaunchedEffect(username, selectedTab, retryTrigger) {
+    LaunchedEffect(username, refreshGeneration) {
+        if (repo == null) return@LaunchedEffect
+        summaryLoading = true
+        summaryError = null
+        try {
+            summaryData = repo.fetchUserSummary(username)
+        } catch (e: kotlinx.coroutines.CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            summaryError = e.message ?: "加载总结失败"
+        } finally {
+            summaryLoading = false
+        }
+    }
+
+    androidx.compose.runtime.DisposableEffect(username, selectedTab) {
+        onDispose { loadMoreJob?.cancel() }
+    }
+
+    LaunchedEffect(username, selectedTab, retryTrigger, refreshGeneration) {
         val currentTab = tabEntries[selectedTab]
         if (repo == null) return@LaunchedEffect
         loadMoreJob?.cancel()
-        if (currentTab == UserProfileTab.Summary) {
-            if (summaryData == null || retryTrigger > 0) {
-                summaryLoading = true
-                summaryError = null
-                try {
-                    summaryData = repo.fetchUserSummary(username)
-                } catch (e: Exception) {
-                    summaryError = e.message ?: "加载总结失败"
-                } finally {
-                    summaryLoading = false
-                }
-            }
-            return@LaunchedEffect
-        }
+        if (currentTab == UserProfileTab.Summary) return@LaunchedEffect
         loading = true
         error = null
         try {
@@ -399,6 +411,8 @@ fun UserProfileScreen(
                     cursor = 1
                 }
             }
+        } catch (e: kotlinx.coroutines.CancellationException) {
+            throw e
         } catch (e: Exception) {
             error = e.message ?: "加载数据失败"
         } finally {
@@ -445,23 +459,32 @@ fun UserProfileScreen(
                         cursor += 1
                     }
                 }
+            } catch (e: kotlinx.coroutines.CancellationException) {
+                throw e
             } catch (e: Exception) {
-                // 不清除已加载的数据
+                error = e.message ?: "加载更多失败"
             } finally {
                 loading = false
             }
         }
     }
 
-    val listState = rememberLazyListState()
-    val nearEnd by remember {
+    val listState = androidx.compose.runtime.key(username, selectedTab) { rememberLazyListState() }
+    val aboutScroll = androidx.compose.runtime.key(username) { rememberScrollState() }
+    LaunchedEffect(scrollToTopRequest) {
+        if (scrollToTopRequest > 0) {
+            listState.scrollToItem(0)
+            aboutScroll.scrollTo(0)
+        }
+    }
+    val nearEnd by remember(listState) {
         derivedStateOf {
             val lastVisible = listState.layoutInfo.visibleItemsInfo.lastOrNull()?.index ?: -1
             lastVisible >= listState.layoutInfo.totalItemsCount - 3
         }
     }
-    LaunchedEffect(nearEnd) {
-        if (nearEnd && hasMore && !loading) {
+    LaunchedEffect(username, selectedTab, nearEnd, loading, hasMore) {
+        if (nearEnd && items.isNotEmpty() && hasMore && !loading && error == null) {
             loadMore()
         }
     }
@@ -473,209 +496,28 @@ fun UserProfileScreen(
             .fillMaxSize()
             .background(if (isDark) Color(0xFF0F0F10) else Color(0xFFF7F8FA))
     ) {
-        // 个人资料和分类固定在列表上方，不跟随全局导航栏的滚动显隐。
+        // 资料与分类固定，只有下方内容列表滚动。
         Column {
-            // 顶部黑色星空微光头部卡片 (Header)
-            Box(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .background(Color(0xFF141416))
-            ) {
-                val bgUrl = userCard?.backgroundUrl
-                if (bgUrl != null) {
-                    val bgRequest = org.linuxdo.android.ui.design.rememberAnimatedImageRequest(bgUrl)
-                    AsyncImage(
-                        model = bgRequest ?: bgUrl,
-                        contentDescription = null,
-                        contentScale = ContentScale.Crop,
-                        modifier = Modifier.matchParentSize(),
-                    )
-                    Box(
-                        Modifier
-                            .matchParentSize()
-                            .background(
-                                androidx.compose.ui.graphics.Brush.verticalGradient(
-                                    colors = listOf(
-                                        Color(0xFF141416).copy(alpha = 0.45f),
-                                        Color(0xFF141416).copy(alpha = 0.95f),
-                                    ),
-                                ),
-                            ),
-                    )
-                }
-                Column(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .statusBarsPadding()
-                        .padding(bottom = 12.dp)
-                ) {
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(horizontal = 6.dp, vertical = 4.dp),
-                        verticalAlignment = Alignment.CenterVertically,
-                    ) {
-                        IconButton(onClick = onBack, modifier = Modifier.size(40.dp)) {
-                            Icon(
-                                Icons.AutoMirrored.Filled.ArrowBack,
-                                contentDescription = "返回",
-                                tint = Color.White,
-                            )
-                        }
-                        Spacer(Modifier.weight(1f))
-                        if (onComposePrivateMessage != null) {
-                            IconButton(
-                                onClick = { onComposePrivateMessage(username) },
-                                modifier = Modifier.size(40.dp)
-                            ) {
-                                Icon(Icons.Default.Email, contentDescription = "私信", tint = Color.White)
-                            }
-                        }
-                    }
-
-                    val card = userCard
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(horizontal = 18.dp, vertical = 6.dp),
-                        verticalAlignment = Alignment.CenterVertically,
-                    ) {
-                        Box(Modifier.size(80.dp)) {
-                            val animCandidate = card?.animatedAvatar ?: AvatarCache.get(username) ?: initialAvatarUrl?.takeIf(::isAnimatedAvatarPath)
-                            val animUrl = avatarUrlOf(
-                                template = card?.avatarTemplate,
-                                animatedAvatar = animCandidate,
-                                size = 120,
-                                username = username,
-                            )
-                            val staticUrl = avatarUrlOf(template = card?.avatarTemplate, size = 120) ?: initialStaticAvatarUrl
-                            val avatar = if (isAnimatedAvatarPath(animCandidate)) {
-                                animUrl
-                            } else {
-                                animUrl ?: initialAvatarUrl ?: staticUrl
-                            }
-                            val avatarShape = org.linuxdo.android.ui.design.avatarShape(username, avatar, 12.dp)
-                            org.linuxdo.android.ui.design.UserAvatar(
-                                avatarUrl = avatar,
-                                fallbackUrl = staticUrl,
-                                username = username,
-                                modifier = Modifier
-                                    .size(76.dp)
-                                    .border(2.5.dp, Color.White, avatarShape),
-                                cornerRadius = 12.dp,
-                            )
-                            Box(
-                                modifier = Modifier
-                                    .size(24.dp)
-                                    .align(Alignment.BottomEnd)
-                                    .clip(CircleShape)
-                                    .background(Color(0xFF262628)),
-                                contentAlignment = Alignment.Center,
-                            ) {
-                                Text("🔥", fontSize = 12.sp)
-                            }
-                        }
-
-                        Spacer(Modifier.width(16.dp))
-
-                        Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                        Text(
-                            text = card?.cleanDisplayName ?: username,
-                            fontSize = 22.sp,
-                            fontWeight = FontWeight.Bold,
-                            color = Color.White,
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis,
-                        )
-                        Row(
-                            verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.spacedBy(8.dp),
-                        ) {
-                            Text(
-                                text = "@$username",
-                                fontSize = 14.sp,
-                                color = Color(0xFFA1A1AA),
-                                maxLines = 1,
-                            )
-                            LevelBadge(card?.trustLevel ?: 2)
-                        }
-                    }
-                }
-
-                // 个性签名药丸卡片
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(horizontal = 18.dp, vertical = 6.dp)
-                        .clip(RoundedCornerShape(10.dp))
-                        .background(Color(0xFF222226))
-                        .clickable { bioExpanded = !bioExpanded }
-                        .padding(horizontal = 12.dp, vertical = 9.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    UserBioText(
-                        html = card?.bioExcerpt,
-                        emptyText = "这个人很懒，什么都没写",
-                        style = IosTheme.type.body.copy(fontSize = 13.5.sp),
-                        color = Color(0xFFD4D4D8),
-                        maxLines = if (bioExpanded) Int.MAX_VALUE else 1,
-                        modifier = Modifier.weight(1f),
-                    )
-                    Text(
-                        "›",
-                        fontSize = 16.sp,
-                        color = Color(0xFF71717A),
-                        modifier = Modifier.rotate(if (bioExpanded) 90f else 0f),
-                    )
-                }
-
-                // 获赞、访问、话题、回复指标行
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(horizontal = 18.dp, vertical = 6.dp),
-                    horizontalArrangement = Arrangement.spacedBy(16.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-                        Text(formatCount(summaryData?.likesReceived ?: card?.likesReceived ?: 0), fontWeight = FontWeight.Bold, color = Color.White, fontSize = 13.5.sp)
-                        Text("获赞", color = Color(0xFFA1A1AA), fontSize = 13.5.sp)
-                    }
-                    Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-                        val days = summaryData?.daysVisited
-                        Text(if (days != null) formatCount(days) else "-", fontWeight = FontWeight.Bold, color = Color.White, fontSize = 13.5.sp)
-                        Text("访问", color = Color(0xFFA1A1AA), fontSize = 13.5.sp)
-                    }
-                    Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-                        Text(formatCount(summaryData?.topicCount ?: card?.topicCount ?: 0), fontWeight = FontWeight.Bold, color = Color.White, fontSize = 13.5.sp)
-                        Text("话题", color = Color(0xFFA1A1AA), fontSize = 13.5.sp)
-                    }
-                    Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-                        Text(formatCount(summaryData?.postCount ?: card?.postCount ?: 0), fontWeight = FontWeight.Bold, color = Color.White, fontSize = 13.5.sp)
-                        Text("回复", color = Color(0xFFA1A1AA), fontSize = 13.5.sp)
-                    }
-                }
-
-                // 最后活跃状态小标
-                Box(
-                    modifier = Modifier
-                        .padding(start = 18.dp, top = 4.dp)
-                        .clip(RoundedCornerShape(50))
-                        .background(Color(0xFF26262A))
-                        .padding(horizontal = 9.dp, vertical = 3.dp),
-                ) {
-                    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-                        Text("📍", fontSize = 10.sp)
-                        Text("活跃用户", fontSize = 11.5.sp, color = Color(0xFFA1A1AA))
-                    }
+            ProfileHeader(
+                username = username, card = userCard, summary = summaryData,
+                initialAvatarUrl = initialAvatarUrl, initialStaticAvatarUrl = initialStaticAvatarUrl,
+                onBack = onBack, onSwitchAccount = onSwitchAccount, onEditProfile = onEditProfile,
+                onChat = onChat?.let { callback -> { callback(username) } },
+                onPrivateMessage = onComposePrivateMessage?.let { callback -> { callback(username) } },
+                onAbout = { selectedTab = tabEntries.indexOf(UserProfileTab.Summary) },
+                onTopics = { selectedTab = tabEntries.indexOf(UserProfileTab.Topics) },
+                onReplies = { selectedTab = tabEntries.indexOf(UserProfileTab.Replies) },
+                onRefresh = { refreshGeneration++ }, menuActions = menuActions,
+            )
+            profileError?.let { message ->
+                TextButton(onClick = { refreshGeneration++ }) {
+                    Text("$message · 重试", color = IosTheme.colors.secondaryLabel, maxLines = 1)
                 }
             }
-        }
-
             // ── 下半部分: 横向滑动 TabRow (总结、动态、话题、回复、赞、回应、Boost、投票、已解决) ──
             ScrollableTabRow(
                 selectedTabIndex = selectedTab,
-                containerColor = if (isDark) Color(0xFF18181A) else Color.White,
+                containerColor = if (isDark) Color(0xFF101113) else Color.White,
                 contentColor = IosTheme.colors.accent,
                 edgePadding = 12.dp,
                 indicator = { tabPositions ->
@@ -683,7 +525,7 @@ fun UserProfileScreen(
                         TabRowDefaults.SecondaryIndicator(
                             Modifier.tabIndicatorOffset(tabPositions[selectedTab]),
                             color = IosTheme.colors.accent,
-                            height = 2.5.dp,
+                            height = 2.dp,
                         )
                     }
                 },
@@ -721,7 +563,7 @@ fun UserProfileScreen(
                             verticalArrangement = Arrangement.spacedBy(8.dp),
                         ) {
                             Text(summaryError ?: "加载失败", color = IosTheme.colors.secondaryLabel)
-                            TextButton(onClick = { retryTrigger++ }) {
+                            TextButton(onClick = { refreshGeneration++ }) {
                                 Text("重试", color = IosTheme.colors.accent)
                             }
                         }
@@ -734,6 +576,8 @@ fun UserProfileScreen(
                         username = username,
                         onOpenTopic = onOpenTopic,
                         onOpenUser = { u -> onOpenUser?.invoke(u) },
+                        scrollState = aboutScroll,
+                        aboutContent = aboutContent,
                     )
                 }
                 else -> {
@@ -747,7 +591,10 @@ fun UserProfileScreen(
                 IosLoadingBox(Modifier.fillMaxSize())
             } else if (error != null && items.isEmpty()) {
                 Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                    Text(error ?: "加载失败", color = IosTheme.colors.secondaryLabel)
+                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                        Text(error ?: "加载失败", color = IosTheme.colors.secondaryLabel)
+                        TextButton(onClick = { retryTrigger++ }) { Text("重试") }
+                    }
                 }
             } else if (!loading && items.isEmpty()) {
                 Box(
@@ -784,6 +631,9 @@ fun UserProfileScreen(
                             onOpenUser = onOpenUser,
                         )
                     }
+                    if (error != null && items.isNotEmpty()) {
+                        item("retry-more") { TextButton(onClick = { error = null; loadMore() }) { Text("加载更多失败，点击重试") } }
+                    }
                     if (loading && items.isNotEmpty()) {
                         item("loading-more") { IosLoadingBox() }
                     }
@@ -812,10 +662,12 @@ private fun UserSummaryView(
     username: String,
     onOpenTopic: (Long, String, Int?) -> Unit,
     onOpenUser: (String) -> Unit,
+    scrollState: androidx.compose.foundation.ScrollState,
+    aboutContent: (@Composable () -> Unit)?,
 ) {
     val context = LocalContext.current
     val isDark = IosTheme.colors.isDark
-    val summaryScroll = rememberScrollState()
+    val summaryScroll = scrollState
     val cardBg = if (isDark) Color(0xFF18181A) else Color.White
     val cardBorder = if (isDark) Color(0xFF262628) else Color(0xFFE5E7EB)
     val textPrimary = if (isDark) Color.White else Color(0xFF111827)
@@ -829,7 +681,9 @@ private fun UserSummaryView(
             .padding(16.dp),
         verticalArrangement = Arrangement.spacedBy(16.dp),
     ) {
-        // 1. 核心指标统计 (8 宫格)
+        aboutContent?.invoke()
+
+        // 核心统计与历史总结内容完整保留。
         Column(
             modifier = Modifier
                 .fillMaxWidth()
@@ -840,7 +694,7 @@ private fun UserSummaryView(
             verticalArrangement = Arrangement.spacedBy(12.dp),
         ) {
             Text(
-                text = "📊 数据统计",
+                text = "社区记录",
                 fontSize = 15.sp,
                 fontWeight = FontWeight.Bold,
                 color = textPrimary,

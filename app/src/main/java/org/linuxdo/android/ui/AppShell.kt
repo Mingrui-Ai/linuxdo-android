@@ -856,7 +856,7 @@ private fun MainNavigation(state: UiState, viewModel: MainViewModel, lifecycle: 
     val boardSwipe = Modifier.boundedTabSwipe(selected.ordinal, MainTab.entries.size,
         enabled = browsing && !contentObscured) { selectBoard(MainTab.entries[it]) }
     // 有分类的列表自行处理横滑；单页板块可以直接在内容区切换主导航。
-    val singlePage = visibleRoute == Route.Search || visibleRoute == Route.Profile
+    val singlePage = visibleRoute == Route.Search
     Box(Modifier.fillMaxSize()) {
         Box(Modifier.fillMaxSize().then(if (singlePage) boardSwipe else Modifier)) {
             holder.SaveableStateProvider(selected.name) {
@@ -1395,47 +1395,53 @@ private fun MainNavigation(state: UiState, viewModel: MainViewModel, lifecycle: 
                                 onClearHistory = viewModel::clearSearchHistory,
                             )
 
-                            Route.Profile -> ProfileScreen(state.username, profile, viewModel::loadProfile,
-                                onOpenUserTopics = { username, title, isBookmark ->
-                                    stack.push(Route.UserTopics(username, title, isBookmark))
-                                },
-                                onOpenUserReplies = { username ->
-                                    stack.push(Route.UserReplies(username))
-                                },
-                                onOpenUserActions = { username, title, filter ->
-                                    stack.push(Route.UserReplies(username, title, filter))
-                                },
-                                draftCount = drafts.items.size.toString(),
-                                onOpenDrafts = { stack.push(Route.Drafts) },
-                                onDiagnostics = { stack.push(Route.Diagnostics) },
-                                onSettings = { stack.push(Route.Settings) },
-                                accountState = accountState,
-                                onRefreshAccounts = viewModel::refreshAccounts,
-                                onSwitchAccount = viewModel::switchAccount,
-                                onRemoveAccount = viewModel::removeAccount,
-                                onAddAccount = viewModel::addAccount,
-                                onOpenConnect = { showConnectSheet = true },
-                                onOpenHistory = { stack.push(Route.BrowsingHistory) },
-                                onOpenFollowing = { state.username?.let { stack.push(Route.FollowList(it)) } },
-                                onOpenAppsPlaza = { globalBrowserUrl = "${Config.BASE_URL}/apps" },
-                                onOpenBlacklist = { stack.push(Route.Blacklist) },
-                                onOpenLdcStore = { globalBrowserUrl = org.linuxdo.android.ui.screen.ProfileWebApp.Store.url },
-                                onOpenLdcMail = { globalBrowserUrl = org.linuxdo.android.ui.screen.ProfileWebApp.Mail.url },
-                                onOpenUser = { username, primaryAvatar, staticAvatar ->
-                                    stack.push(Route.UserProfile(username, primaryAvatar, staticAvatar))
-                                },
-                                onComposePrivateMessage = { recipient -> privateMessageRecipient = recipient },
-                                onLogout = viewModel::logout,
-                                userBadges = userBadges,
-                                isUserBadgesLoading = isUserBadgesLoading,
-                                onRefreshUserBadges = viewModel::loadUserBadges,
-                                cdkScore = cdkScoreState.score.takeIf {
-                                    cdkScoreState.username.equals(state.username, ignoreCase = true)
-                                },
-                                onLoadCdkScore = { viewModel.loadCdkScore() },
-                                active = active,
-                                scrollToTopRequest = scrollToTopRequest,
-                                trailing = {})
+                            Route.Profile, is Route.UserProfile -> {
+                                val profileRoute = route as? Route.UserProfile
+                                val profileUsername = profileRoute?.username ?: state.username
+                                val ownProfile = profileRoute == null || profileUsername.equals(state.username, ignoreCase = true)
+                                if (ownProfile) {
+                                    ProfileScreen(
+                                        username = profileUsername,
+                                        active = active,
+                                        accountState = accountState,
+                                        onRefreshAccounts = viewModel::refreshAccounts,
+                                        onSwitchAccount = viewModel::switchAccount,
+                                        onRemoveAccount = viewModel::removeAccount,
+                                        onAddAccount = viewModel::addAccount,
+                                        onOpenTopic = { id, title, post -> stack.push(Route.TopicDetail(id, title, post)) },
+                                        onOpenUser = { stack.push(Route.UserProfile(it)) },
+                                        onBookmarks = { profileUsername?.let { stack.push(Route.UserTopics(it, "我的收藏", true)) } },
+                                        onOpenDrafts = { stack.push(Route.Drafts) },
+                                        onSettings = { stack.push(Route.Settings) },
+                                        onOpenConnect = { showConnectSheet = true },
+                                        onOpenHistory = { stack.push(Route.BrowsingHistory) },
+                                        onOpenFollowing = { profileUsername?.let { stack.push(Route.FollowList(it)) } },
+                                        onOpenAppsPlaza = { globalBrowserUrl = "${Config.BASE_URL}/apps" },
+                                        onOpenBlacklist = { stack.push(Route.Blacklist) },
+                                        onOpenLdcStore = { globalBrowserUrl = org.linuxdo.android.ui.screen.ProfileWebApp.Store.url },
+                                        onOpenLdcMail = { globalBrowserUrl = org.linuxdo.android.ui.screen.ProfileWebApp.Mail.url },
+                                        onEditProfile = { globalBrowserUrl = "${Config.BASE_URL}/my/preferences/profile" },
+                                        userBadges = userBadges,
+                                        isUserBadgesLoading = isUserBadgesLoading,
+                                        onRefreshUserBadges = { viewModel.loadUserBadges() },
+                                        cdkScore = cdkScoreState.score.takeIf { cdkScoreState.username.equals(profileUsername, ignoreCase = true) },
+                                        onLoadCdkScore = { viewModel.loadCdkScore() },
+                                        scrollToTopRequest = scrollToTopRequest,
+                                        onBack = if (profileRoute != null) ({ stack.pop(); Unit }) else null,
+                                    )
+                                } else if (profileRoute != null) {
+                                    UserProfileScreen(
+                                        username = profileRoute.username,
+                                        initialAvatarUrl = profileRoute.initialAvatarUrl,
+                                        initialStaticAvatarUrl = profileRoute.initialStaticAvatarUrl,
+                                        onOpenTopic = { id, title, post -> stack.push(Route.TopicDetail(id, title, post)) },
+                                        onOpenUser = { stack.push(Route.UserProfile(it)) },
+                                        onChat = { target -> viewModel.openChatWithUser(target) { stack.push(it) } },
+                                        onComposePrivateMessage = { privateMessageRecipient = it },
+                                        onBack = { stack.pop() },
+                                    )
+                                }
+                            }
 
                             Route.Drafts -> DraftsScreen(
                                 state = drafts,
@@ -1613,24 +1619,6 @@ private fun MainNavigation(state: UiState, viewModel: MainViewModel, lifecycle: 
                                     onBack = { stack.pop() },
                                 )
                             }
-
-                            is Route.UserProfile -> {
-                                UserProfileScreen(
-                                    username = route.username,
-                                    initialAvatarUrl = route.initialAvatarUrl,
-                                    initialStaticAvatarUrl = route.initialStaticAvatarUrl,
-                                    onOpenTopic = { id, title, postNumber ->
-                                        stack.push(Route.TopicDetail(id, title, postNumber))
-                                    },
-                                    onOpenUser = viewModel::openUserCard,
-                                    onChat = { target ->
-                                        viewModel.openChatWithUser(target) { stack.push(it) }
-                                    },
-                                    onComposePrivateMessage = { recipient -> privateMessageRecipient = recipient },
-                                    onBack = { stack.pop() },
-                                )
-                            }
-
 
                             Route.Settings, is Route.SettingsDetail -> SettingsScreen(
                                 page = (route as? Route.SettingsDetail)?.page,
