@@ -74,6 +74,13 @@ import org.linuxdo.android.data.SummaryBadgeItem
 import org.linuxdo.android.data.SummaryLinkItem
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.FlowRow
+import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.WindowInsetsSides
+import androidx.compose.foundation.layout.systemBars
+import androidx.compose.foundation.layout.displayCutout
+import androidx.compose.foundation.layout.union
+import androidx.compose.foundation.layout.only
+import androidx.compose.foundation.layout.asPaddingValues
 import kotlinx.coroutines.launch
 import org.linuxdo.android.App
 import org.linuxdo.android.data.UserCardData
@@ -84,6 +91,8 @@ import org.linuxdo.android.ui.design.scrollListBars
 import org.linuxdo.android.ui.design.IosLargeTitleScaffold
 import org.linuxdo.android.ui.design.IosTheme
 import org.linuxdo.android.ui.design.UserBioText
+import org.linuxdo.android.ui.design.CollapsingHeaderLayout
+import org.linuxdo.android.ui.design.rememberCollapsingHeaderState
 
 @Composable
 fun UserRepliesScreen(
@@ -285,7 +294,7 @@ private fun UserReplyCard(
 }
 
 enum class UserProfileTab(val label: String, val filter: String?) {
-    Summary("关于", null),
+    Summary("总结", null),
     Topics("话题", "4"),
     Replies("回复", "5"),
     Activity("动态", null),
@@ -495,8 +504,10 @@ fun UserProfileScreen(
 
     val listState = androidx.compose.runtime.key(username, selectedTab) { rememberLazyListState() }
     val aboutScroll = androidx.compose.runtime.key(username) { rememberScrollState() }
+    val headerState = androidx.compose.runtime.key(username) { rememberCollapsingHeaderState() }
     LaunchedEffect(scrollToTopRequest) {
         if (scrollToTopRequest > 0) {
+            headerState.expand()
             listState.scrollToItem(0)
             aboutScroll.scrollTo(0)
         }
@@ -515,33 +526,39 @@ fun UserProfileScreen(
 
     val isDark = IosTheme.colors.isDark
 
-    Column(
-        Modifier
+    CollapsingHeaderLayout(
+        state = headerState,
+        topInset = WindowInsets.systemBars.union(WindowInsets.displayCutout).only(WindowInsetsSides.Top)
+            .asPaddingValues().calculateTopPadding(),
+        statusBarColor = if (isDark) Color(0xFF101113) else Color.White,
+        modifier = Modifier
             .fillMaxSize()
-            .background(if (isDark) Color(0xFF0F0F10) else Color(0xFFF7F8FA))
-    ) {
-        // 资料与分类固定，只有下方内容列表滚动。
-        Column {
-            ProfileHeader(
-                username = username, card = userCard, summary = summaryData,
-                initialAvatarUrl = initialAvatarUrl, initialStaticAvatarUrl = initialStaticAvatarUrl,
-                onBack = onBack, onSwitchAccount = onSwitchAccount, onEditProfile = onEditProfile,
-                onChat = onChat?.let { callback -> { callback(username) } },
-                onPrivateMessage = onComposePrivateMessage?.let { callback -> { callback(username) } },
-                onAbout = { selectedProfileTab = UserProfileTab.Summary },
-                onTopics = { selectedProfileTab = UserProfileTab.Topics },
-                onReplies = { selectedProfileTab = UserProfileTab.Replies },
-                onRefresh = { refreshGeneration++ }, menuActions = menuActions,
-                communityScore = communityScore, onOpenCommunityScore = onOpenCommunityScore,
-                onOpenLevel = onOpenLevel,
-                badges = badges, badgesLoading = badgesLoading, badgesError = badgesError,
-                onRefreshBadges = { badgeRefresh++ },
-            )
-            profileError?.let { message ->
-                TextButton(onClick = { refreshGeneration++ }) {
-                    Text("$message · 重试", color = IosTheme.colors.secondaryLabel, maxLines = 1)
+            .background(if (isDark) Color(0xFF0F0F10) else Color(0xFFF7F8FA)),
+        header = {
+            Column {
+                ProfileHeader(
+                    username = username, card = userCard, summary = summaryData,
+                    initialAvatarUrl = initialAvatarUrl, initialStaticAvatarUrl = initialStaticAvatarUrl,
+                    onBack = onBack, onSwitchAccount = onSwitchAccount, onEditProfile = onEditProfile,
+                    onChat = onChat?.let { callback -> { callback(username) } },
+                    onPrivateMessage = onComposePrivateMessage?.let { callback -> { callback(username) } },
+                    onAbout = { selectedProfileTab = UserProfileTab.Summary },
+                    onTopics = { selectedProfileTab = UserProfileTab.Topics },
+                    onReplies = { selectedProfileTab = UserProfileTab.Replies },
+                    onRefresh = { refreshGeneration++ }, menuActions = menuActions,
+                    communityScore = communityScore, onOpenCommunityScore = onOpenCommunityScore,
+                    onOpenLevel = onOpenLevel,
+                    badges = badges, badgesLoading = badgesLoading, badgesError = badgesError,
+                    onRefreshBadges = { badgeRefresh++ },
+                )
+                profileError?.let { message ->
+                    TextButton(onClick = { refreshGeneration++ }) {
+                        Text("$message · 重试", color = IosTheme.colors.secondaryLabel, maxLines = 1)
+                    }
                 }
             }
+        },
+        pinnedHeader = {
             // ── 下半部分: 横向滑动 TabRow (总结、动态、话题、回复、赞、回应、Boost、投票、已解决) ──
             ScrollableTabRow(
                 selectedTabIndex = selectedTab,
@@ -575,8 +592,8 @@ fun UserProfileScreen(
                     )
                 }
             }
-        }
-
+        },
+    ) {
         // 列表区
         val currentTab = tabEntries[selectedTab]
         if (currentTab == UserProfileTab.Summary) {

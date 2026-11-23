@@ -64,6 +64,10 @@ internal fun MessagesScreen(
 ) {
     var confirmRead by rememberSaveable { mutableStateOf(false) }
     var showSearch by rememberSaveable { mutableStateOf(false) }
+    val headerState = rememberCollapsingHeaderState()
+    LaunchedEffect(scrollToTopRequest) {
+        if (scrollToTopRequest > 0) headerState.expand()
+    }
     val chatOpen = section == MessageSection.Chat
     val unreadChannels = remember(chat.channels) { chat.channels.filter { it.unreadCount > 0 && it.membership?.muted != true } }
     LaunchedEffect(active, section) {
@@ -78,6 +82,7 @@ internal fun MessagesScreen(
         onSelect = { onSection(MessageSection.entries[it]) },
         active = active,
         swipeContent = false,
+        collapsingHeader = headerState,
         unread = { if (it == MessageSection.Chat.ordinal) unreadChannels.isNotEmpty() else unreadNotifications > 0 },
         actionWidth = if (chatOpen) 76.dp else 48.dp,
         actions = {
@@ -155,6 +160,7 @@ private fun MessagePages(
     active: Boolean,
     swipeContent: Boolean = true,
     compactHeader: Boolean = false,
+    collapsingHeader: CollapsingHeaderState? = null,
     unread: (Int) -> Boolean,
     actionWidth: Dp = 0.dp,
     actions: @Composable () -> Unit = {},
@@ -209,25 +215,34 @@ private fun MessagePages(
             settle(target.coerceIn(labels.indices))
         },
     )
-    Column(Modifier.fillMaxSize().background(IosTheme.colors.groupedBackground)
-        .then(if (swipeContent) gesture else Modifier)) {
-        ListNavigationHeader {
-            SectionHeader(
-                labels = labels,
-                selected = selected,
-                onSelect = { settle(it, tapped = true) },
-                modifier = if (swipeContent) Modifier else gesture,
-                indicatorPosition = { pager.currentPage + pager.currentPageOffsetFraction },
-                unread = unread,
-                compact = compactHeader,
-                actionWidth = actionWidth,
-                actions = actions,
-            )
-        }
-
+    val header: @Composable () -> Unit = {
+        SectionHeader(
+            labels = labels,
+            selected = selected,
+            onSelect = { settle(it, tapped = true) },
+            modifier = if (swipeContent) Modifier else gesture,
+            indicatorPosition = { pager.currentPage + pager.currentPageOffsetFraction },
+            unread = unread,
+            compact = compactHeader,
+            actionWidth = actionWidth,
+            actions = actions,
+        )
+    }
+    val pages: @Composable () -> Unit = {
         // 内容横滑由上面的单一手势驱动，嵌套分类到边界时不会连带切换父板块。
-        HorizontalPager(state = pager, modifier = Modifier.fillMaxWidth().weight(1f),
+        HorizontalPager(state = pager, modifier = Modifier.fillMaxSize(),
             userScrollEnabled = false, verticalAlignment = Alignment.Top) { page -> content(page) }
+    }
+    val modifier = Modifier.fillMaxSize().background(IosTheme.colors.groupedBackground)
+        .then(if (swipeContent) gesture else Modifier)
+    if (collapsingHeader != null) {
+        CollapsingHeaderLayout(state = collapsingHeader, modifier = modifier, header = header, content = pages)
+    } else {
+        // 二级分类始终可见，不再随上下导航栏的布尔显隐动画一起消失。
+        Column(modifier) {
+            header()
+            Box(Modifier.fillMaxWidth().weight(1f)) { pages() }
+        }
     }
 }
 

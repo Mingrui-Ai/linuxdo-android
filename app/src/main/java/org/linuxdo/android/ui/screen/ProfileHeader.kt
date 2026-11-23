@@ -102,6 +102,8 @@ internal fun ProfileHeader(
                                 expanded = showMenu,
                                 actions = listOfNotNull(
                                     onSwitchAccount?.let { ProfileMenuAction("切换账号", Icons.Default.Person, it) },
+                                    onEditProfile?.let { ProfileMenuAction("编辑个人资料", Icons.Default.Edit, it) },
+                                    onPrivateMessage?.let { ProfileMenuAction("私信", Icons.Default.Email, it) },
                                     ProfileMenuAction("分享个人主页", Icons.Default.Share) {
                                         context.startActivity(Intent.createChooser(Intent(Intent.ACTION_SEND).apply {
                                             type = "text/plain"
@@ -121,21 +123,6 @@ internal fun ProfileHeader(
                 Row(Modifier.fillMaxWidth().padding(horizontal = 16.dp), verticalAlignment = Alignment.Bottom) {
                     UserAvatar(avatarUrl = avatar, fallbackUrl = staticAvatar, username = username,
                         modifier = Modifier.size(78.dp).border(3.dp, surface, CircleShape), cornerRadius = 39.dp)
-                    Spacer(Modifier.weight(1f))
-                    if (onEditProfile != null) {
-                        OutlinedButton(onClick = onEditProfile, contentPadding = PaddingValues(horizontal = 16.dp, vertical = 0.dp),
-                            modifier = Modifier.height(34.dp), border = androidx.compose.foundation.BorderStroke(1.dp, colors.separator)) {
-                            Text("编辑资料", color = colors.label, fontSize = 12.sp)
-                        }
-                    } else if (onPrivateMessage != null) {
-                        OutlinedButton(onClick = onPrivateMessage, modifier = Modifier.height(34.dp),
-                            contentPadding = PaddingValues(horizontal = 16.dp, vertical = 0.dp),
-                            border = androidx.compose.foundation.BorderStroke(1.dp, colors.separator)) {
-                            Icon(Icons.Default.Email, null, modifier = Modifier.size(15.dp), tint = colors.label)
-                            Spacer(Modifier.width(6.dp))
-                            Text("私信", color = colors.label, fontSize = 12.sp)
-                        }
-                    }
                 }
             }
         }
