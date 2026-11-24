@@ -875,6 +875,9 @@ private fun MainNavigation(state: UiState, viewModel: MainViewModel, lifecycle: 
     fun openSearch() {
         if (stack.current != Route.Search) stack.push(Route.Search)
     }
+    fun openCategories() {
+        if (stack.current != Route.CategoryList) stack.push(Route.CategoryList)
+    }
     val boardSwipe = Modifier.boundedTabSwipe(selected.ordinal, MainTab.entries.size,
         enabled = browsing && !contentObscured) { selectBoard(MainTab.entries[it]) }
     Box(Modifier.fillMaxSize()) {
@@ -996,7 +999,7 @@ private fun MainNavigation(state: UiState, viewModel: MainViewModel, lifecycle: 
                                 onFloatingBallPositionChange = viewModel::updateFloatingBallPosition,
                                 onNavigateToDrafts = { stack.push(Route.Drafts) },
                                 onNavigateToSearch = ::openSearch,
-                                onNavigateToCategories = { selected = MainTab.Categories },
+                                onNavigateToCategories = ::openCategories,
                                 onNavigateToHistory = { stack.push(Route.BrowsingHistory) },
                                 onNavigateToConnect = { showConnectSheet = true },
                                 onNavigateToChat = openChat,
@@ -1215,6 +1218,7 @@ private fun MainNavigation(state: UiState, viewModel: MainViewModel, lifecycle: 
                                 val context = LocalContext.current
                                 CategoryListScreen(
                                     state = categories,
+                                    onBack = { stack.pop() },
                                     customSection = customSection,
                                     onRetry = { viewModel.loadCategories(retry = true) },
                                     onOpen = { stack.push(Route.CategoryTopics(it.id, it.slug, it.name)) },
@@ -1282,7 +1286,7 @@ private fun MainNavigation(state: UiState, viewModel: MainViewModel, lifecycle: 
                                     onFloatingBallPositionChange = viewModel::updateFloatingBallPosition,
                                     onNavigateToDrafts = { stack.push(Route.Drafts) },
                                     onNavigateToSearch = ::openSearch,
-                                    onNavigateToCategories = { selected = MainTab.Categories },
+                                    onNavigateToCategories = ::openCategories,
                                     onNavigateToHistory = { stack.push(Route.BrowsingHistory) },
                                     onNavigateToConnect = { showConnectSheet = true },
                                     onNavigateToChat = openChat,
@@ -1375,7 +1379,7 @@ private fun MainNavigation(state: UiState, viewModel: MainViewModel, lifecycle: 
                                     onFloatingBallPositionChange = viewModel::updateFloatingBallPosition,
                                     onNavigateToDrafts = { stack.push(Route.Drafts) },
                                     onNavigateToSearch = ::openSearch,
-                                    onNavigateToCategories = { selected = MainTab.Categories },
+                                    onNavigateToCategories = ::openCategories,
                                     onNavigateToHistory = { stack.push(Route.BrowsingHistory) },
                                     onNavigateToConnect = { showConnectSheet = true },
                                     onNavigateToChat = openChat,
@@ -1609,7 +1613,7 @@ private fun MainNavigation(state: UiState, viewModel: MainViewModel, lifecycle: 
                                     onFloatingBallPositionChange = viewModel::updateFloatingBallPosition,
                                     onNavigateToDrafts = { stack.push(Route.Drafts) },
                                     onNavigateToSearch = ::openSearch,
-                                    onNavigateToCategories = { selected = MainTab.Categories },
+                                    onNavigateToCategories = ::openCategories,
                                     onNavigateToHistory = { stack.push(Route.BrowsingHistory) },
                                     onNavigateToConnect = { showConnectSheet = true },
                                     onNavigateToChat = openChat,
@@ -1879,7 +1883,11 @@ private fun MainNavigation(state: UiState, viewModel: MainViewModel, lifecycle: 
             TabBar(
                 selected,
                 modifier = boardSwipe,
-                categoriesTabLabel = if (categorySubTab == org.linuxdo.android.ui.CategorySectionTab.TAGS) "标签" else "分类",
+                onCreateTopic = {
+                    if (browsing && !contentObscured) {
+                        viewModel.openTopicCreator((stack.current as? Route.CategoryTopics)?.categoryId)
+                    }
+                },
                 unreadCount = state.unreadCount + chatUnread,
             ) { tab ->
                 if (browsing) {

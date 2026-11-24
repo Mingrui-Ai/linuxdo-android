@@ -29,6 +29,10 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.ExperimentalFoundationApi
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.Text
@@ -168,6 +172,7 @@ fun CategoryListScreen(
     state: CategoriesUiState,
     onRetry: () -> Unit,
     onOpen: (Category) -> Unit,
+    onBack: () -> Unit,
     customSection: CustomSection? = null,
     onOpenTopic: (Long, String, Int?) -> Unit = { _, _, _ -> },
     onOpenWebUrl: (String) -> Unit = {},
@@ -383,13 +388,18 @@ fun CategoryListScreen(
         listState = listState,
         scrollToTopRequest = scrollToTopRequest,
         fixedHeader = {
-            SectionHeader(
-                labels = listOf("分类", "标签"),
-                selected = currentTab.ordinal,
-                onSelect = { onTabChange(CategorySectionTab.entries[it]) },
-                actionWidth = 44.dp,
-                actions = if (currentTab == CategorySectionTab.CATEGORIES) combinedTrailing else trailing,
-            )
+            Box {
+                SectionHeader(
+                    labels = listOf("分类", "标签"),
+                    selected = currentTab.ordinal,
+                    onSelect = { onTabChange(CategorySectionTab.entries[it]) },
+                    actionWidth = 48.dp,
+                    actions = if (currentTab == CategorySectionTab.CATEGORIES) combinedTrailing else trailing,
+                )
+                IconButton(onClick = onBack, modifier = Modifier.align(Alignment.CenterStart).size(48.dp)) {
+                    Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "返回", tint = IosTheme.colors.accent)
+                }
+            }
         },
     ) {
         if (currentTab == CategorySectionTab.CATEGORIES) {

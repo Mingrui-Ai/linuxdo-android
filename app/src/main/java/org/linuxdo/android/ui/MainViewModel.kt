@@ -5763,7 +5763,13 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun openTopicCreator(initialCategoryId: Int? = null) {
-        if (_topicCreator.value.submitting || _topicCreator.value.savingDraft) return
+        if (_accounts.value.switching || store.sessionChanging) return
+        if (_topicCreator.value.open || _topicCreator.value.submitting || _topicCreator.value.savingDraft) return
+        if (_state.value.username.isNullOrBlank()) {
+            Toast.makeText(getApplication(), "请先登录账号后发帖", Toast.LENGTH_SHORT).show()
+            addAccount()
+            return
+        }
         if (!_categories.value.loaded && !_categories.value.loading) {
             loadCategories()
         }
