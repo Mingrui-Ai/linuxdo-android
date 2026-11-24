@@ -67,8 +67,7 @@ internal fun ProfileHeader(
 
     Column(Modifier.fillMaxWidth().background(surface)) {
         Box(Modifier.fillMaxWidth()) {
-            // 背景只属于主页，不回退到用户资料卡的图片。
-            val background = card?.profileBackgroundUrl
+            val background = card?.profileBackgroundUrl ?: card?.cardBackgroundUrl
             Box(Modifier.matchParentSize().background(Brush.verticalGradient(
                 if (colors.isDark) listOf(Color(0xFF254E78), Color(0xFF12273E), surface)
                 else listOf(Color(0xFF9CC5E8), Color(0xFFDCEBFA), surface)
