@@ -676,6 +676,8 @@ fun TopicListScreen(
                                 indicatorPosition = {
                                     effectiveFeed.ordinal + ((previewFeed ?: effectiveFeed).ordinal - effectiveFeed.ordinal) * slideProgress()
                                 },
+                                actionWidth = 48.dp,
+                                actions = trailing,
                             )
                         }
                     }

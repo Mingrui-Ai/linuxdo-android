@@ -70,6 +70,10 @@ import androidx.compose.foundation.layout.only
 import androidx.compose.foundation.layout.union
 import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Search
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.Text
 import org.linuxdo.android.ui.screen.PostAction
 import org.linuxdo.android.ui.screen.PostActionIcon
@@ -813,7 +817,8 @@ private fun MainNavigation(state: UiState, viewModel: MainViewModel, lifecycle: 
         userCard.loading || userCard.user != null || userCard.error != null
     val visibleRoute = stack.current
     val isKeyboardOpen = WindowInsets.ime.getBottom(LocalDensity.current) > 0
-    val isDetailRoute = visibleRoute is Route.TopicDetail || visibleRoute == Route.Chat || visibleRoute is Route.ChatRoom
+    val isDetailRoute = visibleRoute is Route.TopicDetail || visibleRoute == Route.Chat ||
+        visibleRoute is Route.ChatRoom || visibleRoute == Route.Search
     val navigationLifecycleState by lifecycle.currentStateFlow.collectAsStateWithLifecycle()
     val listForeground = navigationLifecycleState.isAtLeast(Lifecycle.State.RESUMED) && !contentObscured
     DisposableEffect(lifecycle, browsing, accountState.activeUserId) {
@@ -867,12 +872,13 @@ private fun MainNavigation(state: UiState, viewModel: MainViewModel, lifecycle: 
     fun selectBoard(tab: MainTab) {
         selected = tab
     }
+    fun openSearch() {
+        if (stack.current != Route.Search) stack.push(Route.Search)
+    }
     val boardSwipe = Modifier.boundedTabSwipe(selected.ordinal, MainTab.entries.size,
         enabled = browsing && !contentObscured) { selectBoard(MainTab.entries[it]) }
-    // 有分类的列表自行处理横滑；单页板块可以直接在内容区切换主导航。
-    val singlePage = visibleRoute == Route.Search
     Box(Modifier.fillMaxSize()) {
-        Box(Modifier.fillMaxSize().then(if (singlePage) boardSwipe else Modifier)) {
+        Box(Modifier.fillMaxSize()) {
             holder.SaveableStateProvider(selected.name) {
                 androidx.compose.runtime.CompositionLocalProvider(
                     org.linuxdo.android.ui.design.LocalNetworkSettingsAction provides {
@@ -957,7 +963,11 @@ private fun MainNavigation(state: UiState, viewModel: MainViewModel, lifecycle: 
                                 onScrollBusyChanged = viewModel::setTopicListScrollBusy,
                                 active = active && listForeground,
                                 scrollToTopRequest = scrollToTopRequest,
-                                trailing = {},
+                                trailing = {
+                                    IconButton(onClick = ::openSearch, modifier = Modifier.size(48.dp)) {
+                                        Icon(Icons.Default.Search, contentDescription = "搜索", tint = IosTheme.colors.label)
+                                    }
+                                },
                                 currentFeed = state.homeFeed,
                                 feedStates = feedStates,
                                 onFeedSelect = viewModel::switchHomeFeed,
@@ -985,7 +995,7 @@ private fun MainNavigation(state: UiState, viewModel: MainViewModel, lifecycle: 
                                 floatingBallOnRight = floatingBallOnRight,
                                 onFloatingBallPositionChange = viewModel::updateFloatingBallPosition,
                                 onNavigateToDrafts = { stack.push(Route.Drafts) },
-                                onNavigateToSearch = { selected = MainTab.Search },
+                                onNavigateToSearch = ::openSearch,
                                 onNavigateToCategories = { selected = MainTab.Categories },
                                 onNavigateToHistory = { stack.push(Route.BrowsingHistory) },
                                 onNavigateToConnect = { showConnectSheet = true },
@@ -1271,7 +1281,7 @@ private fun MainNavigation(state: UiState, viewModel: MainViewModel, lifecycle: 
                                     floatingBallOnRight = floatingBallOnRight,
                                     onFloatingBallPositionChange = viewModel::updateFloatingBallPosition,
                                     onNavigateToDrafts = { stack.push(Route.Drafts) },
-                                    onNavigateToSearch = { selected = MainTab.Search },
+                                    onNavigateToSearch = ::openSearch,
                                     onNavigateToCategories = { selected = MainTab.Categories },
                                     onNavigateToHistory = { stack.push(Route.BrowsingHistory) },
                                     onNavigateToConnect = { showConnectSheet = true },
@@ -1364,7 +1374,7 @@ private fun MainNavigation(state: UiState, viewModel: MainViewModel, lifecycle: 
                                     floatingBallOnRight = floatingBallOnRight,
                                     onFloatingBallPositionChange = viewModel::updateFloatingBallPosition,
                                     onNavigateToDrafts = { stack.push(Route.Drafts) },
-                                    onNavigateToSearch = { selected = MainTab.Search },
+                                    onNavigateToSearch = ::openSearch,
                                     onNavigateToCategories = { selected = MainTab.Categories },
                                     onNavigateToHistory = { stack.push(Route.BrowsingHistory) },
                                     onNavigateToConnect = { showConnectSheet = true },
@@ -1408,6 +1418,7 @@ private fun MainNavigation(state: UiState, viewModel: MainViewModel, lifecycle: 
                                     stack.push(Route.TopicDetail(it.topic.id, it.topic.title, it.targetPostNumber))
                                 },
                                 onOrder = viewModel::setSearchOrder,
+                                onBack = { stack.pop() },
                                 active = active,
                                 scrollToTopRequest = scrollToTopRequest,
                                 trailing = {},
@@ -1597,7 +1608,7 @@ private fun MainNavigation(state: UiState, viewModel: MainViewModel, lifecycle: 
                                     floatingBallOnRight = floatingBallOnRight,
                                     onFloatingBallPositionChange = viewModel::updateFloatingBallPosition,
                                     onNavigateToDrafts = { stack.push(Route.Drafts) },
-                                    onNavigateToSearch = { selected = MainTab.Search },
+                                    onNavigateToSearch = ::openSearch,
                                     onNavigateToCategories = { selected = MainTab.Categories },
                                     onNavigateToHistory = { stack.push(Route.BrowsingHistory) },
                                     onNavigateToConnect = { showConnectSheet = true },

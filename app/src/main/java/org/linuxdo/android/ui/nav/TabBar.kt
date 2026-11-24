@@ -28,7 +28,6 @@ import org.linuxdo.android.ui.design.IosTheme
 enum class MainTab(val label: String, val root: Route) {
     Latest("首页", Route.TopicList),
     Categories("分类", Route.CategoryList),
-    Search("发现", Route.Search),
     Messages("消息", Route.Notifications),
     Profile("我的", Route.Profile),
 }
@@ -144,18 +143,6 @@ fun TabBar(
                                             }
                                         }
                                     }
-                                }
-                                MainTab.Search -> {
-                                    val radius = size.width * 0.28f
-                                    val center = Offset(size.width * 0.40f, size.height * 0.40f)
-                                    drawCircle(color, radius, center, style = Stroke(if (isSelected) stroke * 1.25f else stroke))
-                                    drawLine(
-                                        color,
-                                        Offset(size.width * 0.61f, size.height * 0.61f),
-                                        Offset(size.width * 0.89f, size.height * 0.89f),
-                                        if (isSelected) stroke * 1.35f else stroke,
-                                        StrokeCap.Round
-                                    )
                                 }
                                 MainTab.Messages -> {
                                     val envLeft = size.width * 0.08f

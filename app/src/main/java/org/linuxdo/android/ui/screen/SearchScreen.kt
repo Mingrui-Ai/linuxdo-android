@@ -58,6 +58,7 @@ fun SearchScreen(
     onLoadMore: () -> Unit,
     onOpenTopic: (TopicListItem) -> Unit,
     onOrder: (SearchOrder) -> Unit,
+    onBack: () -> Unit,
     active: Boolean = true,
     scrollToTopRequest: Int = 0,
     trailing: @Composable () -> Unit = {},
@@ -68,6 +69,10 @@ fun SearchScreen(
     val list = rememberLazyListState()
     ScrollToTopOnRequest(list, scrollToTopRequest)
     val focusManager = LocalFocusManager.current
+    val closeSearch = {
+        focusManager.clearFocus()
+        onBack()
+    }
     var focused by remember { mutableStateOf(false) }
     var showSort by remember { mutableStateOf(false) }
     val focusRequester = remember { FocusRequester() }
@@ -123,7 +128,13 @@ fun SearchScreen(
 
     Column(Modifier.fillMaxSize().background(IosTheme.colors.groupedBackground)) {
         ListNavigationHeader {
-            SectionHeader(labels = listOf("发现"), actions = trailing)
+            IosNavBar(
+                title = "搜索",
+                onBack = closeSearch,
+                background = IosTheme.colors.groupedBackground,
+                showDivider = false,
+                trailing = trailing,
+            )
 
             // 搜索输入栏 (透明玻璃胶囊 + 放大镜 Icon + 右侧取消)
             Row(
@@ -205,7 +216,7 @@ fun SearchScreen(
                                 focusManager.clearFocus()
                             } else {
                                 onQuery("")
-                                focusManager.clearFocus()
+                                closeSearch()
                             }
                         }
                         .padding(start = 12.dp, top = 6.dp, bottom = 6.dp),
@@ -351,7 +362,7 @@ fun SearchScreen(
             LazyColumn(
                 state = list,
                 modifier = Modifier.weight(1f).scrollListBars(list),
-                contentPadding = PaddingValues(top = 4.dp, bottom = 64.dp),
+                contentPadding = PaddingValues(top = 4.dp, bottom = 16.dp),
             ) {
                 if (state.results.initialLoading) item("loading") { IosLoadingBox() }
                 state.results.error?.let { message ->
