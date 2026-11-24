@@ -1868,7 +1868,6 @@ private fun MainNavigation(state: UiState, viewModel: MainViewModel, lifecycle: 
             TabBar(
                 selected,
                 modifier = boardSwipe,
-                homeFeedLabel = state.homeFeed.label,
                 categoriesTabLabel = if (categorySubTab == org.linuxdo.android.ui.CategorySectionTab.TAGS) "标签" else "分类",
                 unreadCount = state.unreadCount + chatUnread,
             ) { tab ->

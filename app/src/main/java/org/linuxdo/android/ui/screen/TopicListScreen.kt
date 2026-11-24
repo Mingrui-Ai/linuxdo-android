@@ -248,13 +248,11 @@ fun TopicListScreen(
     // 确保在 recomposition 或临时移出组合树后仍能还原 firstVisibleItemIndex + scrollOffset。
     // 旧方案 remember { mutableMapOf() } + LazyListState() 不走 saveable，回复后
     // refreshTopic silent 触发大量 state 更新时极易丢失位置。
-    // HomeFeedType 枚举顺序：Latest(0)、Unread(1)、Hot(2)、Posted(3)
+    // 首页仅保留 Latest 与 Hot，各自保存滚动位置。
     // 滑过的卡片短暂保留供回滑复用，避免额外预量屏幕外的卡片争抢当前帧。
     val homeCacheWindow = remember { LazyLayoutCacheWindow(ahead = 0.dp, behind = 224.dp) }
     val feedStateLatest = rememberLazyListState(cacheWindow = homeCacheWindow)
-    val feedStateUnread = rememberLazyListState(cacheWindow = homeCacheWindow)
     val feedStateHot = rememberLazyListState(cacheWindow = homeCacheWindow)
-    val feedStatePosted = rememberLazyListState(cacheWindow = homeCacheWindow)
     val categoryListStates = remember { mutableMapOf<Int, LazyListState>() }
     val defaultListState = rememberLazyListState()
     var pendingSettledFeed by remember { mutableStateOf<HomeFeedType?>(null) }
@@ -272,13 +270,11 @@ fun TopicListScreen(
     // 将各 feed 的 rememberLazyListState 对象放入一个普通 Map，供统一访问。
     // 不用 getOrPut 动态创建，每个已知 feed 提前声明好对应的 saveable state。
     val feedListStates: Map<HomeFeedType, LazyListState> = remember(
-        feedStateLatest, feedStateUnread, feedStateHot, feedStatePosted
+        feedStateLatest, feedStateHot
     ) {
         mapOf(
             HomeFeedType.Latest to feedStateLatest,
-            HomeFeedType.Unread to feedStateUnread,
             HomeFeedType.Hot to feedStateHot,
-            HomeFeedType.Posted to feedStatePosted,
         )
     }
     val listState = when {

@@ -159,14 +159,13 @@ data class MiniAppLibraryState(
     )
 }
 
-/** 首页顶部支持切换的 4 个 Feed 类别。默认是 Latest。 */
+/** 首页顶部支持最新和热门两个 Feed 类别。默认是 Latest。 */
 enum class HomeFeedType(val label: String, val apiPath: String) {
     Latest("最新", "/latest.json"),
-    Unread("未读", "/unseen.json"),
-    Hot("热门", "/hot.json"),
-    Posted("我的帖子", "/posted.json");
+    Hot("热门", "/hot.json");
 
     companion object {
+        // 旧版本保存的未读、我的帖子或未知分类统一回到最新。
         fun fromName(name: String?): HomeFeedType =
             entries.firstOrNull { it.name.equals(name, ignoreCase = true) } ?: Latest
     }

@@ -37,7 +37,6 @@ enum class MainTab(val label: String, val root: Route) {
 fun TabBar(
     selected: MainTab,
     modifier: Modifier = Modifier,
-    homeFeedLabel: String = "首页",
     categoriesTabLabel: String = "分类",
     unreadCount: Int = 0,
     onSelect: (MainTab) -> Unit,
@@ -65,7 +64,7 @@ fun TabBar(
             MainTab.entries.forEach { tab ->
                 val isSelected = tab == selected
                 val color = if (isSelected) activeTint else inactiveTint
-                val label = if (tab == MainTab.Latest) homeFeedLabel else if (tab == MainTab.Categories) categoriesTabLabel else tab.label
+                val label = if (tab == MainTab.Categories) categoriesTabLabel else tab.label
                 Column(
                     Modifier
                         .weight(1f)

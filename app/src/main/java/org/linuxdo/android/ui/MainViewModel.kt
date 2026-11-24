@@ -3448,12 +3448,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     /**
-     * 仅关闭同步时本地记下"这帖看过了"，同步模式由成功回执推进已读状态。
-     * 连同当前总楼层数保存，就地把普通列表里的未读蓝点摘掉,
-     * 并将该帖从首页「未读」列表中就地移除。
-     *
-     * 纯净模式下服务端压根不知道我们读过,所以不能等 unseen 从服务端变化 ——
-     * 只有本地这份持久化集合能保证下拉刷新、切分类、重启后蓝点与已读帖都不再反弹。
+     * 仅关闭同步时将浏览记录保存在本地，清除列表中的未读蓝点。
+     * 同步模式由成功回执推进已读状态；本地记录可在刷新、切分类及重启后恢复。
      */
     private fun markTopicSeen(topicId: Long, postsCount: Int = knownPostsCount(topicId)) {
         if (_syncReadProgress.value) return
@@ -3466,21 +3462,9 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             }
             return if (patched != list.items) list.copy(items = patched) else list
         }
-        fun removeReadFromUnread(list: TopicListUiState): TopicListUiState {
-            val filtered = list.items.filterNot { it.topic.id == topicId }
-            return if (filtered.size != list.items.size) list.copy(items = filtered) else list
-        }
-        _feedStates.update { states ->
-            states.mapValues { (feed, list) ->
-                if (feed == HomeFeedType.Unread) removeReadFromUnread(list) else clearUnseen(list)
-            }
-        }
+        _feedStates.update { states -> states.mapValues { (_, list) -> clearUnseen(list) } }
         _state.update { state ->
-            val updatedLatest = if (state.homeFeed == HomeFeedType.Unread) {
-                removeReadFromUnread(state.latest)
-            } else {
-                clearUnseen(state.latest)
-            }
+            val updatedLatest = clearUnseen(state.latest)
             if (updatedLatest != state.latest) state.copy(latest = updatedLatest) else state
         }
         if (!changed) return
@@ -3575,15 +3559,6 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         }
         mapTopicLists { list -> list.copy(items = updateItems(list.items),
             pendingPage = list.pendingPage?.let { it.copy(items = updateItems(it.items)) }) }
-        fun keepUnread(items: List<TopicListItem>) = items.filterNot { item ->
-            item.topic.id == topicId && container.reading.isUnreadExcluded(topicId, item.topic.postsCount, item.topic.highestPostNumber)
-        }
-        fun updateUnread(list: TopicListUiState) = list.copy(items = keepUnread(list.items),
-            pendingPage = list.pendingPage?.let { it.copy(items = keepUnread(it.items)) })
-        _feedStates.update { feeds ->
-            feeds[HomeFeedType.Unread]?.let { feeds + (HomeFeedType.Unread to updateUnread(it)) } ?: feeds
-        }
-        _state.update { if (it.homeFeed == HomeFeedType.Unread) it.copy(latest = updateUnread(it.latest)) else it }
     }
 
     /** 离帖只保存本地位置；未发送的时间随失活丢弃，不在后台补报。 */
@@ -9547,7 +9522,7 @@ fun openTopicSearch(topicId: Long, title: String) {
             }
         } catch (error: HttpStatusException) {
             if (requestScopeGeneration != accountScopeGeneration) return
-            val msg = if (error.status == 403 && (_state.value.username == null || (feed == HomeFeedType.Unread || feed == HomeFeedType.Posted))) {
+            val msg = if (error.status == 403 && _state.value.username == null) {
                 "请先登录账号后查看${feed.label}"
             } else {
                 error.message ?: "加载失败 (HTTP ${error.status})"
