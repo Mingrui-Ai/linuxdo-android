@@ -46,7 +46,7 @@ enum class SettingsPage(val title: String) {
     Reading("阅读与浏览"),
     FloatingBall("辅助悬浮球"),
     Notifications("通知与保活"),
-    Network("网络与缓存"),
+    Network("网络与代理"),
 }
 
 /**

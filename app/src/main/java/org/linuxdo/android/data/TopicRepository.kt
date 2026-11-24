@@ -6435,7 +6435,8 @@ class NativeMailRepository(
         ensureOwner()
         val store = container.sessionStore
         val network = container.networkMonitor.detect()
-        val useDoh = store.isDohEnabled() && !network.shouldYieldToSystem(store.isDohForceOverProxyEnabled())
+        val followSystem = store.getNetworkMode() == org.linuxdo.android.net.NetworkMode.SYSTEM
+        val useDoh = !followSystem && store.isDohEnabled()
         val dns = if (useDoh) {
             org.linuxdo.android.net.AdaptiveDohDns(
                 servers = org.linuxdo.android.net.loadDohServers(store),
@@ -6450,8 +6451,8 @@ class NativeMailRepository(
                 autoFailover = store.isDohAutoFailoverEnabled(),
             ).apply { primaryServerId = store.getDohServerUrl() ?: org.linuxdo.android.net.DohPresets.DEFAULT.id }
         } else okhttp3.Dns.SYSTEM
-        val route = if (network.isProxy) "系统代理" else if (useDoh) "DoH解析+邮件TLS" else "系统网络+邮件TLS"
-        val proxy = if (network.isProxy) java.net.ProxySelector.getDefault()
+        val route = if (followSystem) "跟随系统+邮件TLS" else if (useDoh) "内置DoH+邮件TLS" else "内置网络+邮件TLS"
+        val proxy = if (followSystem && network.isProxy) java.net.ProxySelector.getDefault()
             ?.select(URI("https://$HOST:$port"))?.firstOrNull() ?: throw IOException("系统代理无法提供邮件连接") else null
         NetDiagnostics.log("邮箱连接准备 route=$route server=$HOST port=$port")
         return object : javax.net.SocketFactory() {

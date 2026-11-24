@@ -3077,15 +3077,18 @@ internal fun ErrorNotice(message: String, onRetry: () -> Unit) {
             style = IosTheme.type.subheadline,
             color = IosTheme.colors.secondaryLabel,
         )
-        Text(
-            text = "重试",
-            style = IosTheme.type.body,
-            color = IosTheme.colors.accent,
-            modifier = Modifier
-                .clip(RoundedCornerShape(8.dp))
-                .clickable(onClick = onRetry)
-                .padding(horizontal = 16.dp, vertical = 6.dp),
-        )
+        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            Text(
+                text = "重试",
+                style = IosTheme.type.body,
+                color = IosTheme.colors.accent,
+                modifier = Modifier
+                    .clip(RoundedCornerShape(8.dp))
+                    .clickable(onClick = onRetry)
+                    .padding(horizontal = 16.dp, vertical = 12.dp),
+            )
+            org.linuxdo.android.ui.design.NetworkSettingsLink()
+        }
     }
 }
 

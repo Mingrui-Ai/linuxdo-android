@@ -5866,7 +5866,7 @@ internal fun CookedContent(
                                     val host = runCatching { Uri.parse(currentUrl).host?.lowercase() }.getOrNull().orEmpty()
                                     val isSite = host == Config.HOST || host.endsWith(".${Config.HOST}") ||
                                         host == "ldstatic.com" || host.endsWith(".ldstatic.com")
-                                    val factory = if (isSite) container.dynamicCallFactory else externalMediaCallFactory
+                                    val factory = if (isSite) container.dynamicCallFactory else externalMediaCallFactory(container)
                                     val req = Request.Builder()
                                         .url(currentUrl)
                                         .header("User-Agent", container.userAgent)
@@ -6243,20 +6243,36 @@ private class InlineMediaSession(val player: ExoPlayer, val generation: Long, pr
     }
 }
 
-private val externalMediaCallFactory: okhttp3.Call.Factory by lazy {
-    okhttp3.OkHttpClient.Builder()
-        .followRedirects(true)
-        .followSslRedirects(true)
-        .build()
+// 外站媒体仍隔离论坛 Cookie/故障切换，只共享用户选定的代理策略。
+private val externalMediaClients by lazy {
+    org.linuxdo.android.net.NetworkMode.entries.associateWith { mode ->
+        okhttp3.OkHttpClient.Builder()
+            .proxy(if (mode == org.linuxdo.android.net.NetworkMode.BUILT_IN) java.net.Proxy.NO_PROXY else null)
+            .followRedirects(true)
+            .followSslRedirects(true)
+            .build()
+    }
 }
 
-private val externalNoRedirectCallFactory: okhttp3.Call.Factory by lazy {
-    (externalMediaCallFactory as okhttp3.OkHttpClient).newBuilder()
-        .followRedirects(false)
-        .followSslRedirects(false)
-        .retryOnConnectionFailure(false)
-        .callTimeout(30, java.util.concurrent.TimeUnit.SECONDS)
-        .build()
+private val externalNoRedirectClients by lazy {
+    externalMediaClients.mapValues { (_, client) ->
+        client.newBuilder()
+            .followRedirects(false)
+            .followSslRedirects(false)
+            .retryOnConnectionFailure(false)
+            .callTimeout(30, java.util.concurrent.TimeUnit.SECONDS)
+            .build()
+    }
+}
+
+private fun externalMediaCallFactory(
+    container: org.linuxdo.android.AppContainer,
+    followRedirects: Boolean = true,
+): okhttp3.Call.Factory = object : okhttp3.Call.Factory {
+    override fun newCall(request: Request): okhttp3.Call {
+        val clients = if (followRedirects) externalMediaClients else externalNoRedirectClients
+        return clients.getValue(container.networkMode.value).newCall(request)
+    }
 }
 
 private fun mediaTime(position: Long): String {
@@ -6320,7 +6336,7 @@ private fun InlineMediaCard(
         val host = runCatching { Uri.parse(url).host?.lowercase() }.getOrNull().orEmpty()
         val isSiteHost = host == Config.HOST || host.endsWith(".${Config.HOST}") ||
             host == "ldstatic.com" || host.endsWith(".ldstatic.com")
-        val callFactory = if (isSiteHost && !forceDirect) container.dynamicCallFactory else externalMediaCallFactory
+        val callFactory = if (isSiteHost && !forceDirect) container.dynamicCallFactory else externalMediaCallFactory(container)
         val dataSource = OkHttpDataSource.Factory(callFactory)
             .setUserAgent(container.sessionStore.userAgentOrNull() ?: container.userAgent)
         val next = ExoPlayer.Builder(context)
@@ -10764,7 +10780,7 @@ internal object SignatureMediaLoader {
                     }
                     .build()
             } else {
-                externalNoRedirectCallFactory
+                externalMediaCallFactory(container, followRedirects = false)
             }
             val request = Request.Builder()
                 .url(currentUrl)

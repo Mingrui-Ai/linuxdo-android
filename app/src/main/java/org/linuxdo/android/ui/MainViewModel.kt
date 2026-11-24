@@ -1432,16 +1432,29 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         container.dohCoordinator.setAutoOptimizeEnabled(enabled)
     }
 
-    private val _dohForceOverProxy = MutableStateFlow(store.isDohForceOverProxyEnabled())
-    val dohForceOverProxy = _dohForceOverProxy.asStateFlow()
+    val networkMode = container.networkMode
+    val networkEnvironment = container.networkMonitor.state
+    val activeNetworkRoute = container.dohCoordinator.routeMode
+    private val _networkModeSwitching = MutableStateFlow(false)
+    val networkModeSwitching = _networkModeSwitching.asStateFlow()
+    private val _networkModeError = MutableStateFlow<String?>(null)
+    val networkModeError = _networkModeError.asStateFlow()
 
-    fun setDohForceOverProxy(enabled: Boolean) {
-        store.setDohForceOverProxyEnabled(enabled)
-        _dohForceOverProxy.value = enabled
-        container.dohCoordinator.refresh()
-        container.updateWebViewProxyState()
-        org.linuxdo.android.net.gecko.GeckoManager.refreshNetworkSettings(getApplication())
-        container.dohCoordinator.triggerSmartRouteEvaluation()
+    fun setNetworkMode(mode: org.linuxdo.android.net.NetworkMode) {
+        if (_networkModeSwitching.value || mode == networkMode.value) return
+        _networkModeSwitching.value = true
+        _networkModeError.value = null
+        viewModelScope.launch {
+            try {
+                container.setNetworkMode(mode)
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (error: Exception) {
+                _networkModeError.value = "切换未完成，请重试：${error.message ?: "网络设置同步失败"}"
+            } finally {
+                _networkModeSwitching.value = false
+            }
+        }
     }
 
     // ── 智能双轨调度状态 ─────────────────────────────────────────────────────────────
@@ -1577,9 +1590,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     fun testDohServer(server: org.linuxdo.android.net.DohServer) {
         viewModelScope.launch(Dispatchers.IO) {
-            val netState = container.networkMonitor.detect()
-            if (netState.shouldYieldToSystem(store.isDohForceOverProxyEnabled())) {
-                val reason = if (netState.isProxy) "系统代理已开启，直连已暂停" else "VPN 已开启，直连已暂停"
+            if (store.getNetworkMode() == org.linuxdo.android.net.NetworkMode.SYSTEM) {
+                val reason = "跟随系统模式不使用内置节点"
                 _dohLatencies.update { it + (server.id to -1L) }
                 _dohSummaries.update { it + (server.id to reason) }
                 return@launch
@@ -1597,9 +1609,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         viewModelScope.launch(Dispatchers.IO) {
             _isTestingAllDoh.value = true
             try {
-                val netState = container.networkMonitor.detect()
-                if (netState.shouldYieldToSystem(store.isDohForceOverProxyEnabled())) {
-                    val reason = if (netState.isProxy) "系统代理已开启，直连已暂停" else "VPN 已开启，直连已暂停"
+                if (store.getNetworkMode() == org.linuxdo.android.net.NetworkMode.SYSTEM) {
+                    val reason = "跟随系统模式不使用内置节点"
                     val mapLatency = _dohServers.value.associate { it.id to -1L }
                     val mapSummary = _dohServers.value.associate { it.id to reason }
                     _dohLatencies.update { it + mapLatency }

@@ -959,8 +959,12 @@ fun SettingsScreen(
     onDohAutoFailover: (Boolean) -> Unit = {},
     dohAutoOptimize: Boolean = true,
     onDohAutoOptimize: (Boolean) -> Unit = {},
-    dohForceOverProxy: Boolean = false,
-    onDohForceOverProxy: (Boolean) -> Unit = {},
+    networkMode: org.linuxdo.android.net.NetworkMode = org.linuxdo.android.net.NetworkMode.BUILT_IN,
+    onNetworkMode: (org.linuxdo.android.net.NetworkMode) -> Unit = {},
+    networkEnvironment: org.linuxdo.android.net.NetworkSecurityState = org.linuxdo.android.net.NetworkSecurityState(),
+    activeNetworkRoute: org.linuxdo.android.net.NetworkRouteMode = org.linuxdo.android.net.NetworkRouteMode.DIRECT,
+    networkModeSwitching: Boolean = false,
+    networkModeError: String? = null,
     dohLatencies: Map<String, Long?> = emptyMap(),
     dohSummaries: Map<String, String> = emptyMap(),
     isTestingAllDoh: Boolean = false,
@@ -1184,7 +1188,7 @@ fun SettingsScreen(
                 SettingsEntryRow(
                     title = SettingsPage.Network.title,
                     badgeColor = Color(0xFFE3F5E8),
-                    value = if (dohEnabled) "DoH 已开启" else "DoH 已关闭",
+                    value = networkMode.label,
                     onClick = { onOpenPage(SettingsPage.Network) },
                 ) { SettingDohIcon(tint = Color(0xFF34C759)) }
             }
@@ -2155,53 +2159,27 @@ fun SettingsScreen(
             }
         }
 
-        // ── 4.5 DoH 安全直连 ──
-        if (page == SettingsPage.Network) item("group-doh") {
+        if (page == SettingsPage.Network) item("network-mode") {
+            SectionTitle("联网方式")
+            NetworkModeSettings(
+                mode = networkMode,
+                route = activeNetworkRoute,
+                environment = networkEnvironment,
+                switching = networkModeSwitching,
+                error = networkModeError,
+                onSelect = onNetworkMode,
+            )
+        }
+
+        // 内置网络专用选项；跟随系统时保留偏好，但不运行这些功能。
+        if (page == SettingsPage.Network && networkMode == org.linuxdo.android.net.NetworkMode.BUILT_IN &&
+            !networkModeSwitching) item("group-doh") {
             var showAddServerDialog by remember { mutableStateOf(false) }
             var editingServer by remember { mutableStateOf<DohServer?>(null) }
             var showResetConfirmDialog by remember { mutableStateOf(false) }
 
-            val netSecurityState = remember(context) {
-                runCatching { org.linuxdo.android.net.NetworkStateMonitor(context).detect() }
-                    .getOrDefault(org.linuxdo.android.net.NetworkSecurityState())
-            }
-            val keepingDohOverVpn = netSecurityState.isVpn && !netSecurityState.isProxy && dohForceOverProxy
-
-            SectionTitle("DoH 安全直连")
+            SectionTitle("内置网络选项")
             IosGroupCard {
-                // VPN / 系统代理开启提示
-                if (netSecurityState.shouldPauseDoh) {
-                    IosRow(onClick = {}) {
-                        SettingIconBadge(bgColor = if (keepingDohOverVpn) Color(0xFFE8F5E9) else Color(0xFFFFF3E0)) {
-                            SettingInfoIcon(tint = if (keepingDohOverVpn) Color(0xFF4CAF50) else Color(0xFFFF9500))
-                        }
-                        Spacer(Modifier.width(12.dp))
-                        Column(Modifier.weight(1f)) {
-                            Text(
-                                when {
-                                    netSecurityState.isProxy -> "已检测到系统 HTTP 代理 (已让渡代理)"
-                                    keepingDohOverVpn -> "已检测到 VPN (已强制保持 DoH)"
-                                    else -> "已检测到 VPN / 系统代理"
-                                },
-                                style = IosTheme.type.body.copy(fontSize = 14.5.sp),
-                                fontWeight = FontWeight.SemiBold,
-                                color = if (keepingDohOverVpn) Color(0xFF4CAF50) else Color(0xFFFF9500),
-                            )
-                            Text(
-                                when {
-                                    netSecurityState.isProxy -> "系统 HTTP 代理下 Gecko 验证与业务请求统一走系统代理，避免双出口引发风控"
-                                    keepingDohOverVpn -> "已保持原生 DoH + ECH 隧道，可防止代理分流规则设为直连时的明文 SNI 阻断"
-                                    else -> "若 VPN 分流规则将 L 站设为了直连，可能导致打不开；可开启下方「代理环境保持 DoH」（系统 HTTP 代理下不生效）"
-                                },
-                                style = IosTheme.type.footnote.copy(fontSize = 12.sp),
-                                color = IosTheme.colors.secondaryLabel,
-                                modifier = Modifier.padding(top = 2.dp),
-                            )
-                        }
-                    }
-                    IosDivider()
-                }
-
                 // 开关行
                 IosRow(onClick = {}) {
                     SettingIconBadge(bgColor = Color(0xFFE3F5E8)) {
@@ -2247,32 +2225,13 @@ fun SettingsScreen(
                                 style = IosTheme.type.body.copy(fontSize = 14.5.sp),
                             )
                             Text(
-                                "每 10 分钟自动监测各节点延迟，智能切换至最快健康节点",
+                                "在前台每 10 分钟比较内置线路，自动选择更稳定的连接方式",
                                 style = IosTheme.type.footnote.copy(fontSize = 12.sp),
                                 color = IosTheme.colors.secondaryLabel,
                                 modifier = Modifier.padding(top = 2.dp),
                             )
                         }
                         IosSwitch(checked = dohAutoOptimize, onCheckedChange = onDohAutoOptimize)
-                    }
-
-                    IosDivider()
-
-                    // 代理环境保持 DoH
-                    IosRow(onClick = {}) {
-                        Column(Modifier.weight(1f)) {
-                            Text(
-                                "代理环境保持 DoH",
-                                style = IosTheme.type.body.copy(fontSize = 14.5.sp),
-                            )
-                            Text(
-                                "仅对 VPN 生效：分流规则直连 L 站时保持 DoH，防止明文 SNI 阻断；系统 HTTP 代理下始终走代理，保持验证与业务同一出口",
-                                style = IosTheme.type.footnote.copy(fontSize = 12.sp),
-                                color = IosTheme.colors.secondaryLabel,
-                                modifier = Modifier.padding(top = 2.dp),
-                            )
-                        }
-                        IosSwitch(checked = dohForceOverProxy, onCheckedChange = onDohForceOverProxy)
                     }
 
                     IosDivider()

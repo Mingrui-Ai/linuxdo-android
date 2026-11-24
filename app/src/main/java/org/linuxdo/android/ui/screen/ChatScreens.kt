@@ -361,7 +361,10 @@ fun ChatRoomScreen(
 
         // 错误提示
         if (state.error != null) {
-            Text(state.error, modifier = Modifier.padding(16.dp), color = IosTheme.colors.secondaryLabel)
+            Column(Modifier.padding(horizontal = 16.dp, vertical = 8.dp)) {
+                Text(state.error, color = IosTheme.colors.secondaryLabel)
+                org.linuxdo.android.ui.design.NetworkSettingsLink()
+            }
         }
 
         // 消息气泡列表

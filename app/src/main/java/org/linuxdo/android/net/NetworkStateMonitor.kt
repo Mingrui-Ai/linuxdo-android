@@ -15,28 +15,18 @@ data class NetworkSecurityState(
     val isVpn: Boolean = false,
     val isProxy: Boolean = false,
 ) {
-    /** 当开启 VPN 或系统代理时，DoH 安全直连应当自动暂停，直透系统代理 */
-    val shouldPauseDoh: Boolean get() = isVpn || isProxy
-
-    /**
-     * 是否让渡系统网络。系统 HTTP 代理下 Gecko/WebView 一定走代理，原生客户端若强制 NO_PROXY 直连，
-     * API 与验证会出现两个出口 IP，导致 cf_clearance 失配和重复挑战；因此「代理环境保持 DoH」只对 VPN 生效。
-     */
-    fun shouldYieldToSystem(forceOverProxy: Boolean): Boolean = isProxy || (isVpn && !forceOverProxy)
-
     val summary: String get() = when {
-        isVpn -> "VPN 已开启，DoH 暂停"
-        isProxy -> "系统代理已开启，DoH 暂停"
-        else -> "正常直连"
+        isVpn && isProxy -> "系统 VPN 和 HTTP 代理已开启"
+        isVpn -> "系统 VPN 已开启"
+        isProxy -> "系统 HTTP 代理已开启"
+        else -> "未检测到系统 VPN 或 HTTP 代理"
     }
 }
 
 /**
  * 网络安全状态监听器（感知 VPN 与系统代理的开启/关闭）。
  *
- * 当用户手机启用 VPN 或系统代理时：
- * 自动暂停 DoH + ECH 传输，直走系统代理分流；
- * 当 VPN 或系统代理断开后，自动恢复 DoH 安全直连。
+ * 只报告环境变化并通知连接池刷新；不更改用户选择的联网方式。
  */
 class NetworkStateMonitor(
     context: Context,

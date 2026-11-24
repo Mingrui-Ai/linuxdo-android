@@ -139,6 +139,7 @@ fun ProfileBadgesScreen(
             Row(Modifier.fillMaxWidth().padding(horizontal = 16.dp), verticalAlignment = Alignment.CenterVertically) {
                 Text(error.orEmpty(), color = colors.secondaryLabel, fontSize = 12.sp, modifier = Modifier.weight(1f))
                 TextButton(onClick = { refreshGeneration++ }, enabled = !loading) { Text("重试") }
+                org.linuxdo.android.ui.design.NetworkSettingsLink()
             }
         }
         when {
@@ -148,6 +149,7 @@ fun ProfileBadgesScreen(
             error != null && badges.isNullOrEmpty() -> Box(Modifier.fillMaxWidth().weight(1f), contentAlignment = Alignment.Center) {
                 Column(Modifier.padding(24.dp), horizontalAlignment = Alignment.CenterHorizontally) {
                     Text(error.orEmpty(), color = colors.secondaryLabel, textAlign = TextAlign.Center)
+                    org.linuxdo.android.ui.design.NetworkSettingsLink()
                     TextButton(onClick = { refreshGeneration++ }, enabled = !loading) { Text("重新加载") }
                 }
             }

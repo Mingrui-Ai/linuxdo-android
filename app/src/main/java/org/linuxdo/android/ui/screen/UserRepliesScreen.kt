@@ -145,6 +145,7 @@ fun UserRepliesScreen(
                         style = IosTheme.type.footnote,
                         color = IosTheme.colors.secondaryLabel,
                     )
+                    org.linuxdo.android.ui.design.NetworkSettingsLink()
                     Text(
                         text = "点击重试",
                         style = IosTheme.type.subheadline.copy(fontWeight = FontWeight.SemiBold),
@@ -549,8 +550,11 @@ fun UserProfileScreen(
                     badges = badges, badgesLoading = badgesLoading, onOpenBadges = onOpenBadges,
                 )
                 profileError?.let { message ->
-                    TextButton(onClick = { refreshGeneration++ }) {
-                        Text("$message · 重试", color = IosTheme.colors.secondaryLabel, maxLines = 1)
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        TextButton(onClick = { refreshGeneration++ }, modifier = Modifier.weight(1f)) {
+                            Text("$message · 重试", color = IosTheme.colors.secondaryLabel, maxLines = 2)
+                        }
+                        org.linuxdo.android.ui.design.NetworkSettingsLink()
                     }
                 }
             }
@@ -605,6 +609,7 @@ fun UserProfileScreen(
                             verticalArrangement = Arrangement.spacedBy(8.dp),
                         ) {
                             Text(summaryError ?: "加载失败", color = IosTheme.colors.secondaryLabel)
+                            org.linuxdo.android.ui.design.NetworkSettingsLink()
                             TextButton(onClick = { refreshGeneration++ }) {
                                 Text("重试", color = IosTheme.colors.accent)
                             }
@@ -634,6 +639,7 @@ fun UserProfileScreen(
                 Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                     Column(horizontalAlignment = Alignment.CenterHorizontally) {
                         Text(error ?: "加载失败", color = IosTheme.colors.secondaryLabel)
+                        org.linuxdo.android.ui.design.NetworkSettingsLink()
                         TextButton(onClick = { retryTrigger++ }) { Text("重试") }
                     }
                 }
@@ -673,7 +679,12 @@ fun UserProfileScreen(
                         )
                     }
                     if (error != null && items.isNotEmpty()) {
-                        item("retry-more") { TextButton(onClick = { error = null; loadMore() }) { Text("加载更多失败，点击重试") } }
+                        item("retry-more") {
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                TextButton(onClick = { error = null; loadMore() }) { Text("加载更多失败，点击重试") }
+                                org.linuxdo.android.ui.design.NetworkSettingsLink()
+                            }
+                        }
                     }
                     if (loading && items.isNotEmpty()) {
                         item("loading-more") { IosLoadingBox() }

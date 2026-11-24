@@ -18,6 +18,7 @@ import org.json.JSONArray
 import org.json.JSONObject
 import org.json.JSONTokener
 import org.linuxdo.android.Config
+import org.linuxdo.android.net.NetworkMode
 import org.mozilla.geckoview.GeckoResult
 import org.mozilla.geckoview.GeckoRuntime
 import org.mozilla.geckoview.GeckoSession
@@ -276,8 +277,29 @@ class GeckoAuthBridge private constructor(
         }
 
         /** GeckoRuntime 刚创建时尽早安装并绑定 Cookie 控制桥，避免 background.js 冷启动空窗期反复建连/断连。 */
-        internal fun warmUpExtension(runtime: GeckoRuntime) {
+        private var desiredNetworkMode = NetworkMode.SYSTEM
+        private var appliedNetworkMode: NetworkMode? = null
+
+        internal fun warmUpExtension(runtime: GeckoRuntime, mode: NetworkMode) {
+            desiredNetworkMode = mode
             runCatching { ensureExtensionResult(runtime) }
+        }
+
+        /** 使用 Android 支持的 proxy.onRequest；proxy.settings 在 Gecko Android 上不可用。 */
+        internal suspend fun applyNetworkMode(context: Context, mode: NetworkMode): Boolean {
+            desiredNetworkMode = mode
+            if (appliedNetworkMode == mode && cookiePort != null) return true
+            val response = sendCookieControlCommand(
+                context, JSONObject().put("command", "setNetworkMode").put("mode", mode.preferenceValue),
+                timeoutMs = 8_000L,
+            )
+            val applied = response?.optBoolean("value", false) == true &&
+                response.optString("mode") == mode.preferenceValue && cookiePort != null
+            if (applied) {
+                appliedNetworkMode = mode
+                Log.i(TAG, "Gecko network mode applied: ${mode.preferenceValue}")
+            }
+            return applied
         }
 
         private suspend fun installedExtension(context: Context): WebExtension {
@@ -306,6 +328,7 @@ class GeckoAuthBridge private constructor(
         private fun disconnectCookieControl(port: WebExtension.Port) {
             if (cookiePort !== port) return
             cookiePort = null
+            appliedNetworkMode = null
             cookieConnection = CompletableDeferred()
             val waiting = cookieRequests.values.toList()
             cookieRequests.clear()
@@ -342,6 +365,9 @@ class GeckoAuthBridge private constructor(
 
                         override fun onDisconnect(port: WebExtension.Port) = disconnectCookieControl(port)
                     })
+                    // 在任何网页请求放行前初始化策略；重连后也重新下发，不信任旧 JS 状态。
+                    port.postMessage(JSONObject().put("command", "setNetworkMode")
+                        .put("mode", desiredNetworkMode.preferenceValue))
                     if (!cookieConnection.isCompleted) cookieConnection.complete(port)
                 }
             }, COOKIE_CONTROL_APP)

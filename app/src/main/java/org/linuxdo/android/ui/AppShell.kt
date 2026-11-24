@@ -724,7 +724,11 @@ private fun MainNavigation(state: UiState, viewModel: MainViewModel, lifecycle: 
     val selectedDohServerUrl by viewModel.selectedDohServerUrl.collectAsStateWithLifecycle()
     val dohAutoFailover by viewModel.dohAutoFailover.collectAsStateWithLifecycle()
     val dohAutoOptimize by viewModel.dohAutoOptimize.collectAsStateWithLifecycle()
-    val dohForceOverProxy by viewModel.dohForceOverProxy.collectAsStateWithLifecycle()
+    val networkMode by viewModel.networkMode.collectAsStateWithLifecycle()
+    val networkEnvironment by viewModel.networkEnvironment.collectAsStateWithLifecycle()
+    val activeNetworkRoute by viewModel.activeNetworkRoute.collectAsStateWithLifecycle()
+    val networkModeSwitching by viewModel.networkModeSwitching.collectAsStateWithLifecycle()
+    val networkModeError by viewModel.networkModeError.collectAsStateWithLifecycle()
     val dohLatencies by viewModel.dohLatencies.collectAsStateWithLifecycle()
     val dohSummaries by viewModel.dohSummaries.collectAsStateWithLifecycle()
     val isTestingAllDoh by viewModel.isTestingAllDoh.collectAsStateWithLifecycle()
@@ -870,6 +874,12 @@ private fun MainNavigation(state: UiState, viewModel: MainViewModel, lifecycle: 
     Box(Modifier.fillMaxSize()) {
         Box(Modifier.fillMaxSize().then(if (singlePage) boardSwipe else Modifier)) {
             holder.SaveableStateProvider(selected.name) {
+                androidx.compose.runtime.CompositionLocalProvider(
+                    org.linuxdo.android.ui.design.LocalNetworkSettingsAction provides {
+                        val destination = Route.SettingsDetail(org.linuxdo.android.ui.nav.SettingsPage.Network)
+                        if (stack.current != destination) stack.push(destination)
+                    },
+                ) {
                 key(selected) {
                     IosNavHost(stack,
                         interactive = browsing && !topicCreator.open && !showSavedTopics && !topicSearch.open && !metadataEditor.open,
@@ -1703,8 +1713,12 @@ private fun MainNavigation(state: UiState, viewModel: MainViewModel, lifecycle: 
                                 onDohAutoFailover = viewModel::setDohAutoFailover,
                                 dohAutoOptimize = dohAutoOptimize,
                                 onDohAutoOptimize = viewModel::setDohAutoOptimize,
-                                dohForceOverProxy = dohForceOverProxy,
-                                onDohForceOverProxy = viewModel::setDohForceOverProxy,
+                                networkMode = networkMode,
+                                onNetworkMode = viewModel::setNetworkMode,
+                                networkEnvironment = networkEnvironment,
+                                activeNetworkRoute = activeNetworkRoute,
+                                networkModeSwitching = networkModeSwitching,
+                                networkModeError = networkModeError,
                                 dohLatencies = dohLatencies,
                                 dohSummaries = dohSummaries,
                                 isTestingAllDoh = isTestingAllDoh,
@@ -1777,6 +1791,7 @@ private fun MainNavigation(state: UiState, viewModel: MainViewModel, lifecycle: 
 
                         }
                     }
+                }
                 }
             }
 

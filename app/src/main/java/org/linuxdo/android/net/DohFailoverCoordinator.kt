@@ -7,6 +7,9 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import okhttp3.Call
@@ -36,7 +39,8 @@ import javax.net.ssl.SSLHandshakeException
  */
 enum class NetworkRouteMode(val label: String, val shortLabel: String) {
     DIRECT("本地直连 (Anycast)", "本地直连"),
-    DOH("DoH 动态安全解析", "DoH 解析")
+    DOH("DoH 动态安全解析", "DoH 解析"),
+    SYSTEM("跟随系统", "跟随系统")
 }
 
 /**
@@ -93,6 +97,7 @@ class DohFailoverCoordinator(
 
     private val generationCounter = AtomicLong(1L)
     private val failoverMutex = Mutex()
+    private val smartProbeMutex = Mutex()
 
     /** 节点故障熔断表：serverId -> 惩罚截止时间戳 */
     private val penalties = ConcurrentHashMap<String, Long>()
@@ -106,6 +111,8 @@ class DohFailoverCoordinator(
 
     /** 当前活跃代次 */
     val currentEpoch: AtomicReference<TransportEpoch>
+    private val _routeMode: MutableStateFlow<NetworkRouteMode>
+    val routeMode get() = _routeMode.asStateFlow()
 
     /** 当前生效的双轨模式 */
     val activeRouteMode = AtomicReference<NetworkRouteMode>(NetworkRouteMode.DIRECT)
@@ -123,6 +130,7 @@ class DohFailoverCoordinator(
         effectiveServer = AtomicReference(initialServer)
         val initialEpoch = buildEpoch(generationCounter.get(), initialServer)
         currentEpoch = AtomicReference(initialEpoch)
+        _routeMode = MutableStateFlow(initialEpoch.routeMode)
     }
 
     /** 作为 Call.Factory 分发给各业务方（Coil、后台服务等），保证新发请求永远走最新 generation */
@@ -133,16 +141,23 @@ class DohFailoverCoordinator(
     val currentClient: OkHttpClient
         get() = currentEpoch.get().client
 
-    private fun shouldPauseDohForProxy(state: NetworkSecurityState = networkMonitor.detect()): Boolean =
-        state.shouldYieldToSystem(store.isDohForceOverProxyEnabled())
+    private fun followsSystem(): Boolean = store.getNetworkMode() == NetworkMode.SYSTEM
+
+    private fun shouldAutoOptimize(): Boolean =
+        !followsSystem() && store.isDohEnabled() && store.isDohAutoOptimizeEnabled()
+
+    private fun publishEpoch(epoch: TransportEpoch) {
+        _routeMode.value = epoch.routeMode
+        onEpochChanged(epoch)
+    }
 
     /**
      * 判断异常是否符合故障转移触发资格。
      */
     fun isFailoverEligible(error: Throwable): Boolean {
-        // 如果未开启自动故障切换，或 DoH 本身已关闭，或当前处于 VPN/系统代理暂停中，则不触发切换
+        // 跟随系统或关闭 DoH/自动故障切换时，不触发内置节点轮换。
         if (!store.isDohEnabled() || !store.isDohAutoFailoverEnabled()) return false
-        if (shouldPauseDohForProxy()) return false
+        if (followsSystem()) return false
 
         return isDefinitiveDohEchError(error) || isJitterError(error)
     }
@@ -167,7 +182,7 @@ class DohFailoverCoordinator(
         scope.launch {
             failoverMutex.withLock {
                 val latestEpoch = currentEpoch.get()
-                if (fromGeneration != latestEpoch.generation) {
+                if (fromGeneration != latestEpoch.generation || !isFailoverEligible(error)) {
                     return@withLock
                 }
 
@@ -215,7 +230,7 @@ class DohFailoverCoordinator(
                 retireEpochGracefully(retiredEpoch)
 
                 // 回调通知外部客户端
-                onEpochChanged(newEpoch)
+                publishEpoch(newEpoch)
             }
         }
     }
@@ -252,7 +267,7 @@ class DohFailoverCoordinator(
                 val newEpoch = buildEpoch(newGen, server)
                 val retiredEpoch = currentEpoch.getAndSet(newEpoch)
                 retireEpochGracefully(retiredEpoch)
-                onEpochChanged(newEpoch)
+                publishEpoch(newEpoch)
                 Log.i(TAG, "用户手动切换节点至: ${server.name} (gen $newGen)")
             }
         }
@@ -275,24 +290,28 @@ class DohFailoverCoordinator(
                 val newEpoch = buildEpoch(newGen, server)
                 val retiredEpoch = currentEpoch.getAndSet(newEpoch)
                 retireEpochGracefully(retiredEpoch)
-                onEpochChanged(newEpoch)
+                publishEpoch(newEpoch)
                 Log.i(TAG, "$reason，生成新代次 (gen $newGen)")
             }
         }
     }
 
     fun refresh() {
-        scope.launch {
-            failoverMutex.withLock {
-                val server = effectiveServer.get()
-                val newGen = generationCounter.incrementAndGet()
-                val newEpoch = buildEpoch(newGen, server)
-                val retiredEpoch = currentEpoch.getAndSet(newEpoch)
-                retireEpochGracefully(retiredEpoch)
-                onEpochChanged(newEpoch)
-                Log.i(TAG, "网络环境变化，刷新 TransportEpoch (gen $newGen)")
-            }
+        scope.launch { refreshAndAwait() }
+    }
+
+    /** 设置切换等待新客户端完成创建后再报告成功。 */
+    suspend fun refreshAndAwait() = withContext(Dispatchers.IO) {
+        failoverMutex.withLock {
+            val server = effectiveServer.get()
+            val newGen = generationCounter.incrementAndGet()
+            val newEpoch = buildEpoch(newGen, server)
+            val retiredEpoch = currentEpoch.getAndSet(newEpoch)
+            retireEpochGracefully(retiredEpoch)
+            publishEpoch(newEpoch)
+            Log.i(TAG, "网络设置刷新: ${newEpoch.routeMode.label} (gen $newGen)")
         }
+        startSmartRouteMonitoring()
     }
 
     /** 主动清理空闲/半开连接，并在直连 Anycast 模式下轮换优选节点（供幂等单次重试恢复）。 */
@@ -308,9 +327,9 @@ class DohFailoverCoordinator(
     /** 进程启动或冷态预热 Anycast 节点池，避免首个业务请求盲选未探测节点超时。 */
     fun warmUpAnycastIfNeeded() {
         val pool = anycastPool ?: return
-        if (pool.hasHealthyProbedNode() || shouldPauseDohForProxy()) return
+        if (pool.hasHealthyProbedNode() || followsSystem()) return
         scope.launch {
-            if (!pool.hasHealthyProbedNode() && !shouldPauseDohForProxy()) {
+            if (!pool.hasHealthyProbedNode() && !followsSystem()) {
                 runCatching { pool.refresh() }
             }
         }
@@ -323,8 +342,14 @@ class DohFailoverCoordinator(
     }
 
     /** 设置是否开启自动优选切优 */
+    @Synchronized
     fun setAutoOptimizeEnabled(enabled: Boolean) {
-        // 保存或通知切优状态
+        if (enabled) {
+            startSmartRouteMonitoring()
+        } else {
+            smartRouteJob?.cancel()
+            smartRouteJob = null
+        }
     }
 
     /**
@@ -367,9 +392,9 @@ class DohFailoverCoordinator(
     }
 
     private fun buildEpoch(gen: Long, server: DohServer): TransportEpoch {
-        // VPN / 系统代理默认让渡系统网络；仅当用户显式开启「代理环境保持 DoH」时才继续维持 DoH + ECH 直连。
-        val shouldYieldToSystem = shouldPauseDohForProxy()
-        // 「直连优先」：无 VPN 时**始终**建立原生传输层。它用内置 ECH 公钥握手，不依赖 DoH
+        // 用户选择优先于环境检测；系统方式不创建内置传输或自定义 DNS。
+        val shouldYieldToSystem = followsSystem()
+        // 「直连优先」：内置方式下始终建立原生传输层。它用内置 ECH 公钥握手，不依赖 DoH
         // 可达性（见 native 的 ech.rs），因此设置里的 DoH 开关只决定 A 记录解析源，
         // 不再决定直连能力的存亡 —— 旧实现把 transport 绑在 isDohEnabled 上，用户一关开关
         // 就退回明文 SNI，与「直连优先」直接冲突。
@@ -381,10 +406,11 @@ class DohFailoverCoordinator(
             buildDohDns(store)
         } else null
 
-        val routeMode = if (!store.isDohEnabled()) {
-            NetworkRouteMode.DIRECT
-        } else {
-            activeRouteMode.get()
+        val routeMode = when {
+            shouldYieldToSystem -> NetworkRouteMode.SYSTEM
+            !store.isDohEnabled() -> NetworkRouteMode.DIRECT
+            transport == null -> NetworkRouteMode.DOH
+            else -> activeRouteMode.get()
         }
 
         val client = clientFactory(dns, transport, this, routeMode)
@@ -435,7 +461,7 @@ class DohFailoverCoordinator(
         }
 
         return when (current) {
-            NetworkRouteMode.DIRECT -> {
+            NetworkRouteMode.DIRECT, NetworkRouteMode.SYSTEM -> {
                 if (dohMs < (directMs * 0.65).toLong() && (directMs - dohMs) >= 40L) {
                     NetworkRouteMode.DOH to "DoH 显著优于直连 (DoH: ${dohMs}ms < 直连: ${directMs}ms)，智能优选 DoH"
                 } else {
@@ -456,59 +482,49 @@ class DohFailoverCoordinator(
      * 评估并执行智能双轨路由调度。
      */
     suspend fun evaluateSmartRoute(force: Boolean = false) {
-        if (!store.isDohEnabled()) {
-            activeRouteMode.set(NetworkRouteMode.DIRECT)
-            latestDirectLatencyMs.set(-1L)
-            latestDohLatencyMs.set(-1L)
-            val summary = "DoH 开关已关闭，默认强制本地直连 (Anycast)"
-            latestSmartSummary.set(summary)
-            onSmartRouteUpdated?.invoke(NetworkRouteMode.DIRECT, -1L, -1L, summary)
-            return
-        }
-
-        val netState = networkMonitor.detect()
-        if (shouldPauseDohForProxy(netState)) {
-            val summary = if (netState.isProxy) "系统代理已开启，直连已让渡系统网络" else "VPN 已开启，直连已让渡系统网络"
-            latestSmartSummary.set(summary)
-            onSmartRouteUpdated?.invoke(activeRouteMode.get(), -1L, -1L, summary)
-            return
-        }
-
-        val currentServer = effectiveServer.get()
-        val directDns = anycastPool?.let { org.linuxdo.android.net.anycast.AnycastDns(it, fallback = okhttp3.Dns.SYSTEM) }
-
-        var directLatency: Long = -1L
-        var dohLatency: Long = -1L
-        kotlinx.coroutines.coroutineScope {
-            val directJob = launch {
-                directLatency = DohProbeEngine.probeTlsHandshake(currentServer, directDns, timeoutSeconds = 6).latencyMs ?: -1L
+        if (followsSystem() || (!force && !shouldAutoOptimize())) return
+        if (!store.isDohEnabled()) return
+        if (!smartProbeMutex.tryLock()) return
+        try {
+            val probeGeneration = currentEpoch.get().generation
+            val currentServer = effectiveServer.get()
+            val directDns = anycastPool?.let {
+                org.linuxdo.android.net.anycast.AnycastDns(it, fallback = okhttp3.Dns.SYSTEM)
             }
-            val dohJob = launch {
-                dohLatency = DohProbeEngine.probeTlsHandshake(currentServer, null, timeoutSeconds = 6).latencyMs ?: -1L
+            var directLatency = -1L
+            var dohLatency = -1L
+            kotlinx.coroutines.coroutineScope {
+                val directJob = launch {
+                    directLatency = DohProbeEngine.probeTlsHandshake(currentServer, directDns, timeoutSeconds = 6).latencyMs ?: -1L
+                }
+                val dohJob = launch {
+                    dohLatency = DohProbeEngine.probeTlsHandshake(currentServer, null, timeoutSeconds = 6).latencyMs ?: -1L
+                }
+                directJob.join()
+                dohJob.join()
             }
-            directJob.join()
-            dohJob.join()
-        }
-
-        latestDirectLatencyMs.set(directLatency)
-        latestDohLatencyMs.set(dohLatency)
-        lastSmartProbeTimeMs = System.currentTimeMillis()
-
-        val currentMode = activeRouteMode.get()
-        val (recommendedMode, summary) = arbitrateRoute(currentMode, directLatency, dohLatency)
-        latestSmartSummary.set(summary)
-        onSmartRouteUpdated?.invoke(recommendedMode, directLatency, dohLatency, summary)
-
-        if (recommendedMode != currentMode || currentEpoch.get().routeMode != recommendedMode || force) {
-            Log.i(TAG, "智能双轨决策更新: $currentMode -> $recommendedMode, 原因: $summary")
-            activeRouteMode.set(recommendedMode)
             failoverMutex.withLock {
-                val newGen = generationCounter.incrementAndGet()
-                val newEpoch = buildEpoch(newGen, currentServer)
-                val retiredEpoch = currentEpoch.getAndSet(newEpoch)
-                retireEpochGracefully(retiredEpoch)
-                onEpochChanged(newEpoch)
+                // 测速期间用户可能已改模式、节点或关闭自动优选，旧结果不能覆盖新选择。
+                if (followsSystem() || !store.isDohEnabled() ||
+                    (!force && !shouldAutoOptimize()) || currentEpoch.get().generation != probeGeneration) return@withLock
+                latestDirectLatencyMs.set(directLatency)
+                latestDohLatencyMs.set(dohLatency)
+                lastSmartProbeTimeMs = System.currentTimeMillis()
+                val currentMode = activeRouteMode.get()
+                val (recommendedMode, summary) = arbitrateRoute(currentMode, directLatency, dohLatency)
+                latestSmartSummary.set(summary)
+                onSmartRouteUpdated?.invoke(recommendedMode, directLatency, dohLatency, summary)
+                if (recommendedMode != currentMode || currentEpoch.get().routeMode != recommendedMode || force) {
+                    activeRouteMode.set(recommendedMode)
+                    val newEpoch = buildEpoch(generationCounter.incrementAndGet(), currentServer)
+                    val retiredEpoch = currentEpoch.getAndSet(newEpoch)
+                    retireEpochGracefully(retiredEpoch)
+                    publishEpoch(newEpoch)
+                    Log.i(TAG, "智能双轨决策更新: $currentMode -> $recommendedMode, 原因: $summary")
+                }
             }
+        } finally {
+            smartProbeMutex.unlock()
         }
     }
 
@@ -525,7 +541,7 @@ class DohFailoverCoordinator(
         isAppInForeground = inForeground
         if (!wasForeground && inForeground) {
             val elapsed = System.currentTimeMillis() - lastSmartProbeTimeMs
-            if (store.isDohEnabled() && elapsed >= SMART_ROUTE_INTERVAL_MS) {
+            if (shouldAutoOptimize() && elapsed >= SMART_ROUTE_INTERVAL_MS) {
                 scope.launch {
                     evaluateSmartRoute()
                 }
@@ -534,12 +550,18 @@ class DohFailoverCoordinator(
     }
 
     /** 开启智能双轨低频定时监控（前台运行，10 分钟一次） */
+    @Synchronized
     fun startSmartRouteMonitoring() {
-        if (smartRouteJob != null) return
+        if (!shouldAutoOptimize()) {
+            smartRouteJob?.cancel()
+            smartRouteJob = null
+            return
+        }
+        if (smartRouteJob?.isActive == true) return
         smartRouteJob = scope.launch {
             while (true) {
                 delay(SMART_ROUTE_INTERVAL_MS)
-                if (isAppInForeground && store.isDohEnabled()) {
+                if (isAppInForeground && shouldAutoOptimize()) {
                     runCatching {
                         evaluateSmartRoute()
                     }.onFailure {

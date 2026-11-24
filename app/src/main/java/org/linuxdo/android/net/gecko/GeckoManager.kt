@@ -12,6 +12,9 @@ import android.view.MotionEvent
 import org.linuxdo.android.App
 import org.linuxdo.android.Config
 import org.linuxdo.android.net.DohPresets
+import org.linuxdo.android.net.NetworkMode
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import org.mozilla.geckoview.AllowOrDeny
 import org.mozilla.geckoview.GeckoResult
 import org.mozilla.geckoview.GeckoRuntime
@@ -42,22 +45,32 @@ object GeckoManager {
         "COALESCE(originAttributes, '') NOT LIKE '%privateBrowsingId=%'"
     private var runtime: GeckoRuntime? = null
 
+    private val networkScope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
+    private val networkSettingsMutex = Mutex()
+
     fun refreshNetworkSettings(context: Context) {
-        if (Looper.myLooper() != Looper.getMainLooper()) {
-            Handler(Looper.getMainLooper()).post { refreshNetworkSettings(context.applicationContext) }
-            return
+        networkScope.launch {
+            if (!applyNetworkSettings(context.applicationContext)) {
+                org.linuxdo.android.net.NetDiagnostics.log("Gecko 网络设置未完成同步，等待重试")
+            }
         }
-        val rt = runtime ?: return
-        val container = (context.applicationContext as? App)?.container ?: return
-        val store = container.sessionStore
-        val dohUri = store.getDohServerUrl()?.takeIf { it.isNotBlank() } ?: DohPresets.DEFAULT.url
-        val useDoh = store.isDohEnabled() &&
-            !container.networkMonitor.detect().shouldYieldToSystem(store.isDohForceOverProxyEnabled())
-        rt.settings.setTrustedRecursiveResolverUri(dohUri)
-        rt.settings.setTrustedRecursiveResolverMode(
-            if (useDoh) GeckoRuntimeSettings.TRR_MODE_ONLY else GeckoRuntimeSettings.TRR_MODE_DISABLED,
-        )
-        org.linuxdo.android.net.NetDiagnostics.log("Gecko 网络设置已同步 " + runtimeNetworkSummary(context))
+    }
+
+    /** 等待代理与 DNS 同步，避免业务已切换而验证页继续走旧代理。 */
+    suspend fun applyNetworkSettings(context: Context): Boolean = withContext(Dispatchers.Main.immediate) {
+        networkSettingsMutex.withLock {
+            val rt = runtime ?: return@withLock true // 尚未启动时由首次创建/导航初始化。
+            val store = (context.applicationContext as? App)?.container?.sessionStore ?: return@withLock false
+            val mode = store.getNetworkMode()
+            if (!GeckoAuthBridge.applyNetworkMode(context, mode)) return@withLock false
+            val dohUri = store.getDohServerUrl()?.takeIf { it.isNotBlank() } ?: DohPresets.DEFAULT.url
+            val useDoh = mode == NetworkMode.BUILT_IN && store.isDohEnabled()
+            rt.settings.setTrustedRecursiveResolverUri(dohUri)
+            rt.settings.setTrustedRecursiveResolverMode(
+                if (useDoh) GeckoRuntimeSettings.TRR_MODE_ONLY else GeckoRuntimeSettings.TRR_MODE_DISABLED,
+            )
+            true
+        }
     }
 
     /**
@@ -69,14 +82,10 @@ object GeckoManager {
         val container = (context.applicationContext as? App)?.container
         val store = container?.sessionStore
         val dohUri = store?.getDohServerUrl()?.takeIf { it.isNotBlank() } ?: DohPresets.DEFAULT.url
-        val useDoh = store?.isDohEnabled() != false &&
-            container?.networkMonitor?.detect()?.shouldYieldToSystem(store?.isDohForceOverProxyEnabled() == true) != true
+        val mode = store?.getNetworkMode() ?: NetworkMode.SYSTEM
+        val useDoh = mode == NetworkMode.BUILT_IN && store?.isDohEnabled() != false
         val trrMode = if (useDoh) GeckoRuntimeSettings.TRR_MODE_ONLY else GeckoRuntimeSettings.TRR_MODE_DISABLED
-        runtime?.let {
-            it.settings.setTrustedRecursiveResolverUri(dohUri)
-            it.settings.setTrustedRecursiveResolverMode(trrMode)
-            return it
-        }
+        runtime?.let { return it }
 
         val configFile = File(context.filesDir, "geckoview-config.yaml")
         // prefs 的键是原始 Gecko 参数名；类型由 YAML 值决定，不追加类型后缀。
@@ -113,7 +122,8 @@ object GeckoManager {
 
         val rt = GeckoRuntime.create(context.applicationContext, settings)
         runtime = rt
-        GeckoAuthBridge.warmUpExtension(rt)
+        GeckoAuthBridge.warmUpExtension(rt, mode)
+        refreshNetworkSettings(context)
         Log.d(TAG, "GeckoRuntime 已启用 ECH，TRR mode=$trrMode，DoH host=${Uri.parse(dohUri).host}")
         return rt
     }
@@ -123,13 +133,11 @@ object GeckoManager {
         val container = (context.applicationContext as? App)?.container
         val store = container?.sessionStore
         val dohUri = store?.getDohServerUrl()?.takeIf { it.isNotBlank() } ?: DohPresets.DEFAULT.url
-        val pauseDoh = container?.networkMonitor?.detect()?.shouldPauseDoh == true
-        val forceOverProxy = store?.isDohForceOverProxyEnabled() == true
-        val useDoh = store?.isDohEnabled() != false &&
-            container?.networkMonitor?.detect()?.shouldYieldToSystem(forceOverProxy) != true
-        val trrLabel = if (useDoh) "ONLY(DoH+ECH)" else "DISABLED(系统/代理)"
+        val mode = store?.getNetworkMode() ?: NetworkMode.SYSTEM
+        val useDoh = mode == NetworkMode.BUILT_IN && store?.isDohEnabled() != false
+        val trrLabel = if (useDoh) "ONLY(DoH+ECH)" else "DISABLED"
         val dohHost = runCatching { Uri.parse(dohUri).host }.getOrNull() ?: "-"
-        return "TRR=$trrLabel doh=$dohHost pauseDoh=$pauseDoh forceOverProxy=$forceOverProxy"
+        return "mode=${mode.preferenceValue} TRR=$trrLabel doh=$dohHost"
     }
 
     /** 验证视图共用 TextureView，并兼容宿主转发的非标准触摸序列。 */
@@ -274,7 +282,21 @@ object GeckoManager {
                     session.loadUri(request.uri)
                     return GeckoResult.fromValue(AllowOrDeny.DENY)
                 }
-                return GeckoResult.fromValue(AllowOrDeny.ALLOW)
+                if (!request.uri.startsWith("https://") && !request.uri.startsWith("http://")) {
+                    return GeckoResult.fromValue(AllowOrDeny.ALLOW)
+                }
+                val result = GeckoResult<AllowOrDeny>()
+                networkScope.launch {
+                    val ready = runCatching { applyNetworkSettings(context) }.getOrDefault(false)
+                    if (!ready) {
+                        onDiagnostic("网络设置尚未同步，请重试")
+                        onPageError(request.uri, WebRequestError(
+                            WebRequestError.ERROR_PROXY_CONNECTION_REFUSED, WebRequestError.ERROR_CATEGORY_PROXY,
+                        ))
+                    }
+                    result.complete(if (ready) AllowOrDeny.ALLOW else AllowOrDeny.DENY)
+                }
+                return result
             }
 
             override fun onLocationChange(
@@ -679,7 +701,7 @@ internal class CfDiagnosticSession(
         started = true
         if (mode == CfDiagnosticMode.ONLINE) {
             val network = (context.applicationContext as? App)?.container?.networkMonitor?.detect()
-            environment = if (network?.shouldPauseDoh == true) "检测到 VPN/系统代理：本次不计为无梯直连测试" else "未检测到 VPN/系统代理；请同时确认宿主代理已关闭"
+            environment = if (network?.let { it.isVpn || it.isProxy } == true) "检测到 VPN/系统代理：本次不计为无梯直连测试" else "未检测到 VPN/系统代理；请同时确认宿主代理已关闭"
         } else if (!org.linuxdo.android.net.ChallengeDetector.isChallenge(403, "challenge", "")) {
             publish(CfDiagnosticStatus("模拟挑战未被识别", terminal = true))
             return

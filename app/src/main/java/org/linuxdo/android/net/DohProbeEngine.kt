@@ -232,6 +232,7 @@ object DohProbeEngine {
 
     private fun buildBootstrapClient(server: DohServer): OkHttpClient {
         val builder = OkHttpClient.Builder()
+            .proxy(java.net.Proxy.NO_PROXY)
             .connectTimeout(PROBE_TIMEOUT_SECONDS, TimeUnit.SECONDS)
             .readTimeout(PROBE_TIMEOUT_SECONDS, TimeUnit.SECONDS)
             .callTimeout(PROBE_TIMEOUT_SECONDS, TimeUnit.SECONDS)

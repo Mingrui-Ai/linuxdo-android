@@ -1,7 +1,7 @@
 {
   "manifest_version": 2,
   "name": "LinuxDo authentication bridge",
-  "version": "1.0.3",
+  "version": "1.0.4",
   "browser_specific_settings": {
     "gecko": { "id": "linuxdo-auth@linuxdo.android" }
   },
@@ -12,6 +12,8 @@
     "cookies",
     "webRequest",
     "webRequestBlocking",
+    "proxy",
+    "<all_urls>",
     "https://linux.do/*"
   ],
   "background": { "scripts": ["background.js"] },
