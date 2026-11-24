@@ -58,6 +58,7 @@ internal fun ProfileHeader(
     val context = LocalContext.current
     var showMenu by remember(username) { mutableStateOf(false) }
     var showBio by remember(username) { mutableStateOf(false) }
+    var previewingBackgroundUrl by remember(username) { mutableStateOf<String?>(null) }
     val surface = if (colors.isDark) Color(0xFF101113) else Color.White
     val animated = card?.animatedAvatar ?: AvatarCache.get(username)
         ?: initialAvatarUrl?.takeIf(::isAnimatedAvatarPath)
@@ -74,8 +75,14 @@ internal fun ProfileHeader(
             )))
             if (background != null) {
                 val request = rememberAnimatedImageRequest(background)
-                AsyncImage(request ?: background, null, contentScale = ContentScale.Crop,
-                    modifier = Modifier.matchParentSize())
+                AsyncImage(
+                    model = request ?: background,
+                    contentDescription = "个人主页背景图",
+                    contentScale = ContentScale.Crop,
+                    modifier = Modifier.matchParentSize().clickable(onClickLabel = "查看大图") {
+                        previewingBackgroundUrl = background
+                    },
+                )
                 Box(Modifier.matchParentSize().background(Brush.verticalGradient(
                     listOf(Color.Black.copy(alpha = .3f), Color.Transparent, surface))))
             }
@@ -148,6 +155,9 @@ internal fun ProfileHeader(
                 modifier = Modifier.fillMaxWidth().padding(top = 8.dp).clickable { showBio = true })
             Spacer(Modifier.height(12.dp))
         }
+    }
+    previewingBackgroundUrl?.let { url ->
+        ImageViewer(url = url) { previewingBackgroundUrl = null }
     }
     if (showBio) {
         AlertDialog(onDismissRequest = { showBio = false }, title = { Text("个人简介") },
