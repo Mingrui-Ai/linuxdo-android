@@ -1,3 +1,5 @@
+import java.util.Properties
+
 plugins {
     id("com.android.application")
     id("org.jetbrains.kotlin.android")
@@ -5,28 +7,44 @@ plugins {
     id("org.jetbrains.kotlin.plugin.serialization")
 }
 
+val releaseSigningFile = rootProject.file("keystore.properties")
+val releaseSigningProperties = Properties().apply {
+    if (releaseSigningFile.isFile) releaseSigningFile.inputStream().use { load(it) }
+}
+
 android {
     namespace = "org.linuxdo.android"
     compileSdk = 36
 
     defaultConfig {
-        applicationId = "org.linuxdo.android"
+        applicationId = "org.linuxdo.android.enhanced"
         minSdk = 26
         targetSdk = 36
-        versionCode = 19
-        versionName = "1.6.1"
+        versionCode = 100
+        versionName = "1.0"
         ndk { abiFilters += "arm64-v8a" }
+    }
+
+    signingConfigs {
+        if (releaseSigningFile.isFile) {
+            create("enhancedRelease") {
+                storeFile = rootProject.file(requireNotNull(releaseSigningProperties.getProperty("storeFile")))
+                storePassword = requireNotNull(releaseSigningProperties.getProperty("storePassword"))
+                keyAlias = requireNotNull(releaseSigningProperties.getProperty("keyAlias"))
+                keyPassword = requireNotNull(releaseSigningProperties.getProperty("keyPassword"))
+            }
+        }
     }
 
     buildTypes {
         debug {
-            applicationIdSuffix = ".debug"
             versionNameSuffix = "-debug"
             isDebuggable = !providers.gradleProperty("linuxDoPerformanceBuild")
                 .map(String::toBoolean).getOrElse(false)
         }
         release {
             isMinifyEnabled = false
+            if (releaseSigningFile.isFile) signingConfig = signingConfigs.getByName("enhancedRelease")
         }
     }
 
@@ -49,6 +67,13 @@ android {
         jniLibs {
             useLegacyPackaging = true
         }
+    }
+}
+
+androidComponents {
+    onVariants(selector().withBuildType("debug")) {
+        // 保留已有测试版包名，覆盖安装仍使用原数据与调试签名。
+        it.applicationId.set("org.linuxdo.android.debug")
     }
 }
 

@@ -1006,6 +1006,7 @@ fun SettingsScreen(
     var showTestPushLabDialog by remember { mutableStateOf(false) }
     var showSignatureSyncDialog by remember { mutableStateOf(false) }
     var showFloorNavigationDialog by remember { mutableStateOf(false) }
+    var showEnhancedAbout by remember { mutableStateOf(false) }
 
     val prefs = remember { context.getSharedPreferences("display_preferences", Context.MODE_PRIVATE) }
     var devOptionsUnlocked by remember {
@@ -2775,7 +2776,7 @@ fun SettingsScreen(
                     }
                     Spacer(Modifier.width(12.dp))
                     Text(
-                        "版本信息",
+                        "LinuxDo 增强版",
                         style = IosTheme.type.body.copy(fontSize = 16.sp, fontWeight = FontWeight.Medium),
                         modifier = Modifier.weight(1f),
                     )
@@ -2816,7 +2817,7 @@ fun SettingsScreen(
                             )
                         } else {
                             Text(
-                                if (updateState.updateInfo != null) "可更新" else "已是最新",
+                                if (!Config.APP_UPDATES_ENABLED) "独立版" else if (updateState.updateInfo != null) "可更新" else "已是最新",
                                 style = IosTheme.type.subheadline.copy(fontSize = 13.5.sp),
                                 color = if (updateState.updateInfo != null) Color(0xFFFF3B30) else IosTheme.colors.secondaryLabel,
                             )
@@ -2825,6 +2826,19 @@ fun SettingsScreen(
                         Text("›", color = IosTheme.colors.tertiaryLabel, style = IosTheme.type.title3)
                     }
                 }
+
+                IosDivider()
+                SettingsEntryRow(
+                    title = "增强版发布页",
+                    badgeColor = Color(0xFFE8F3FF),
+                    onClick = { openInDefaultBrowser(context, Config.UPDATE_RELEASES_PAGE_URL) },
+                ) { SettingInfoIcon(tint = Color(0xFF007AFF)) }
+                IosDivider()
+                SettingsEntryRow(
+                    title = "关于与许可证",
+                    badgeColor = Color(0xFFF0F0F2),
+                    onClick = { showEnhancedAbout = true },
+                ) { SettingInfoIcon(tint = Color(0xFF3A3A3C)) }
 
                 if (devOptionsUnlocked) {
                     IosDivider()
@@ -2870,6 +2884,8 @@ fun SettingsScreen(
             Spacer(Modifier.height(36.dp))
         }
     }
+
+    if (showEnhancedAbout) EnhancedAboutDialog(onDismiss = { showEnhancedAbout = false })
 
     if (showFloorNavigationDialog) {
         Dialog(onDismissRequest = { showFloorNavigationDialog = false }) {

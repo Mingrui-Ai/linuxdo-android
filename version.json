@@ -1,16 +1,17 @@
 {
-  "versionCode": 19,
-  "versionName": "1.6.1",
+  "applicationId": "org.linuxdo.android.enhanced",
+  "versionCode": 100,
+  "versionName": "1.0",
+  "updatesEnabled": false,
   "forceUpdate": false,
   "minVersionCode": 1,
-  "title": "LINUX DO Android v1.6.1 正式版更新说明",
+  "title": "LinuxDo 增强版 1.0",
   "changelog": [
-    "1、专属邮箱原生收发：内置 LINUX DO 邮箱收件箱、读信与写信，支持 H5 网页邮箱一键自动登录",
-    "2、附件高速下载与灵动进度条：三通道智能防截断（直连/系统通道/内置浏览器），支持顶部悬浮进度条与离开话题后台持续下载",
-    "3、阅读与交互体验升级：支持全局字体缩放（80%~120%）、右侧悬浮楼层导航条、用户签名小尾巴与超链接大图/商店直跳",
-    "4、后台通知与角标进化：前台高敏轮询 + 息屏阶梯闹钟低功耗守护，深度适配主流国产系统桌面未读角标",
-    "5、网络与风控稳定性加固：彻底根治新安装与日常 429 速率挑战循环，优化 Anycast 冷启动选优、VPN 智能让渡与会话保护"
+    "增强版首发：个人侧栏、原生资料编辑、历史与草稿同步、聊天与阅读交互优化。",
+    "使用独立包名和签名，关闭应用内更新，不接收上游更新。"
   ],
-  "apkUrl": "https://github.com/xuemk/linuxdo-android/releases/download/v1.6.1/linuxdo-1.6.1-release.apk",
-  "apkSha256": "a776f371cc95175a32cd2906c8684f6045c9175218a691a733010dc8bf7a1f8c"
+  "apkUrl": "https://github.com/Mingrui-Ai/linuxdo-android/releases/download/enhanced-v1.0/linuxdo-enhanced-1.0-arm64-v8a.apk",
+  "releasePageUrl": "https://github.com/Mingrui-Ai/linuxdo-android/releases/tag/enhanced-v1.0",
+  "apkSha256": "e2da5a2c2fe408817a3019edd8202dd5e0a0ab93a3c58aab0193f07362370208",
+  "signingCertificateSha256": "fe48f28149708e3ef57ff969e06188bd893bcbf0ae981896c1a3252ca2728c62"
 }
