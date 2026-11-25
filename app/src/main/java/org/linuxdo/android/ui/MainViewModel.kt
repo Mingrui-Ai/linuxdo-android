@@ -9000,6 +9000,7 @@ fun openTopicSearch(topicId: Long, title: String) {
 
     fun refreshAccounts() {
         if (_accounts.value.switching || store.sessionChanging) return
+        _seeSignatures.value = store.isSeeSignaturesEnabled()
         try {
             _state.value.username?.let { username ->
                 val userId = store.currentUserId()

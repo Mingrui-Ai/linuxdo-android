@@ -1616,6 +1616,22 @@ class TopicRepository(
         userCardCache.clear()
     }
 
+    /** Native profile editor shares the same pacing, CSRF and session checks as all other writes. */
+    internal suspend fun profileEditorRead(path: String, userId: Long, generation: Long): JsonObject {
+        checkWriteSession(userId, generation)
+        return json.parseToJsonElement(request(path, beforeDispatch = { checkWriteSession(userId, generation) }))
+            .jsonObject.also { checkWriteSession(userId, generation) }
+    }
+
+    internal suspend fun profileEditorWrite(path: String, payload: JsonObject, userId: Long, generation: Long): JsonObject {
+        checkWriteSession(userId, generation)
+        val response = json.parseToJsonElement(mutate(path, "PUT", payload.toString(),
+            beforeAttempt = { checkWriteSession(userId, generation) })).jsonObject
+        checkWriteSession(userId, generation)
+        require(response["success"]?.jsonPrimitive?.booleanOrNull != false) { "资料保存未成功，请重试" }
+        return response
+    }
+
     /**
      * 多源深层探测动图头像：
      * 1. 全局 AvatarCache 本地高速缓存；
@@ -2582,7 +2598,10 @@ class TopicRepository(
      * (形如 `upload://xxx.png`),再把 Markdown 短码拼进 raw。
      * `synchronous=true` 让服务端同步处理完再返回,省掉轮询。
      */
-    suspend fun uploadFile(fileName: String, mimeType: String, bytes: ByteArray): UploadedFile {
+    suspend fun uploadFile(fileName: String, mimeType: String, bytes: ByteArray, uploadType: String = "composer",
+        beforeAttempt: () -> Unit = {}): UploadedFile {
+        require(uploadType in setOf("composer", "avatar", "profile_background", "card_background"))
+        beforeAttempt()
         ensureRequestAllowed()
         val expectedUserId = sessionStore?.currentUserId()
         val expectedGeneration = sessionStore?.sessionGeneration
@@ -2592,6 +2611,7 @@ class TopicRepository(
         var rateLimitRetried = false
         var authRestored = false
         while (true) {
+            beforeAttempt()
             checkWriteSession(expectedUserId, expectedGeneration)
             val csrf = obtainCsrf(forceRefresh = csrfRefreshed)
             var roundSnapshot = currentRateLimitRound()
@@ -2603,11 +2623,16 @@ class TopicRepository(
                 var status = -1
                 try {
                     checkWriteSession(expectedUserId, expectedGeneration)
+                    beforeAttempt()
                     roundSnapshot = ticket.round
                     val transport = transportProvider()
                     transport.upload(
                         "/uploads.json", csrf, fileName, mimeType, bytes,
-                        mapOf("type" to "composer", "synchronous" to "true"),
+                        buildMap {
+                            put("type", uploadType)
+                            put("synchronous", "true")
+                            if (uploadType == "avatar") put("user_id", expectedUserId.toString())
+                        },
                     ).also { status = it.status }
                 } finally {
                     lastPostRequestAt = SystemClock.elapsedRealtime()

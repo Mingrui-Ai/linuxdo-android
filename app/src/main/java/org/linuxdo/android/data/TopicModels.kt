@@ -1936,6 +1936,14 @@ object AvatarCache {
     fun clear() {
         synchronized(lock) { cache.clear() }
     }
+
+    internal fun replace(username: String, animatedAvatar: String?) {
+        val key = keyOf(username) ?: return
+        synchronized(lock) {
+            cache[key] = animatedAvatar?.takeIf(::isAnimatedAvatarPath) ?: NON_ANIMATED_SENTINEL
+            trimLocked()
+        }
+    }
 }
 
 object ExcerptCache {

@@ -79,6 +79,18 @@ class AccountManager(context: Context) {
     @Synchronized
     fun canAddAccount(): Boolean = read().accounts.size < MAX_ACCOUNTS
 
+    /** Profile responses are authoritative, including removal of a name or animated avatar. */
+    @Synchronized
+    internal fun updateProfile(user: DiscourseUser) {
+        val current = read()
+        if (current.activeUserId != user.id) return
+        write(current.copy(accounts = current.accounts.map { account ->
+            if (account.userId != user.id) account else account.copy(name = user.name,
+                avatarTemplate = user.avatarTemplate, animatedAvatar = user.animatedAvatar,
+                trustLevel = user.trustLevel ?: account.trustLevel)
+        }))
+    }
+
     @Synchronized
     fun remember(
         userId: Long,

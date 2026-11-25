@@ -690,6 +690,8 @@ private fun MainNavigation(state: UiState, viewModel: MainViewModel, lifecycle: 
     }
     val drafts by viewModel.drafts.collectAsStateWithLifecycle()
     val accountState by viewModel.accounts.collectAsStateWithLifecycle()
+    val profileEditRevision by ProfileEditorUpdates.revision.collectAsStateWithLifecycle()
+    LaunchedEffect(profileEditRevision) { if (profileEditRevision > 0) viewModel.refreshAccounts() }
     val drawerState = rememberDrawerState(DrawerValue.Closed)
     val drawerScope = rememberCoroutineScope()
     val drawerVisible = drawerState.currentValue != DrawerValue.Closed || drawerState.targetValue != DrawerValue.Closed
@@ -701,7 +703,7 @@ private fun MainNavigation(state: UiState, viewModel: MainViewModel, lifecycle: 
     var drawerNavigating by remember { mutableStateOf(false) }
     val drawerAccount = accountState.accounts.firstOrNull { it.userId == accountState.activeUserId }
         ?.takeIf { it.username.equals(state.username, ignoreCase = true) }
-    val drawerProfile = rememberDrawerProfile(state.username, accountState.activeUserId, drawerVisible)
+    val drawerProfile = key(profileEditRevision) { rememberDrawerProfile(state.username, accountState.activeUserId, drawerVisible) }
     val drawerBadges = rememberDrawerBadges(state.username, accountState.activeUserId, drawerVisible)
     val history by viewModel.history.collectAsStateWithLifecycle()
     val userCard by viewModel.userCard.collectAsStateWithLifecycle()
@@ -2154,7 +2156,9 @@ private fun MainNavigation(state: UiState, viewModel: MainViewModel, lifecycle: 
                 }
                 if (closedUrl?.let { Uri.parse(it).host } == "cdk.linux.do") viewModel.onCdkWebsiteClosed()
         }
-        if (Uri.parse(url).host == "cdk.linux.do") {
+        if (Uri.parse(url).host == Config.HOST && Uri.parse(url).path == "/my/preferences/profile" && state.username != null) {
+            ProfileEditorDialog(state.username, accountState.activeUserId, onDismiss = dismissBrowser)
+        } else if (Uri.parse(url).host == "cdk.linux.do") {
             CdkAuthorizationSheet(onDismiss = dismissBrowser)
         } else {
             InAppBrowserSheet(url = url, onDismiss = dismissBrowser)
