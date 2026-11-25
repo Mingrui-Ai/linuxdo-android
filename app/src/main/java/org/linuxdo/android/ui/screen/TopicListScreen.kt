@@ -779,8 +779,8 @@ fun TopicListScreen(
                         },
                         modifier = Modifier.fillMaxSize(),
                     )
-                } else if (currentFeed == null) {
-                    // 首页关闭悬浮球后不再补显示独立按钮，发帖统一从底栏进入。
+                } else if (currentFeed == null && currentCategoryId == null) {
+                    // 首页和分类话题页关闭悬浮球后不再补显示独立的发帖、排序按钮。
                     Column(
                         modifier = Modifier
                             .align(Alignment.BottomEnd)
@@ -3034,7 +3034,7 @@ internal fun formatCount(value: Int): String {
 }
 
 @Composable
-internal fun CategoryTag(category: Category, prominent: Boolean = false) {
+internal fun CategoryTag(category: Category, prominent: Boolean = false, onClick: (() -> Unit)? = null) {
     val catColor = parseCategoryColor(category.color) ?: IosTheme.colors.accent
     val isDark = IosTheme.colors.isDark
     val chipShape = RoundedCornerShape(8.dp)
@@ -3044,6 +3044,9 @@ internal fun CategoryTag(category: Category, prominent: Boolean = false) {
         verticalAlignment = Alignment.CenterVertically,
         modifier = Modifier
             .clip(chipShape)
+            .then(if (onClick != null) Modifier.clickable(
+                role = Role.Button, onClickLabel = "浏览${category.name}分类", onClick = onClick,
+            ) else Modifier)
             .border(width = 0.75.dp, color = borderColor, shape = chipShape)
             .background(pillBg)
             .padding(horizontal = 7.dp, vertical = 2.5.dp),

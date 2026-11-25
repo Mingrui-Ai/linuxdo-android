@@ -1228,6 +1228,9 @@ private fun MainNavigation(state: UiState, viewModel: MainViewModel, lifecycle: 
                                     savedTopicCount = savedTopics.size,
                                     onOpenSavedTopics = { showSavedTopics = true },
                                     onBack = { stack.pop() },
+                                    onOpenCategory = { category ->
+                                        stack.push(Route.CategoryTopics(category.id, category.slug, category.name))
+                                    },
                                     onRetry = { viewModel.retryTopic(route.topicId, resumePostNumber) },
                                     onRefresh = { viewModel.refreshTopic(route.topicId) },
                                     onLoadMore = { viewModel.loadTopic(route.topicId, more = true) },

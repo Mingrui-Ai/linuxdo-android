@@ -232,6 +232,7 @@ import okhttp3.Request
 import org.linuxdo.android.App
 import org.linuxdo.android.Config
 import org.linuxdo.android.data.Post
+import org.linuxdo.android.data.Category
 import org.linuxdo.android.data.Boost
 import org.linuxdo.android.data.PostFlagReason
 import org.linuxdo.android.data.SignaturePolicy
@@ -458,6 +459,7 @@ fun TopicDetailScreen(
     title: String,
     state: DetailUiState,
     onBack: () -> Unit,
+    onOpenCategory: (Category) -> Unit,
     onRetry: () -> Unit,
     onLoadMore: () -> Unit,
     onLoadPrevious: () -> Unit,
@@ -1462,7 +1464,9 @@ fun TopicDetailScreen(
                                         verticalAlignment = Alignment.CenterVertically,
                                     ) {
                                         // 1. 分类标签（位置不动，稳定居左）
-                                        state.category?.let { CategoryTag(it) }
+                                        state.category?.let { category ->
+                                            CategoryTag(category, onClick = { onOpenCategory(category) })
+                                        }
 
                                         val topicTags = remember(state.topic?.tags) {
                                             state.topic?.tags.orEmpty().filter { it.isNotBlank() }.distinct()
