@@ -3467,13 +3467,13 @@ class TopicRepository(
     private suspend fun doFetchUserBadges(username: String): List<UserBadgeItem> {
         val key = username.lowercase().trim().removePrefix("@")
         val userPath = URLEncoder.encode(username, "UTF-8")
-        val userBadgesRaw = runCatching {
-            objectRequest("/user-badges/$userPath.json?grouped=true", present = false, retryAllowed = false)
-        }.getOrNull()
+        // 请求失败必须保留已有预览，不能把“未取得数据”缓存为“0 枚已获得”。
+        val userBadgesRaw = objectRequest("/user-badges/$userPath.json?grouped=true", present = false, retryAllowed = false)
+        check(userBadgesRaw["user_badges"] is JsonArray) { "徽章响应缺少用户记录" }
 
         val allBadgesRaw = getAllBadgesRaw()
 
-        val userBadgesList = userBadgesRaw?.objects("user_badges").orEmpty()
+        val userBadgesList = userBadgesRaw.objects("user_badges")
         val earnedMap = mutableMapOf<Long, Pair<String?, Int>>() // badgeId -> (grantedAt, count)
         userBadgesList.forEach { ub ->
             val bId = ub.number("badge_id") ?: return@forEach
@@ -3483,7 +3483,7 @@ class TopicRepository(
         }
 
         val badgeDefMap = mutableMapOf<Long, JsonObject>()
-        userBadgesRaw?.objects("badges")?.forEach { b ->
+        userBadgesRaw.objects("badges").forEach { b ->
             val id = b.number("id") ?: return@forEach
             badgeDefMap[id] = b
         }
@@ -4242,13 +4242,54 @@ class TopicRepository(
      * GET https://cdk.linux.do/api/v1/oauth/user-info,依赖 CDK 自己的会话 Cookie,
      * 未授权时返回 401,由调用方走 [authorizeCdk] 后重试。
      */
-    suspend fun fetchCdkScore(): Int {
+    suspend fun fetchCdkScore(username: String): Int {
         val raw = request("https://cdk.linux.do/api/v1/oauth/user-info", present = false)
-        val root = json.parseToJsonElement(raw).jsonObject
-        val data = root["data"] as? JsonObject ?: throw IllegalStateException("CDK 响应缺少 data 字段")
-        val primitive = data["score"] as? JsonPrimitive ?: throw IllegalStateException("CDK 响应缺少 score 字段")
-        return primitive.intOrNull ?: primitive.contentOrNull?.toIntOrNull()
-            ?: throw IllegalStateException("CDK score 格式不正确")
+        return parseCdkScore(raw, username)
+    }
+
+    /** 网页接续 Connect 授权，不让通过验证的网页再切回原生网络重走 authorize。 */
+    internal suspend fun beginCdkAuthorization(username: String): CdkAuthorization = withContext(Dispatchers.IO) {
+        val store = sessionStore ?: error("请先登录")
+        val userId = store.currentUserId()
+        val generation = store.sessionGeneration
+        check(userId > 0 && username.isNotBlank()) { "请先登录" }
+        checkSiteSession(userId, generation)
+        val client = httpClientProvider?.invoke()?.newBuilder()?.followRedirects(false)?.followSslRedirects(false)?.build()
+            ?: error("网络尚未就绪")
+        val response = executeLdcOAuthRequest(client, Request.Builder()
+            .url("https://cdk.linux.do/api/v1/oauth/login")
+            .header("Accept", "application/json")
+            .header("X-Requested-With", "XMLHttpRequest").build(),
+            "CDK OAuth login", "cdk.linux.do", userId, generation)
+        if (response.status !in 200..299) throw HttpStatusException(response.status, "无法取得社区分授权入口")
+        val authUrl = (json.parseToJsonElement(response.body).jsonObject["data"] as? JsonPrimitive)?.contentOrNull
+            ?: error("社区分授权入口无效")
+        checkSiteSession(userId, generation)
+        CdkAuthorization(authUrl, username, userId, generation)
+    }
+
+    internal suspend fun completeCdkAuthorization(attempt: CdkAuthorization, callback: String): Int = withContext(Dispatchers.IO) {
+        checkSiteSession(attempt.userId, attempt.generation)
+        val (code, state) = attempt.claimCallback(callback)
+        val client = httpClientProvider?.invoke()?.newBuilder()?.followRedirects(false)?.followSslRedirects(false)?.build()
+            ?: error("网络尚未就绪")
+        val body = org.json.JSONObject().put("code", code).put("state", state).toString()
+        val response = executeLdcOAuthRequest(client, Request.Builder()
+            .url("https://cdk.linux.do/api/v1/oauth/callback")
+            .header("Accept", "application/json")
+            .header("X-Requested-With", "XMLHttpRequest")
+            .post(body.toRequestBody("application/json; charset=utf-8".toMediaType())).build(),
+            "CDK OAuth callback", "cdk.linux.do", attempt.userId, attempt.generation)
+        if (response.status !in 200..299) throw HttpStatusException(response.status, "社区分授权未完成，请重新授权")
+        checkSiteSession(attempt.userId, attempt.generation)
+        // SharedHttp 已在返回响应前把 CDK 会话写入共享 CookieManager。
+        val score = readAfterShortCooldown {
+            checkSiteSession(attempt.userId, attempt.generation)
+            fetchCdkScore(attempt.username)
+        }
+        checkSiteSession(attempt.userId, attempt.generation)
+        diagnostics.log("CDK 网页授权完成，社区分读取成功")
+        score
     }
 
     /**

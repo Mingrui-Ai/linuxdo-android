@@ -24,6 +24,7 @@ fun ProfileScreen(
     cdkScore: Int?,
     cdkScoreLoading: Boolean,
     cdkScoreError: String?,
+    cdkScoreNeedsAuthorization: Boolean,
     onLoadCdkScore: () -> Unit,
     onReloadCdkScore: () -> Unit,
     onOpenCdkWebsite: () -> Unit,
@@ -52,13 +53,15 @@ fun ProfileScreen(
             onBack = onBack,
             onEditProfile = onEditProfile,
             communityScore = cdkScore,
+            communityScoreLoading = cdkScoreLoading,
+            communityScoreNeedsAuthorization = cdkScoreNeedsAuthorization,
             onOpenCommunityScore = { showCommunityScore = true; onReloadCdkScore() },
             onOpenLevel = onOpenConnect,
             scrollToTopRequest = scrollToTopRequest,
         )
         if (showCommunityScore) {
             CommunityScoreDialog(cdkScore, onReloadCdkScore, cdkScoreLoading, cdkScoreError,
-                onOpenWebsite = if (cdkScoreError != null) ({ showCommunityScore = false; onOpenCdkWebsite() }) else null,
+                onOpenWebsite = { showCommunityScore = false; onOpenCdkWebsite() },
             ) { showCommunityScore = false }
         }
     }

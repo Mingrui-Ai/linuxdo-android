@@ -1036,7 +1036,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     val cdkScore: StateFlow<CdkScoreUiState> = _cdkScore.asStateFlow()
     private var cdkScoreJob: Job? = null
     private var cdkScoreBackoffUntil: Long = 0L
-    private var cdkFailedAuthMarker: String? = null
+    private var cdkAuthorizationOpen = false
     private val connectManualRefreshTimestamps = mutableListOf<Long>()
     private var connectSilentBackoffUntil: Long = 0L
     private var ldcBackoffUntil: Long = 0L
@@ -3773,17 +3773,6 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
         pageJobs["userCard"] = viewModelScope.launch {
             try {
-                if (followedUsernames.value.isEmpty() && currentAccount != null) {
-                    launch {
-                        val fresh = runCatching { repository.fetchFollowing(currentAccount) }.getOrNull()
-                        if (fresh != null) {
-                            followedUsernames.value = fresh.map { it.username.lowercase() }.toSet()
-                            if (target.lowercase() in followedUsernames.value) {
-                                _userCard.update { it.copy(following = true) }
-                            }
-                        }
-                    }
-                }
                 val user = repository.fetchUserCard(target, forceRefresh = cached != null)
                 val effectiveUser = user.copy(
                     avatarTemplate = user.avatarTemplate ?: staticAvatarUrl ?: primaryAvatarUrl,
@@ -3791,42 +3780,13 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 )
                 val curFollowed = isFollowed || target.lowercase() in followedUsernames.value || effectiveUser.following
                 val curBlocked = isBlocked || target.lowercase() in blockedUsernames.value
-                val hasMetrics = effectiveUser.topicCount > 0 || effectiveUser.postCount > 0 || effectiveUser.likesReceived > 0
                 _userCard.value = UserCardUiState(
                     user = effectiveUser,
                     following = curFollowed,
                     isBlocked = curBlocked,
                     isSelf = isSelf,
-                    loading = !hasMetrics,
+                    loading = false,
                 )
-
-                // 快速并发拉取真实统计数据 (话题、帖子、获赞、徽章、动图头像)
-                val stats = runCatching { repository.fetchUserCardStats(target) }.getOrNull()
-                if (stats != null) {
-                    val cur = _userCard.value.user
-                    if (cur != null && cur.username.equals(target, ignoreCase = true)) {
-                        val finalFollowed = curFollowed || (stats.isFollowed == true)
-                        if (stats.isFollowed == true) {
-                            followedUsernames.value += target.lowercase()
-                        }
-                        val updated = cur.copy(
-                            topicCount = stats.topicCount,
-                            postCount = stats.postCount,
-                            likesReceived = stats.likesReceived,
-                            badges = if (stats.badges.isNotEmpty()) stats.badges else cur.badges,
-                            animatedAvatar = stats.animatedAvatar ?: cur.animatedAvatar,
-                            following = finalFollowed,
-                        )
-                        _userCard.value = _userCard.value.copy(
-                            user = updated,
-                            following = finalFollowed,
-                            loading = false,
-                        )
-                        repository.saveCachedUserCard(updated)
-                    }
-                } else {
-                    _userCard.update { it.copy(loading = false) }
-                }
 
                 if (effectiveUser.animatedAvatar.isNullOrBlank()) {
                     val enriched = runCatching { repository.enrichUserCardAvatar(target, effectiveUser) }.getOrNull()
@@ -3888,33 +3848,19 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
-    fun toggleFollowUser() {
-        val current = _userCard.value
-        val user = current.user ?: return
-        if (current.followUpdating || (!user.canFollow && !current.following) || user.id == store.currentUserId()) return
-        val previous = current.following
-        val nextFollow = !previous
-        _userCard.update { it.copy(following = nextFollow, followUpdating = true, error = null) }
-        val targetLower = user.username.lowercase()
-        if (nextFollow) {
-            followedUsernames.update { it + targetLower }
-        } else {
-            followedUsernames.update { it - targetLower }
-        }
-        pageJobs["follow:${user.username}"] = viewModelScope.launch {
-            try {
-                repository.setFollow(user.username, nextFollow)
-                _userCard.update { it.copy(followUpdating = false) }
-            } catch (error: CancellationException) {
-                throw error
-            } catch (error: Exception) {
-                if (nextFollow) {
-                    followedUsernames.update { it - targetLower }
-                } else {
-                    followedUsernames.update { it + targetLower }
-                }
-                _userCard.update { it.copy(following = previous, followUpdating = false, error = error.message ?: "关注操作失败") }
-            }
+    /** 详细主页调用；成功后才更新关注状态，不再依赖是否打开了头像弹窗。 */
+    suspend fun setProfileFollowing(user: org.linuxdo.android.data.UserCardData, following: Boolean) {
+        val username = _state.value.username ?: error("请先登录")
+        val checkSession = connectSessionCheck(username)
+        checkSession()
+        check(!user.username.equals(username, ignoreCase = true) && (user.canFollow || !following)) { "无法关注此用户" }
+        repository.setFollow(user.username, following)
+        checkSession()
+        val target = user.username.lowercase()
+        followedUsernames.update { if (following) it + target else it - target }
+        repository.saveCachedUserCard((repository.getCachedUserCard(user.username) ?: user).copy(following = following))
+        if (_userCard.value.user?.username.equals(user.username, ignoreCase = true)) {
+            _userCard.update { it.copy(following = following, user = it.user?.copy(following = following)) }
         }
     }
 
@@ -3997,22 +3943,17 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
-    fun toggleBlacklistForUserCard() {
-        val current = _userCard.value
-        val user = current.user ?: return
-        val target = user.username
-        if (current.following) {
+    fun toggleProfileBlacklist(user: org.linuxdo.android.data.UserCardData, following: Boolean) {
+        if (user.username.equals(_state.value.username, ignoreCase = true)) return
+        val target = user.username.lowercase()
+        if (following || target in followedUsernames.value) {
+            android.widget.Toast.makeText(getApplication(), "已关注用户不能拉黑，请先取消关注", android.widget.Toast.LENGTH_SHORT).show()
             return
         }
-        if (current.isBlocked) {
-            removeFromBlacklist(target)
+        if (target in blockedUsernames.value) {
+            removeFromBlacklist(user.username)
         } else {
-            addToBlacklist(
-                username = target,
-                name = user.cleanDisplayName,
-                avatarTemplate = user.avatarTemplate,
-                trustLevel = user.trustLevel,
-            )
+            addToBlacklist(user.username, user.cleanDisplayName, user.avatarTemplate, user.trustLevel)
         }
     }
 
@@ -4339,6 +4280,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
      * 3. 仅 CDK 返回 401(无会话)才做一次 OAuth 握手，握手结果是 Cookie，平时不重复握手。
      */
     fun loadCdkScore(fromWarmup: Boolean = false, userInitiated: Boolean = false) {
+        if (cdkAuthorizationOpen) return
         val username = _state.value.username ?: return
         val checkSession = connectSessionCheck(username)
         val now = System.currentTimeMillis()
@@ -4356,7 +4298,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         if (current.score != null && now - current.cachedAt < Config.CDK_SCORE_CACHE_TTL_MS) return
         if (now < cdkScoreBackoffUntil) {
             if (userInitiated) _cdkScore.update { it.copy(error = if (it.needsAuthorization) {
-                "请打开社区分网站完成验证或授权后返回"
+                "请点击“验证并获取”完成社区分授权"
             } else "社区分服务暂缓访问，请约 ${((cdkScoreBackoffUntil - now + 59_999L) / 60_000L)} 分钟后重试") }
             return
         }
@@ -4365,10 +4307,9 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         cdkScoreJob = viewModelScope.launch {
             _cdkScore.update { it.copy(loading = true, error = null) }
             try {
-                val score = readSiteWithAuthorization(checkSession, { repository.fetchCdkScore() }, { repository.authorizeCdk() })
+                val score = readSiteWithAuthorization(checkSession, { repository.fetchCdkScore(username) }, { repository.authorizeCdk() })
                 checkSession()
                 cdkScoreBackoffUntil = 0L
-                cdkFailedAuthMarker = null
                 repository.saveCachedCdkScore(username, score)
                 _cdkScore.value = CdkScoreUiState(username, score, System.currentTimeMillis())
             } catch (e: CancellationException) {
@@ -4378,11 +4319,10 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 val pause = siteFailureDelayMs(e)
                 cdkScoreBackoffUntil = System.currentTimeMillis() + pause
                 val needsAuthorization = e is NeedsInteractiveVerification || (e is HttpStatusException && e.status in setOf(401, 403))
-                cdkFailedAuthMarker = if (needsAuthorization) cdkAuthMarker() else null
                 _cdkScore.update { it.copy(loading = false, needsAuthorization = needsAuthorization, error = when (e) {
                     is RateLimitException -> "社区分服务繁忙，请稍后重试"
-                    is NeedsInteractiveVerification -> "请打开社区分网站完成安全验证后返回"
-                    is HttpStatusException -> if (e.status == 401 || e.status == 403) "请打开社区分网站完成验证或授权后返回" else "社区分服务暂时不可用，请稍后重试"
+                    is NeedsInteractiveVerification -> "请点击“验证并获取”完成安全验证和授权"
+                    is HttpStatusException -> if (e.status == 401 || e.status == 403) "请点击“验证并获取”完成社区分授权" else "社区分服务暂时不可用，请稍后重试"
                     else -> "社区分暂时加载失败，请稍后重试"
                 }) }
                 diagnostics.log("获取 CDK 社区分暂缓(${(pause + 999L) / 1_000L}s): ${e.message}")
@@ -4392,22 +4332,24 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
-    /** 网页验证改变凭据后只补取一次；未完成验证或普通限流不跳过等待。 */
-    fun onCdkWebsiteClosed() {
-        if (_cdkScore.value.needsAuthorization && cdkFailedAuthMarker != null && cdkAuthMarker() != cdkFailedAuthMarker) {
-            cdkScoreBackoffUntil = 0L
-            cdkFailedAuthMarker = null
+    fun setCdkAuthorizationOpen(open: Boolean) {
+        cdkAuthorizationOpen = open
+        if (open) {
+            cdkScoreJob?.cancel()
+            cdkScoreJob = null
+            _cdkScore.update { it.copy(loading = false) }
         }
-        loadCdkScore(userInitiated = true)
     }
 
-    private fun cdkAuthMarker(): String {
-        val manager = android.webkit.CookieManager.getInstance()
-        val authNames = setOf("cf_clearance", "auth.session-token", "linux_do_cdk_session_id")
-        val cookies = listOf("https://connect.linux.do/oauth2/authorize", "https://cdk.linux.do/api/v1/oauth/user-info")
-            .map { url -> SessionStore.parseCookieHeader(manager.getCookie(url)).filterKeys { it in authNames }.toSortedMap() }
-        // 只在内存比较指纹，不记录或持久化任何 Cookie。
-        return org.linuxdo.android.net.NetDiagnostics.fingerprint(cookies.toString())
+    /** 只有完整授权后读到当前账号的真实分数才解除等待；单纯关闭网页不触发原生重授权。 */
+    fun onCdkAuthorized(username: String, generation: Long, score: Int) {
+        if (store.sessionChanging || generation != store.sessionGeneration ||
+            !_state.value.username.equals(username, ignoreCase = true)) return
+        cdkScoreJob?.cancel()
+        cdkScoreJob = null
+        cdkScoreBackoffUntil = 0L
+        repository.saveCachedCdkScore(username, score)
+        _cdkScore.value = CdkScoreUiState(username, score, System.currentTimeMillis())
     }
 
     private var ldcGamificationRefreshJob: Job? = null
@@ -9527,7 +9469,7 @@ fun openTopicSearch(topicId: Long, title: String) {
         cdkScoreJob?.cancel()
         cdkScoreJob = null
         cdkScoreBackoffUntil = 0L
-        cdkFailedAuthMarker = null
+        cdkAuthorizationOpen = false
         _cdkScore.value = CdkScoreUiState()
         idleWarmupJob?.cancel()
         idleWarmupJob = null

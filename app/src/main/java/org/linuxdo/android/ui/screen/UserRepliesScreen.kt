@@ -44,7 +44,6 @@ import org.linuxdo.android.data.isAnimatedAvatarPath
 import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.statusBarsPadding
-import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Email
 import androidx.compose.material.icons.filled.MoreVert
@@ -56,6 +55,13 @@ import androidx.compose.material3.Tab
 import androidx.compose.material3.TabRowDefaults
 import androidx.compose.material3.TabRowDefaults.tabIndicatorOffset
 import androidx.compose.material3.TextButton
+import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.pulltorefresh.PullToRefreshBox
+import androidx.compose.material3.pulltorefresh.rememberPullToRefreshState
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Person
+import androidx.compose.material.icons.filled.Check
+import androidx.compose.material.icons.filled.Close
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.rememberCoroutineScope
@@ -332,6 +338,7 @@ enum class UserProfileTab(val label: String, val filter: String?) {
     Solutions("已解决", null);
 }
 
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun UserProfileScreen(
     username: String,
@@ -342,11 +349,16 @@ fun UserProfileScreen(
     onOpenUser: ((String) -> Unit)? = null,
     onChat: ((String) -> Unit)? = null,
     onComposePrivateMessage: ((String) -> Unit)? = null,
+    onSetFollowing: (suspend (UserCardData, Boolean) -> Unit)? = null,
+    isBlocked: Boolean = false,
+    onToggleBlock: ((UserCardData, Boolean) -> Unit)? = null,
     onBack: (() -> Unit)? = null,
     onSwitchAccount: (() -> Unit)? = null,
     onEditProfile: (() -> Unit)? = null,
     menuActions: List<ProfileMenuAction> = emptyList(),
     communityScore: Int? = null,
+    communityScoreLoading: Boolean = false,
+    communityScoreNeedsAuthorization: Boolean = false,
     onOpenCommunityScore: (() -> Unit)? = null,
     onOpenLevel: (() -> Unit)? = null,
     scrollToTopRequest: Int = 0,
@@ -367,6 +379,12 @@ fun UserProfileScreen(
     }
     val selectedTab = selectedProfileTab.ordinal
     var refreshGeneration by remember(username) { mutableIntStateOf(0) }
+    var profileCompleted by remember(username) { mutableIntStateOf(-1) }
+    var badgesCompleted by remember(username) { mutableIntStateOf(-1) }
+    var summaryCompleted by remember(username) { mutableIntStateOf(-1) }
+    var contentCompleted by remember(username, selectedTab) { mutableIntStateOf(-1) }
+    var finishedRefresh by remember(username) { mutableIntStateOf(0) }
+    var followUpdating by remember(username) { mutableStateOf(false) }
     var profileError by remember(username) { mutableStateOf<String?>(null) }
     val tabEntries = remember { UserProfileTab.entries }
 
@@ -377,7 +395,8 @@ fun UserProfileScreen(
     var badgesLoading by remember(username) { mutableStateOf(false) }
 
     LaunchedEffect(username, refreshGeneration) {
-        if (repo == null) return@LaunchedEffect
+        val generation = refreshGeneration
+        if (repo == null) { badgesCompleted = generation; return@LaunchedEffect }
         badgesLoading = true
         try {
             badges = repo.fetchUserBadges(username, forceRefresh = refreshGeneration > 0)
@@ -387,6 +406,7 @@ fun UserProfileScreen(
             // 头部保留缓存预览；详细错误与重试在独立徽章页显示。
         } finally {
             badgesLoading = false
+            badgesCompleted = generation
         }
     }
 
@@ -402,8 +422,9 @@ fun UserProfileScreen(
     var hasMore by remember(username, selectedTab) { mutableStateOf(true) }
 
     LaunchedEffect(username, refreshGeneration) {
+        val generation = refreshGeneration
         profileError = null
-        if (repo == null) return@LaunchedEffect
+        if (repo == null) { profileCompleted = generation; return@LaunchedEffect }
         try {
             val card = repo.fetchUserCard(username, forceRefresh = refreshGeneration > 0)
             userCard = card
@@ -413,12 +434,15 @@ fun UserProfileScreen(
         } catch (error: kotlinx.coroutines.CancellationException) {
             throw error
         } catch (e: Exception) {
-            if (userCard == null) profileError = e.message ?: "资料加载失败"
+            profileError = e.message ?: "资料加载失败"
+        } finally {
+            profileCompleted = generation
         }
     }
 
     LaunchedEffect(username, refreshGeneration) {
-        if (repo == null) return@LaunchedEffect
+        val generation = refreshGeneration
+        if (repo == null) { summaryCompleted = generation; return@LaunchedEffect }
         summaryLoading = true
         summaryError = null
         try {
@@ -429,6 +453,7 @@ fun UserProfileScreen(
             summaryError = e.message ?: "加载总结失败"
         } finally {
             summaryLoading = false
+            summaryCompleted = generation
         }
     }
 
@@ -437,8 +462,9 @@ fun UserProfileScreen(
     }
 
     LaunchedEffect(username, selectedTab, retryTrigger, refreshGeneration) {
+        val generation = refreshGeneration
         val currentTab = tabEntries[selectedTab]
-        if (repo == null) return@LaunchedEffect
+        if (repo == null) { contentCompleted = generation; return@LaunchedEffect }
         loadMoreJob?.cancel()
         if (currentTab == UserProfileTab.Summary) return@LaunchedEffect
         loading = true
@@ -482,6 +508,7 @@ fun UserProfileScreen(
             error = e.message ?: "加载数据失败"
         } finally {
             loading = false
+            contentCompleted = generation
         }
     }
 
@@ -558,6 +585,57 @@ fun UserProfileScreen(
 
     val isDark = IosTheme.colors.isDark
 
+    val refreshing = refreshGeneration > finishedRefresh
+    val refreshComplete = minOf(profileCompleted, badgesCompleted, summaryCompleted,
+        if (selectedProfileTab == UserProfileTab.Summary) refreshGeneration else contentCompleted)
+    LaunchedEffect(refreshComplete) {
+        if (refreshComplete >= refreshGeneration) finishedRefresh = refreshGeneration
+    }
+    val relationshipActions = listOfNotNull(
+        onSetFollowing?.let { setFollowing ->
+            val following = userCard?.following == true
+            ProfileMenuAction(if (followUpdating) "正在更新关注…" else if (following) "取消关注" else "关注",
+                if (following) Icons.Default.Check else Icons.Default.Person,
+                enabled = !followUpdating && userCard?.let { it.canFollow || following } == true,
+                onClick = {
+                    val target = userCard
+                    if (target != null && !followUpdating) {
+                        followUpdating = true
+                        coroutineScope.launch {
+                            try {
+                                setFollowing(target, !following)
+                                userCard = userCard?.copy(following = !following)
+                            } catch (cancelled: kotlinx.coroutines.CancellationException) {
+                                throw cancelled
+                            } catch (failure: Exception) {
+                                Toast.makeText(context, failure.message ?: "关注操作失败", Toast.LENGTH_SHORT).show()
+                            } finally { followUpdating = false }
+                        }
+                    }
+                })
+        },
+        onToggleBlock?.let { toggle ->
+            ProfileMenuAction(if (isBlocked) "移出本地黑名单" else "加入本地黑名单", Icons.Default.Close,
+                enabled = userCard != null && !followUpdating,
+                onClick = { userCard?.let { toggle(it, it.following) } })
+        },
+    )
+    val pullState = rememberPullToRefreshState()
+    val topPadding = WindowInsets.systemBars.union(WindowInsets.displayCutout).only(WindowInsetsSides.Top)
+        .asPaddingValues().calculateTopPadding()
+    PullToRefreshBox(isRefreshing = refreshing, state = pullState,
+        onRefresh = {
+            val atTop = if (selectedProfileTab == UserProfileTab.Summary) !aboutScroll.canScrollBackward
+                else !listState.canScrollBackward
+            if (!refreshing && atTop && headerState.offset == 0f) refreshGeneration++
+        }, modifier = Modifier.fillMaxSize(),
+        indicator = {
+            if (refreshing || pullState.distanceFraction > 0f) {
+                Box(Modifier.align(Alignment.TopCenter).padding(top = topPadding + 10.dp)) {
+                    org.linuxdo.android.ui.design.IosActivityIndicator(diameter = 22.dp)
+                }
+            }
+        }) {
     CollapsingHeaderLayout(
         state = headerState,
         topInset = WindowInsets.systemBars.union(WindowInsets.displayCutout).only(WindowInsetsSides.Top)
@@ -574,8 +652,9 @@ fun UserProfileScreen(
                     onBack = onBack, onSwitchAccount = onSwitchAccount, onEditProfile = onEditProfile,
                     onChat = onChat?.let { callback -> { callback(username) } },
                     onPrivateMessage = onComposePrivateMessage?.let { callback -> { callback(username) } },
-                    onRefresh = { refreshGeneration++ }, menuActions = menuActions,
+                    menuActions = relationshipActions + menuActions,
                     communityScore = communityScore, onOpenCommunityScore = onOpenCommunityScore,
+                    communityScoreLoading = communityScoreLoading, needsAuthorization = communityScoreNeedsAuthorization,
                     onOpenLevel = onOpenLevel,
                     badges = badges, badgesLoading = badgesLoading, onOpenBadges = onOpenBadges,
                 )
@@ -724,6 +803,7 @@ fun UserProfileScreen(
                 }
             }
         }
+    }
     }
 }
 
