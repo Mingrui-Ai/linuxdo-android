@@ -18,6 +18,11 @@ data class ProfileStatus(
 @Serializable
 data class ProfileFeaturedTopic(val id: Long = 0, val title: String = "")
 
+/** 兼容旧版“找工作”快捷项保存的非 Discourse 名称。 */
+internal fun normalizeProfileStatusEmoji(raw: String): String = raw.trim().trim(':').let {
+    if (it == "magnifying_glass_tilted_left") "mag" else it
+}
+
 /** 只省略与当前 Lv 对应的默认头衔，保留自选徽章或自定义头衔。 */
 internal fun profileDisplayTitle(title: String?, level: Int?): String? {
     val value = title?.trim()?.takeIf { it.isNotEmpty() } ?: return null

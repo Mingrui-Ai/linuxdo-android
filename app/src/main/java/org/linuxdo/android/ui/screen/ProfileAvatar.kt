@@ -24,6 +24,7 @@ import java.time.Instant
 import kotlinx.coroutines.delay
 import org.linuxdo.android.App
 import org.linuxdo.android.data.ProfileStatus
+import org.linuxdo.android.data.normalizeProfileStatusEmoji
 import org.linuxdo.android.data.profileWebsiteUrl
 import org.linuxdo.android.ui.design.IosTheme
 import org.linuxdo.android.ui.design.UserAvatar
@@ -81,7 +82,7 @@ internal fun ProfileAvatar(
 @Composable
 private fun ProfileStatusEmoji(raw: String) {
     val repo = (LocalContext.current.applicationContext as App).container.topicRepository
-    val code = raw.trim().trim(':')
+    val code = normalizeProfileStatusEmoji(raw)
     val isShortcode = code.matches(Regex("[a-zA-Z0-9_+\\-:]+"))
     val url by produceState<String?>(null, code) {
         if (isShortcode) value = profileWebsiteUrl(repo.emojiUrls()[code])
