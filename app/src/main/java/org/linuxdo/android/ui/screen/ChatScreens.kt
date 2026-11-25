@@ -1,6 +1,8 @@
 package org.linuxdo.android.ui.screen
 
 import android.net.Uri
+import org.linuxdo.android.ui.design.rememberComposerDismiss
+import org.linuxdo.android.ui.design.composerBackKeys
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.PickVisualMediaRequest
@@ -13,6 +15,7 @@ import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
@@ -251,6 +254,7 @@ fun ChatRoomScreen(
     var showComposerSheet by remember(channelId) { mutableStateOf(false) }
     var pendingAttachments by remember(channelId) { mutableStateOf<List<AttachedMedia>>(emptyList()) }
     var isUploading by remember(channelId) { mutableStateOf(false) }
+    var pickingAttachment by remember(channelId) { mutableStateOf(false) }
     val keyboard = LocalSoftwareKeyboardController.current
     val send: (String, List<Long>) -> Unit = { text, uploads ->
         onSend(channelId, text, uploads) {
@@ -263,6 +267,7 @@ fun ChatRoomScreen(
     }
 
     val pickImage = rememberLauncherForActivityResult(ActivityResultContracts.PickVisualMedia()) { uri ->
+        pickingAttachment = false
         if (uri != null) {
             isUploading = true
             onUploadAttachment(channelId, uri, { media ->
@@ -275,6 +280,7 @@ fun ChatRoomScreen(
     }
 
     val pickFile = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
+        pickingAttachment = false
         if (uri != null) {
             isUploading = true
             onUploadAttachment(channelId, uri, { media ->
@@ -510,6 +516,7 @@ fun ChatRoomScreen(
                             .size(36.dp)
                             .clip(CircleShape)
                             .clickable(enabled = !isUploading && state.sendingChannelId == null) {
+                                pickingAttachment = true
                                 pickImage.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly))
                             },
                         contentAlignment = Alignment.Center,
@@ -523,6 +530,7 @@ fun ChatRoomScreen(
                             .size(36.dp)
                             .clip(CircleShape)
                             .clickable(enabled = !isUploading && state.sendingChannelId == null) {
+                                pickingAttachment = true
                                 pickFile.launch(arrayOf("*/*"))
                             },
                         contentAlignment = Alignment.Center,
@@ -629,10 +637,11 @@ fun ChatRoomScreen(
             pendingAttachments = pendingAttachments,
             onRemoveAttachment = { removeId: String -> pendingAttachments = pendingAttachments.filterNot { it.id == removeId } },
             isUploading = isUploading,
+            pickingAttachment = pickingAttachment,
             isSending = state.sendingChannelId == channelId,
             error = state.error,
-            onPickImage = { pickImage.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)) },
-            onPickFile = { pickFile.launch(arrayOf("*/*")) },
+            onPickImage = { pickingAttachment = true; pickImage.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)) },
+            onPickFile = { pickingAttachment = true; pickFile.launch(arrayOf("*/*")) },
             onSend = { fullMessage, uploadIds ->
                 if (fullMessage.isNotBlank()) {
                     send(fullMessage, uploadIds)
@@ -868,6 +877,7 @@ private fun ChatComposerBottomSheet(
     pendingAttachments: List<AttachedMedia>,
     onRemoveAttachment: (String) -> Unit,
     isUploading: Boolean,
+    pickingAttachment: Boolean,
     isSending: Boolean,
     error: String?,
     onPickImage: () -> Unit,
@@ -879,6 +889,12 @@ private fun ChatComposerBottomSheet(
     var isFullScreen by rememberSaveable { mutableStateOf(false) }
     var showSheetEmojiPicker by rememberSaveable { mutableStateOf(false) }
     var editorView by remember { mutableStateOf<RichMarkdownEditorView?>(null) }
+    val keyboard = LocalSoftwareKeyboardController.current
+    val dismiss = rememberComposerDismiss(canDismiss = !isSending,
+        ignoreKeyboardHide = showSheetEmojiPicker || pickingAttachment) {
+        editorView?.exportToMarkdown()?.let(onDraftChange)
+        onDismiss()
+    }
     val textColorInt = IosTheme.colors.label.toArgb()
     val hintColorInt = IosTheme.colors.tertiaryLabel.toArgb()
 
@@ -886,17 +902,11 @@ private fun ChatComposerBottomSheet(
         editorView?.syncAttachments(pendingAttachments)
     }
 
-    BackHandler(enabled = true) {
-        if (isFullScreen) {
-            isFullScreen = false
-        } else {
-            onDismiss()
-        }
-    }
 
-    Box(
+    BoxWithConstraints(
         modifier = Modifier
             .fillMaxSize()
+            .composerBackKeys(dismiss)
             .imePadding()
             .navigationBarsPadding(),
         contentAlignment = Alignment.BottomCenter,
@@ -909,7 +919,7 @@ private fun ChatComposerBottomSheet(
                 .clickable(
                     interactionSource = remember { MutableInteractionSource() },
                     indication = null,
-                    onClick = onDismiss,
+                    onClick = dismiss,
                 ),
         )
 
@@ -918,12 +928,10 @@ private fun ChatComposerBottomSheet(
             modifier = Modifier
                 .fillMaxWidth()
                 .then(
-                    when {
-                        isFullScreen -> Modifier.fillMaxHeight(0.92f)
-                        showSheetEmojiPicker -> Modifier.height(420.dp)
-                        pendingAttachments.isNotEmpty() || isUploading -> Modifier.height(380.dp)
-                        else -> Modifier.height(280.dp)
-                    }
+                    Modifier.height(if (isFullScreen) maxHeight * 0.92f
+                        else minOf(maxHeight * 0.92f, 216.dp +
+                            (if (pendingAttachments.isNotEmpty() || isUploading) 36.dp else 0.dp) +
+                            (if (showSheetEmojiPicker) 52.dp else 0.dp)))
                 )
                 .clip(RoundedCornerShape(topStart = 16.dp, topEnd = 16.dp))
                 .background(IosTheme.colors.card)
@@ -932,30 +940,15 @@ private fun ChatComposerBottomSheet(
                     indication = null,
                     onClick = {},
                 )
-                .padding(horizontal = 16.dp, vertical = 12.dp),
-            verticalArrangement = Arrangement.spacedBy(10.dp),
+                .padding(horizontal = 12.dp, vertical = 8.dp),
+            verticalArrangement = Arrangement.spacedBy(6.dp),
         ) {
-            // 顶部栏: 关闭按钮 ✕ + 标题 + 全屏切换按钮 ⛶
+            // 顶部栏：标题与手动放大按钮
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.SpaceBetween,
             ) {
-                // 左侧轻量关闭叉号
-                val closeColor = IosTheme.colors.secondaryLabel
-                Box(
-                    modifier = Modifier
-                        .size(32.dp)
-                        .clip(CircleShape)
-                        .clickable(onClick = onDismiss),
-                    contentAlignment = Alignment.Center,
-                ) {
-                    Canvas(Modifier.size(12.dp)) {
-                        drawLine(closeColor, Offset(0f, 0f), Offset(size.width, size.height), strokeWidth = 1.8f, cap = StrokeCap.Round)
-                        drawLine(closeColor, Offset(size.width, 0f), Offset(0f, size.height), strokeWidth = 1.8f, cap = StrokeCap.Round)
-                    }
-                }
-
                 Text(
                     text = "发送给 $channelTitle",
                     style = IosTheme.type.headline,
@@ -971,7 +964,8 @@ private fun ChatComposerBottomSheet(
                     modifier = Modifier
                         .size(32.dp)
                         .clip(CircleShape)
-                        .clickable { isFullScreen = !isFullScreen },
+                        .clickable { isFullScreen = !isFullScreen }
+                        .semantics { contentDescription = if (isFullScreen) "恢复默认高度" else "全屏显示" },
                     contentAlignment = Alignment.Center,
                 ) {
                     ChatFullscreenToggleIcon(isFullScreen = isFullScreen, tint = IosTheme.colors.label)
@@ -994,6 +988,7 @@ private fun ChatComposerBottomSheet(
                             modifier = Modifier.fillMaxSize(),
                             factory = { ctx ->
                                 RichMarkdownEditorView(ctx).apply {
+                                    setOnDismissInputListener(dismiss)
                                     hint = "发送消息…"
                                     updateThemeColors(textColorInt, hintColorInt)
                                     setCompletionSource(completionSource)
@@ -1005,6 +1000,7 @@ private fun ChatComposerBottomSheet(
                                 }
                             },
                             update = { view ->
+                                view.setOnDismissInputListener(dismiss)
                                 view.updateThemeColors(textColorInt, hintColorInt)
                                 view.setTextSize(android.util.TypedValue.COMPLEX_UNIT_PX, editorTextSizePx)
                                 view.setCompletionSource(completionSource)
@@ -1124,7 +1120,10 @@ private fun ChatComposerBottomSheet(
                             .size(36.dp)
                             .clip(CircleShape)
                             .background(if (showSheetEmojiPicker) IosTheme.colors.accent.copy(alpha = 0.15f) else Color.Transparent)
-                            .clickable { showSheetEmojiPicker = !showSheetEmojiPicker },
+                            .clickable {
+                                showSheetEmojiPicker = !showSheetEmojiPicker
+                                if (showSheetEmojiPicker) keyboard?.hide() else editorView?.requestInputFocus()
+                            },
                         contentAlignment = Alignment.Center,
                     ) {
                         ComposerEmojiIcon(tint = if (showSheetEmojiPicker) IosTheme.colors.accent else IosTheme.colors.label)

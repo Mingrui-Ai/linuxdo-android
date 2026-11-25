@@ -2223,17 +2223,24 @@ private fun MainNavigation(state: UiState, viewModel: MainViewModel, lifecycle: 
             }) else null,
         )
     }
+    val privateMessageDrafts = remember(accountState.activeUserId) { mutableMapOf<String, org.linuxdo.android.ui.screen.PrivateMessageInputDraft>() }
     privateMessageRecipient?.let { recipient ->
-        PrivateMessageComposeSheet(
-            initialRecipient = recipient,
-            onDismiss = { privateMessageRecipient = null },
-            onSend = viewModel::createPrivateMessage,
-            onUploadAttachment = viewModel::uploadAttachmentDirect,
-            onCreated = { topicId, title ->
-                viewModel.loadProfile(org.linuxdo.android.data.ProfileSection.Messages, refresh = true)
-                stack.push(Route.TopicDetail(topicId, title))
-            },
-        )
+        key(accountState.activeUserId, recipient) {
+            PrivateMessageComposeSheet(
+                initialRecipient = recipient,
+                initialDraft = privateMessageDrafts[recipient],
+                onKeepDraft = { draft ->
+                    if (draft == null) privateMessageDrafts.remove(recipient) else privateMessageDrafts[recipient] = draft
+                },
+                onDismiss = { privateMessageRecipient = null },
+                onSend = viewModel::createPrivateMessage,
+                onUploadAttachment = viewModel::uploadAttachmentDirect,
+                onCreated = { topicId, title ->
+                    viewModel.loadProfile(org.linuxdo.android.data.ProfileSection.Messages, refresh = true)
+                    stack.push(Route.TopicDetail(topicId, title))
+                },
+            )
+        }
     }
 }
 

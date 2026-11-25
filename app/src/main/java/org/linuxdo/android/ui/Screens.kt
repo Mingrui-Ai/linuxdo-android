@@ -166,6 +166,9 @@ import java.io.File
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.StrokeJoin
 import androidx.compose.ui.graphics.SolidColor
+import org.linuxdo.android.ui.design.rememberComposerDismiss
+import org.linuxdo.android.ui.design.composerBackKeys
+import org.linuxdo.android.ui.design.handleComposerBackKey
 import androidx.activity.compose.BackHandler
 import androidx.activity.result.PickVisualMediaRequest
 import androidx.compose.ui.viewinterop.AndroidView
@@ -6302,6 +6305,9 @@ private sealed interface InitialSpanItem {
 internal class RichMarkdownEditorView(context: Context) : EditText(context) {
 
     private var onMarkdownChange: ((String) -> Unit)? = null
+    private var onDismissInput: (() -> Unit)? = null
+
+    fun setOnDismissInputListener(listener: () -> Unit) { onDismissInput = listener }
     private var onRemoveAttachment: ((String) -> Unit)? = null
     private var onPreviewImage: ((String) -> Unit)? = null
     private var onEditPoll: ((CreatorPollSpan, PollBuilderSpec) -> Unit)? = null
@@ -6411,6 +6417,7 @@ internal class RichMarkdownEditorView(context: Context) : EditText(context) {
     }
 
     override fun onKeyPreIme(keyCode: Int, event: android.view.KeyEvent): Boolean {
+        onDismissInput?.let { if (handleComposerBackKey(event, it)) return true }
         if (keyCode == android.view.KeyEvent.KEYCODE_BACK && completionPopup?.isShowing == true) {
             if (event.action == android.view.KeyEvent.ACTION_UP) dismissCompletion()
             return true
@@ -6580,6 +6587,7 @@ internal class RichMarkdownEditorView(context: Context) : EditText(context) {
     }
 
     fun requestInputFocus() {
+        if (!isAttachedToWindow) return
         isFocusable = true
         isFocusableInTouchMode = true
         requestFocus()
@@ -6587,6 +6595,7 @@ internal class RichMarkdownEditorView(context: Context) : EditText(context) {
             setSelection(ed.length)
         }
         post {
+            if (!isAttachedToWindow || !hasFocus()) return@post
             val imm = context.getSystemService(Context.INPUT_METHOD_SERVICE) as? android.view.inputmethod.InputMethodManager
             imm?.showSoftInput(this, android.view.inputmethod.InputMethodManager.SHOW_IMPLICIT)
         }
@@ -6928,6 +6937,7 @@ fun TopicCreatorSheet(
     var showTagDialog by remember { mutableStateOf(false) }
     var showCloseConfirmDialog by remember { mutableStateOf(false) }
     var previewingImage by remember { mutableStateOf<String?>(null) }
+    var pickingAttachment by remember { mutableStateOf(false) }
 
     var editorView by remember { mutableStateOf<RichMarkdownEditorView?>(null) }
 
@@ -6944,11 +6954,11 @@ fun TopicCreatorSheet(
 
     val imagePicker = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.PickVisualMedia(),
-        onResult = { uri -> if (uri != null) onAttach(uri) },
+        onResult = { uri -> pickingAttachment = false; if (uri != null) onAttach(uri) },
     )
     val filePicker = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.OpenDocument(),
-        onResult = { uri -> if (uri != null) onAttach(uri) },
+        onResult = { uri -> pickingAttachment = false; if (uri != null) onAttach(uri) },
     )
 
     val attemptClose = {
@@ -6961,15 +6971,13 @@ fun TopicCreatorSheet(
         }
     }
 
-    BackHandler {
-        when {
-            showPollDialog -> {
-                showPollDialog = false
-                editingPollTarget = null
-            }
-            showEmojiPicker -> showEmojiPicker = false
-            else -> attemptClose()
-        }
+    val dismiss = rememberComposerDismiss(
+        enabled = !showPollDialog && !showCategoryDialog && !showTagDialog && !showCloseConfirmDialog && previewingImage == null,
+        canDismiss = !state.savingDraft && !state.submitting,
+        ignoreKeyboardHide = showEmojiPicker || pickingAttachment,
+    ) {
+        editorView?.exportToMarkdown()?.let(onRawChange)
+        attemptClose()
     }
 
     LaunchedEffect(state.notice) {
@@ -7006,15 +7014,16 @@ fun TopicCreatorSheet(
     Column(
         modifier = Modifier
             .fillMaxSize()
+            .composerBackKeys(dismiss)
             .background(IosTheme.colors.card)
             .windowInsetsPadding(WindowInsets.systemBars.union(WindowInsets.displayCutout).only(WindowInsetsSides.Top))
             .clickable(
                 interactionSource = remember { MutableInteractionSource() },
                 indication = null,
-                onClick = {},
+                onClick = dismiss,
             ),
     ) {
-        // 顶部操作栏：关闭 ✕ + 标题 + 保存 + 发布
+        // 顶部操作栏：标题、保存与发布；系统返回或空白处关闭
         Row(
             modifier = Modifier
                 .fillMaxWidth()
@@ -7022,23 +7031,6 @@ fun TopicCreatorSheet(
                 .padding(horizontal = 12.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            Box(
-                modifier = Modifier
-                    .size(34.dp)
-                    .clip(CircleShape)
-                    .background(IosTheme.colors.fieldBackground)
-                    .clickable(enabled = !state.savingDraft && !state.submitting) { attemptClose() },
-                contentAlignment = Alignment.Center,
-            ) {
-                Text(
-                    text = "✕",
-                    style = IosTheme.type.subheadline.copy(fontWeight = FontWeight.SemiBold),
-                    color = IosTheme.colors.secondaryLabel,
-                )
-            }
-
-            Spacer(Modifier.width(10.dp))
-
             Text(
                 text = if (state.isReplyDraft) "编辑回复草稿" else "创建新话题",
                 style = IosTheme.type.headline.copy(fontSize = 17.sp),
@@ -7513,6 +7505,7 @@ fun TopicCreatorSheet(
                 modifier = Modifier.fillMaxSize(),
                 factory = { ctx ->
                     RichMarkdownEditorView(ctx).apply {
+                        setOnDismissInputListener(dismiss)
                         updateThemeColors(textColorInt, hintColorInt)
                         setCompletionSource(completionSource, categoryId = state.categoryId)
                         setInitialMarkdown(state.raw, state.attachments)
@@ -7527,6 +7520,7 @@ fun TopicCreatorSheet(
                     }
                 },
                 update = { view ->
+                    view.setOnDismissInputListener(dismiss)
                     view.updateThemeColors(textColorInt, hintColorInt)
                     view.setTextSize(android.util.TypedValue.COMPLEX_UNIT_PX, editorTextSizePx)
                     view.isEnabled = !state.loadingDraft && !state.submitting
@@ -7581,6 +7575,7 @@ fun TopicCreatorSheet(
                     .size(36.dp)
                     .clip(RoundedCornerShape(8.dp))
                     .clickable(enabled = canPickMedia) {
+                        pickingAttachment = true
                         imagePicker.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly))
                     },
                 contentAlignment = Alignment.Center,
@@ -7598,6 +7593,7 @@ fun TopicCreatorSheet(
                     .size(36.dp)
                     .clip(RoundedCornerShape(8.dp))
                     .clickable(enabled = canPickMedia) {
+                        pickingAttachment = true
                         filePicker.launch(arrayOf("*/*"))
                     },
                 contentAlignment = Alignment.Center,
@@ -7759,7 +7755,7 @@ fun TopicCreatorSheet(
     }
 
     // 关闭二次确认对话框
-    // 关闭二次确认对话框（参考最新 UI：右上角关闭 X，居中标题与说明，垂直全宽胶囊按钮）
+    // 保留草稿同步确认，返回或点外部继续编辑。
     if (showCloseConfirmDialog) {
         Dialog(onDismissRequest = { showCloseConfirmDialog = false }) {
             Column(
@@ -7770,27 +7766,6 @@ fun TopicCreatorSheet(
                     .padding(horizontal = 22.dp, vertical = 20.dp),
                 horizontalAlignment = Alignment.CenterHorizontally,
             ) {
-                // 右上角关闭 ✕（点击关闭弹框，继续编辑）
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.End,
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    Box(
-                        modifier = Modifier
-                            .size(28.dp)
-                            .clip(CircleShape)
-                            .clickable { showCloseConfirmDialog = false },
-                        contentAlignment = Alignment.Center,
-                    ) {
-                        Text(
-                            text = "✕",
-                            style = IosTheme.type.caption.copy(fontSize = 14.sp, fontWeight = FontWeight.SemiBold),
-                            color = IosTheme.colors.secondaryLabel,
-                        )
-                    }
-                }
-
                 Text(
                     text = "草稿还在同步中",
                     style = IosTheme.type.largeTitle.copy(fontWeight = FontWeight.Bold, fontSize = 22.sp),

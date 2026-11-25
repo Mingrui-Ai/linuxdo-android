@@ -1,7 +1,9 @@
 package org.linuxdo.android.ui.screen
 
 import android.net.Uri
-import androidx.activity.compose.BackHandler
+import org.linuxdo.android.ui.design.rememberComposerDismiss
+import org.linuxdo.android.ui.design.composerBackKeys
+import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.PickVisualMediaRequest
 import androidx.activity.result.contract.ActivityResultContracts
@@ -30,7 +32,6 @@ import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -64,19 +65,29 @@ import org.linuxdo.android.ui.design.IosDivider
 import org.linuxdo.android.ui.design.IosTheme
 import org.linuxdo.android.ui.design.FullscreenDialog
 
+internal data class PrivateMessageInputDraft(
+    val recipients: String,
+    val title: String,
+    val raw: String,
+    val attachments: List<AttachedMedia>,
+)
+
 @Composable
-fun PrivateMessageComposeSheet(
+internal fun PrivateMessageComposeSheet(
     initialRecipient: String = "",
+    initialDraft: PrivateMessageInputDraft? = null,
+    onKeepDraft: (PrivateMessageInputDraft?) -> Unit = {},
     onDismiss: () -> Unit,
     onSend: suspend (List<String>, String, String) -> Long,
     onUploadAttachment: (suspend (Uri) -> AttachedMedia)? = null,
     onCreated: (Long, String) -> Unit,
 ) {
-    var recipients by remember(initialRecipient) { mutableStateOf(initialRecipient) }
-    var title by remember { mutableStateOf("") }
-    var raw by remember { mutableStateOf("") }
-    var pendingAttachments by remember { mutableStateOf<List<AttachedMedia>>(emptyList()) }
+    var recipients by remember(initialRecipient) { mutableStateOf(initialDraft?.recipients ?: initialRecipient) }
+    var title by remember { mutableStateOf(initialDraft?.title.orEmpty()) }
+    var raw by remember { mutableStateOf(initialDraft?.raw.orEmpty()) }
+    var pendingAttachments by remember { mutableStateOf(initialDraft?.attachments.orEmpty()) }
     var isUploading by remember { mutableStateOf(false) }
+    var pickingAttachment by remember { mutableStateOf(false) }
     var showEmojiPicker by rememberSaveable { mutableStateOf(false) }
     var sending by remember { mutableStateOf(false) }
     var error by remember { mutableStateOf<String?>(null) }
@@ -88,6 +99,7 @@ fun PrivateMessageComposeSheet(
     val hintColor = IosTheme.colors.tertiaryLabel.toArgb()
 
     val pickImage = rememberLauncherForActivityResult(ActivityResultContracts.PickVisualMedia()) { uri ->
+        pickingAttachment = false
         if (uri != null && onUploadAttachment != null) {
             scope.launch {
                 isUploading = true
@@ -104,6 +116,7 @@ fun PrivateMessageComposeSheet(
     }
 
     val pickFile = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
+        pickingAttachment = false
         if (uri != null && onUploadAttachment != null) {
             scope.launch {
                 isUploading = true
@@ -119,16 +132,22 @@ fun PrivateMessageComposeSheet(
         }
     }
 
-    FullscreenDialog(
-        onDismissRequest = { if (!sending && !isUploading) onDismiss() },
-    ) {
-        BackHandler(enabled = true) {
-            if (!sending && !isUploading) onDismiss()
+    val close = {
+        if (!sending && !isUploading) {
+            val text = editorView?.exportToMarkdown() ?: raw
+            onKeepDraft(PrivateMessageInputDraft(recipients, title, text, pendingAttachments))
+            onDismiss()
         }
+    }
+    FullscreenDialog(onDismissRequest = close) {
+        val dismiss = rememberComposerDismiss(canDismiss = !sending && !isUploading,
+            ignoreKeyboardHide = showEmojiPicker || pickingAttachment, onDismiss = close)
 
         Column(
             modifier = Modifier
                 .fillMaxSize()
+                .composerBackKeys(dismiss)
+                .clickable(interactionSource = remember { MutableInteractionSource() }, indication = null, onClick = dismiss)
                 .background(IosTheme.colors.card)
                 .safeDrawingPadding(),
         ) {
@@ -140,16 +159,6 @@ fun PrivateMessageComposeSheet(
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.SpaceBetween,
             ) {
-                TextButton(
-                    onClick = onDismiss,
-                    enabled = !sending && !isUploading,
-                ) {
-                    Text(
-                        "取消",
-                        style = TextStyle(fontSize = 16.sp, color = IosTheme.colors.secondaryLabel),
-                    )
-                }
-
                 Text(
                     text = "新建私信",
                     style = IosTheme.type.headline,
@@ -179,6 +188,7 @@ fun PrivateMessageComposeSheet(
                                     val gap = if (raw.isBlank() || raw.endsWith("\n")) "" else "\n\n"
                                     val finalContent = if (unincluded.isEmpty()) raw.trim() else "${raw.trim()}$gap${unincluded.joinToString("\n") { it.toMarkdown() }}"
                                     val topicId = onSend(targets, title.trim(), finalContent)
+                                    onKeepDraft(null)
                                     onCreated(topicId, title.trim())
                                     onDismiss()
                                 } catch (exception: Exception) {
@@ -292,15 +302,17 @@ fun PrivateMessageComposeSheet(
                     modifier = Modifier.fillMaxSize(),
                     factory = { context ->
                         RichMarkdownEditorView(context).apply {
+                            setOnDismissInputListener(dismiss)
                             updateThemeColors(textColor, hintColor)
                             setCompletionSource(completionSource)
-                            setInitialMarkdown(raw, emptyList())
+                            setInitialMarkdown(raw, pendingAttachments)
                             setOnMarkdownChangeListener { raw = it }
                             hint = "在此撰写私信正文，支持 Markdown"
                             editorView = this
                         }
                     },
                     update = {
+                        it.setOnDismissInputListener(dismiss)
                         it.updateThemeColors(textColor, hintColor)
                         it.setTextSize(android.util.TypedValue.COMPLEX_UNIT_PX, editorTextSizePx)
                         it.setCompletionSource(completionSource)
@@ -396,6 +408,7 @@ fun PrivateMessageComposeSheet(
                         .size(36.dp)
                         .clip(RoundedCornerShape(8.dp))
                         .clickable(enabled = !isUploading && !sending) {
+                            pickingAttachment = true
                             pickImage.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly))
                         },
                     contentAlignment = Alignment.Center,
@@ -413,6 +426,7 @@ fun PrivateMessageComposeSheet(
                         .size(36.dp)
                         .clip(RoundedCornerShape(8.dp))
                         .clickable(enabled = !isUploading && !sending) {
+                            pickingAttachment = true
                             pickFile.launch(arrayOf("*/*"))
                         },
                     contentAlignment = Alignment.Center,

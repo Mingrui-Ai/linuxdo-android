@@ -191,6 +191,8 @@ import android.webkit.CookieManager
 import android.webkit.MimeTypeMap
 import android.webkit.WebView
 import android.widget.Toast
+import org.linuxdo.android.ui.design.rememberComposerDismiss
+import org.linuxdo.android.ui.design.composerBackKeys
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.PickVisualMediaRequest
@@ -536,7 +538,7 @@ fun TopicDetailScreen(
     var manageTarget by remember { mutableStateOf<Post?>(null) }
     var deleteTarget by remember { mutableStateOf<Post?>(null) }
     var boostTarget by remember { mutableStateOf<BoostTarget?>(null) }
-    var boostDraft by rememberSaveable { mutableStateOf("") }
+    var boostDrafts by rememberSaveable { mutableStateOf(hashMapOf<Long, String>()) }
     var noticeToast by remember { mutableStateOf<String?>(null) }
     var authorMenuExpanded by remember { mutableStateOf(false) }
     var showToc by remember { mutableStateOf(false) }
@@ -1758,19 +1760,16 @@ fun TopicDetailScreen(
             boostTarget?.let { target ->
                 BoostSheet(
                     target = target,
-                    draft = boostDraft,
-                    onDraftChange = { boostDraft = it },
+                    draft = boostDrafts[target.postId].orEmpty(),
+                    onDraftChange = { boostDrafts = HashMap(boostDrafts).apply { put(target.postId, it) } },
                     busy = writeBusy,
                     onSend = {
-                        val toSend = boostDraft
+                        val toSend = boostDrafts[target.postId].orEmpty()
                         boostTarget = null
-                        boostDraft = ""
+                        boostDrafts = HashMap(boostDrafts).apply { remove(target.postId) }
                         onBoost(target.postId, toSend)
                     },
-                    onDismiss = {
-                        boostTarget = null
-                        boostDraft = ""
-                    },
+                    onDismiss = { boostTarget = null },
                 )
             }
         }
@@ -3494,7 +3493,6 @@ private fun ComposerSheet(
         is ComposerTarget.ReplyTo -> "回复 @${target.username}"
         is ComposerTarget.Edit -> "编辑 #${target.postNumber}"
     }
-    val focus = remember { FocusRequester() }
     val keyboardController = LocalSoftwareKeyboardController.current
     var isFullScreen by rememberSaveable { mutableStateOf(false) }
     var showEmojiPicker by rememberSaveable { mutableStateOf(false) }
@@ -3502,6 +3500,15 @@ private fun ComposerSheet(
     var editingPollTarget by remember { mutableStateOf<Pair<CreatorPollSpan, PollBuilderSpec>?>(null) }
     var previewingImage by remember { mutableStateOf<String?>(null) }
     var editorView by remember(target) { mutableStateOf<RichMarkdownEditorView?>(null) }
+    var pickingAttachment by remember { mutableStateOf(false) }
+    val dismiss = rememberComposerDismiss(
+        enabled = !showPollDialog && previewingImage == null,
+        canDismiss = !composer.submitting,
+        ignoreKeyboardHide = showEmojiPicker || pickingAttachment,
+    ) {
+        editorView?.exportToMarkdown()?.let(onDraftChange)
+        onClose()
+    }
 
     // 服务端草稿恢复或冲突选择后刷新内容，普通输入不重置光标。
     LaunchedEffect(target, composer.loadingDraft, composer.remoteRevision) {
@@ -3528,26 +3535,18 @@ private fun ComposerSheet(
 
     // 系统相册选择器和 SAF 文件选择器都不需要声明存储权限。
     val pickImage = rememberLauncherForActivityResult(ActivityResultContracts.PickVisualMedia()) { uri ->
+        pickingAttachment = false
         uri?.let(onAttach)
     }
     val pickFile = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
+        pickingAttachment = false
         uri?.let(onAttach)
     }
     val busy = composer.submitting || composer.uploading || composer.loadingDraft
 
-    BackHandler(enabled = true) {
-        when {
-            showPollDialog -> {
-                showPollDialog = false
-                editingPollTarget = null
-            }
-            showEmojiPicker -> showEmojiPicker = false
-            else -> onClose()
-        }
-    }
 
-    Box(
-        modifier = Modifier.fillMaxSize(),
+    BoxWithConstraints(
+        modifier = Modifier.fillMaxSize().composerBackKeys(dismiss),
         contentAlignment = Alignment.BottomCenter,
     ) {
         // 背景半透明暗色遮罩,点击收起弹层
@@ -3558,7 +3557,7 @@ private fun ComposerSheet(
                 .clickable(
                     interactionSource = remember { MutableInteractionSource() },
                     indication = null,
-                    onClick = { onClose() },
+                    onClick = dismiss,
                 ),
         )
         // 底部抽屉面板
@@ -3566,12 +3565,8 @@ private fun ComposerSheet(
             modifier = Modifier
                 .fillMaxWidth()
                 .then(
-                    when {
-                        isFullScreen -> Modifier.fillMaxHeight(0.92f)
-                        showEmojiPicker -> Modifier.height(420.dp)
-                        composer.attachments.isNotEmpty() || composer.uploading || composer.draft.contains("[poll", ignoreCase = true) -> Modifier.height(380.dp)
-                        else -> Modifier.height(280.dp)
-                    }
+                    Modifier.height(if (isFullScreen) maxHeight * 0.92f
+                        else minOf(maxHeight * 0.92f, if (showEmojiPicker) 426.dp else 216.dp))
                 )
                 .clip(RoundedCornerShape(topStart = 16.dp, topEnd = 16.dp))
                 .background(IosTheme.colors.card)
@@ -3580,8 +3575,8 @@ private fun ComposerSheet(
                     indication = null,
                     onClick = {}, // 阻止点击穿透到遮罩
                 )
-                .padding(horizontal = 16.dp, vertical = 12.dp),
-            verticalArrangement = Arrangement.spacedBy(10.dp),
+                .padding(horizontal = 12.dp, vertical = 8.dp),
+            verticalArrangement = Arrangement.spacedBy(6.dp),
         ) {
             // 顶部标题与全屏切换栏
             Row(
@@ -3589,27 +3584,14 @@ private fun ComposerSheet(
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.SpaceBetween,
             ) {
-                // 左侧轻量关闭叉号
-                val closeColor = IosTheme.colors.secondaryLabel
-                Box(
-                    modifier = Modifier
-                        .size(32.dp)
-                        .clip(CircleShape)
-                        .clickable { onClose() },
-                    contentAlignment = Alignment.Center,
-                ) {
-                    Canvas(Modifier.size(12.dp)) {
-                        drawLine(closeColor, Offset(0f, 0f), Offset(size.width, size.height), strokeWidth = 1.8f, cap = StrokeCap.Round)
-                        drawLine(closeColor, Offset(size.width, 0f), Offset(0f, size.height), strokeWidth = 1.8f, cap = StrokeCap.Round)
-                    }
-                }
-
                 Text(
                     heading,
                     style = IosTheme.type.headline,
                     fontWeight = FontWeight.SemiBold,
                     color = IosTheme.colors.label,
                     maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.weight(1f),
                 )
 
                 // 右上角全屏/恢复 切换图标
@@ -3644,6 +3626,7 @@ private fun ComposerSheet(
                         modifier = Modifier.fillMaxSize(),
                         factory = { ctx ->
                             RichMarkdownEditorView(ctx).apply {
+                                setOnDismissInputListener(dismiss)
                                 updateThemeColors(textColorInt, hintColorInt)
                                 setCompletionSource(completionSource, topicId = target.topicId)
                                 setInitialMarkdown(composer.draft, composer.attachments)
@@ -3659,6 +3642,7 @@ private fun ComposerSheet(
                             }
                         },
                         update = { view ->
+                            view.setOnDismissInputListener(dismiss)
                             view.updateThemeColors(textColorInt, hintColorInt)
                             view.setTextSize(android.util.TypedValue.COMPLEX_UNIT_PX, editorTextSizePx)
                             view.setCompletionSource(completionSource, topicId = target.topicId)
@@ -3689,6 +3673,7 @@ private fun ComposerSheet(
                         .size(36.dp)
                         .clip(CircleShape)
                         .clickable(enabled = !busy) {
+                            pickingAttachment = true
                             pickImage.launch(
                                 PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly),
                             )
@@ -3707,6 +3692,7 @@ private fun ComposerSheet(
                         .size(36.dp)
                         .clip(CircleShape)
                         .clickable(enabled = !busy) {
+                            pickingAttachment = true
                             pickFile.launch(arrayOf("*/*"))
                         }
                         .semantics { contentDescription = "添加附件" },
@@ -3729,8 +3715,7 @@ private fun ComposerSheet(
                             if (next) {
                                 keyboardController?.hide()
                             } else {
-                                runCatching { focus.requestFocus() }
-                                keyboardController?.show()
+                                editorView?.requestInputFocus()
                             }
                         }
                         .semantics { contentDescription = "选择表情" },
@@ -3835,13 +3820,6 @@ private fun ComposerSheet(
                     insertToken(emoji)
                 }
             }
-        }
-    }
-
-    LaunchedEffect(target, composer.loadingDraft) {
-        if (!composer.loadingDraft) {
-            runCatching { focus.requestFocus() }
-            keyboardController?.show()
         }
     }
 
@@ -5147,12 +5125,10 @@ private fun BoostSheet(
     onSend: () -> Unit,
     onDismiss: () -> Unit,
 ) {
-    BackHandler(enabled = true) {
-        if (!busy) onDismiss()
-    }
     val focus = remember { FocusRequester() }
     val keyboardController = LocalSoftwareKeyboardController.current
     var showEmojiPicker by rememberSaveable { mutableStateOf(false) }
+    val dismiss = rememberComposerDismiss(canDismiss = !busy, ignoreKeyboardHide = showEmojiPicker, onDismiss = onDismiss)
     var textFieldValue by remember {
         mutableStateOf(TextFieldValue(draft, selection = TextRange(draft.length)))
     }
@@ -5184,7 +5160,7 @@ private fun BoostSheet(
     val canSend = length.submittable && !busy
 
     Box(
-        modifier = Modifier.fillMaxSize(),
+        modifier = Modifier.fillMaxSize().composerBackKeys(dismiss),
         contentAlignment = Alignment.BottomCenter,
     ) {
         Box(
@@ -5194,7 +5170,7 @@ private fun BoostSheet(
                 .clickable(
                     interactionSource = remember { MutableInteractionSource() },
                     indication = null,
-                    onClick = { if (!busy) onDismiss() },
+                    onClick = dismiss,
                 ),
         )
 
@@ -5208,8 +5184,8 @@ private fun BoostSheet(
                     indication = null,
                     onClick = {},
                 )
-                .padding(horizontal = 16.dp, vertical = 14.dp),
-            verticalArrangement = Arrangement.spacedBy(10.dp),
+                .padding(horizontal = 12.dp, vertical = 8.dp),
+            verticalArrangement = Arrangement.spacedBy(6.dp),
         ) {
             Row(
                 modifier = Modifier.fillMaxWidth(),
@@ -5223,25 +5199,13 @@ private fun BoostSheet(
                     color = IosTheme.colors.label,
                     maxLines = 1,
                 )
-                val closeColor = IosTheme.colors.secondaryLabel
-                Box(
-                    modifier = Modifier
-                        .size(28.dp)
-                        .clip(CircleShape)
-                        .clickable(enabled = !busy, onClick = onDismiss),
-                    contentAlignment = Alignment.Center,
-                ) {
-                    Canvas(Modifier.size(11.dp)) {
-                        drawLine(closeColor, Offset(0f, 0f), Offset(size.width, size.height), strokeWidth = 1.8f, cap = StrokeCap.Round)
-                        drawLine(closeColor, Offset(size.width, 0f), Offset(0f, size.height), strokeWidth = 1.8f, cap = StrokeCap.Round)
-                    }
-                }
+
             }
 
             Box(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .heightIn(min = 76.dp, max = 120.dp)
+                    .heightIn(min = 56.dp, max = 96.dp)
                     .clip(RoundedCornerShape(12.dp))
                     .background(IosTheme.colors.fieldBackground)
                     .verticalScroll(rememberScrollState())
@@ -5319,13 +5283,6 @@ private fun BoostSheet(
                     horizontalArrangement = Arrangement.spacedBy(8.dp),
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
-                    Box(
-                        modifier = Modifier
-                            .clickable(enabled = !busy, onClick = onDismiss)
-                            .padding(horizontal = 12.dp, vertical = 6.dp),
-                    ) {
-                        Text("取消", style = IosTheme.type.subheadline, color = IosTheme.colors.secondaryLabel)
-                    }
                     Box(
                         modifier = Modifier
                             .clip(RoundedCornerShape(50))
