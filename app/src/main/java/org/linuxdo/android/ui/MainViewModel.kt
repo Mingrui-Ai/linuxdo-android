@@ -2109,6 +2109,10 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     val loginUiState: StateFlow<LoginUiState> = _loginUiState.asStateFlow()
 
     private fun loadCachedUpdateInfo(): UpdateInfo? {
+        if (!Config.APP_UPDATES_ENABLED) {
+            clearCachedUpdateInfo()
+            return null
+        }
         val prefs = container.preferences
         val latestVersion = prefs.getString("cached_update_version", null)?.takeIf { it.isNotBlank() } ?: return null
         val currentVersion = BuildConfig.VERSION_NAME.substringBefore("-")
@@ -2154,6 +2158,10 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun onVersionItemClick() {
+        if (!Config.APP_UPDATES_ENABLED) {
+            Toast.makeText(getApplication(), "增强版已关闭应用内更新，请从增强版发布页下载", Toast.LENGTH_SHORT).show()
+            return
+        }
         val currentInfo = _updateState.value.updateInfo
         if (currentInfo != null) {
             _updateState.update { it.copy(showDialog = true) }
@@ -2193,6 +2201,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
      * Android 不允许第三方静默安装,所以这里最多做到「下完直接弹安装确认」。
      */
     fun startApkUpdate() {
+        if (!Config.APP_UPDATES_ENABLED) return
         val info = _updateState.value.updateInfo ?: return
         if (apkUpdateJob?.isActive == true) return
         val context = getApplication<Application>()
@@ -2424,6 +2433,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
      * 3. 回退 Release 正文包含 `[force]`、`[mandatory]`、`[必升]`、`[min_version: X.Y.Z]` 或 `[min_code: N]`
      */
     fun checkForUpdates(manual: Boolean = false) {
+        if (!Config.APP_UPDATES_ENABLED) return
         if (_updateState.value.checking) {
             if (manual) {
                 viewModelScope.launch(Dispatchers.Main) {

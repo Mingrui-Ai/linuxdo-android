@@ -937,6 +937,13 @@ private fun MainNavigation(state: UiState, viewModel: MainViewModel, lifecycle: 
     }
 
     fun selectBoard(tab: MainTab) {
+        if (tab != selected) {
+            // 发帖入口的草稿箱是临时页面，切换板块后恢复原浏览页。
+            // 也清理目标栈中旧版本留下的草稿箱，不重置底层页面及滚动状态。
+            listOf(stacks.getValue(selected), stacks.getValue(tab)).forEach { tabStack ->
+                if (tabStack.current == Route.Drafts) tabStack.pop()
+            }
+        }
         selected = tab
     }
     fun openSearch() {

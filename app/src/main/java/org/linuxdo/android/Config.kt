@@ -81,37 +81,31 @@ object Config {
     const val SESSION_COOKIE = "_t"
     const val CF_CLEARANCE_COOKIE = "cf_clearance"
 
-    /** 应用版本检查与升级（公开 APK 分发仓库 xuemk/linuxdo-android 根目录 version.json）。 */
+    /** 增强版 1.0 关闭应用内更新，安装包仅通过自有仓库发布页分发。 */
+    const val APP_UPDATES_ENABLED = false
     val UPDATE_VERSION_JSON_URLS = listOf(
-        "https://api.github.com/repos/xuemk/linuxdo-android/contents/version.json",
-        "https://raw.githubusercontent.com/xuemk/linuxdo-android/master/version.json",
-        "https://fastly.jsdelivr.net/gh/xuemk/linuxdo-android@master/version.json",
+        "https://api.github.com/repos/Mingrui-Ai/linuxdo-android/contents/version.json",
+        "https://raw.githubusercontent.com/Mingrui-Ai/linuxdo-android/master/version.json",
     )
-    const val UPDATE_RELEASES_API_URL = "https://api.github.com/repos/xuemk/linuxdo-android/releases/latest"
-    const val UPDATE_RELEASES_PAGE_URL = "https://github.com/xuemk/linuxdo-android/releases/latest"
+    const val UPDATE_RELEASES_API_URL = "https://api.github.com/repos/Mingrui-Ai/linuxdo-android/releases/latest"
+    const val UPDATE_RELEASES_PAGE_URL = "https://github.com/Mingrui-Ai/linuxdo-android/releases/latest"
 
-    /**
-     * 远端 version.json 尚未推送到仓库时的本地兜底清单（与根目录 version.json 保持一致，便于本地预演测试）。
-     *
-     * `apkSha256` 为可选字段：填了就在应用内下载完成后校验，不匹配拒绝安装；
-     * 留空或省略则跳过校验，不阻塞发版流程。
-     */
+    // 兼容保留的更新解析代码；当前所有检查与下载入口均已禁用。
     const val FALLBACK_VERSION_MANIFEST_JSON = """
         {
-          "versionCode": 19,
-          "versionName": "1.6.1",
+          "applicationId": "org.linuxdo.android.enhanced",
+          "versionCode": 100,
+          "versionName": "1.0",
+          "updatesEnabled": false,
           "forceUpdate": false,
           "minVersionCode": 1,
-          "title": "LINUX DO Android v1.6.1 正式版更新说明",
+          "title": "LinuxDo 增强版 1.0",
           "changelog": [
-            "1、专属邮箱原生收发：内置 LINUX DO 邮箱收件箱、读信与写信，支持 H5 网页邮箱一键自动登录",
-            "2、附件高速下载与灵动进度条：三通道智能防截断（直连/系统通道/内置浏览器），支持顶部悬浮进度条与离开话题后台持续下载",
-            "3、阅读与交互体验升级：支持全局字体缩放（80%~120%）、右侧悬浮楼层导航条、用户签名小尾巴与超链接大图/商店直跳",
-            "4、后台通知与角标进化：前台高敏轮询 + 息屏阶梯闹钟低功耗守护，深度适配主流国产系统桌面未读角标",
-            "5、网络与风控稳定性加固：彻底根治新安装与日常 429 速率挑战循环，优化 Anycast 冷启动选优、VPN 智能让渡与会话保护"
+            "增强版首发：个人侧栏、原生资料编辑、历史与草稿同步、聊天与阅读交互优化。",
+            "使用独立包名和签名，关闭应用内更新，不接收上游更新。"
           ],
-          "apkUrl": "https://github.com/xuemk/linuxdo-android/releases/download/v1.6.1/linuxdo-1.6.1-release.apk",
-          "apkSha256": "a776f371cc95175a32cd2906c8684f6045c9175218a691a733010dc8bf7a1f8c"
+          "apkUrl": "https://github.com/Mingrui-Ai/linuxdo-android/releases/download/enhanced-v1.0/linuxdo-enhanced-1.0-arm64-v8a.apk",
+          "releasePageUrl": "https://github.com/Mingrui-Ai/linuxdo-android/releases/tag/enhanced-v1.0"
         }
     """
 }

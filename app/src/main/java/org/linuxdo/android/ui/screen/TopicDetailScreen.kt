@@ -1419,7 +1419,13 @@ fun TopicDetailScreen(
                 }
         ) {
             Column(Modifier.fillMaxSize().background(IosTheme.colors.groupedBackground)) {
-                IosNavBar(title = state.topic?.title ?: title, onBack = onBack, trailing = trailing)
+                IosNavBar(
+                    title = "",
+                    background = IosTheme.colors.groupedBackground,
+                    showDivider = false,
+                    onBack = onBack,
+                    trailing = trailing,
+                )
                 PullToRefreshBox(
                     isRefreshing = state.refreshing,
                     onRefresh = onRefresh,

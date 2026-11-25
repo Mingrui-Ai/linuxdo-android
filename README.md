@@ -1,10 +1,10 @@
-# LinuxDo 增强版
+# LinuxDo 增强版 1.0
 
 面向 [LINUX DO](https://linux.do/) 社区的 Android 原生客户端，基于 [xuemk/linuxdo-android](https://github.com/xuemk/linuxdo-android) 继续开发，由 [Mingrui-Ai](https://github.com/Mingrui-Ai) 独立维护，主要优化刷帖、消息聊天和个人主页的使用体验。
 
-> **开发中 · 非官方衍生版本**
+> **1.0 首发 · 非官方衍生版本 · 免费且无广告**
 >
-> 当前开发分支为 [`independent/main`](https://github.com/Mingrui-Ai/linuxdo-android/tree/independent/main)，正在持续迭代和真机调试，尚未发布增强版 APK Release。本 README 介绍该分支的进展，查看或构建增强版源码时请切换到此分支。
+> [下载增强版 1.0](https://github.com/Mingrui-Ai/linuxdo-android/releases/tag/enhanced-v1.0)。正式源码位于 [`master`](https://github.com/Mingrui-Ai/linuxdo-android/tree/master)，`independent/main` 保持同步。后续仍会持续完善交互体验。
 
 原作者已于 **2026 年 11 月 23 日** [明确同意修改、公开维护源码及免费分发衍生 APK](https://github.com/xuemk/linuxdo-android/issues/15#issuecomment-7101351472)。本项目遵循原项目的非商业、无广告授权条款，保留原作者署名、原仓库链接及 [LICENSE](./LICENSE)。
 
@@ -14,7 +14,7 @@
 
 | 方向 | 主要改动 |
 | --- | --- |
-| 导航与页面切换 | 底部提供“首页、发帖、消息”三个入口，发帖按钮先打开草稿箱，可继续旧稿或新建独立帖子；首页左上角头像展开个人侧栏，右上角搜索，保留“最新”“热门”两个分类，关闭悬浮球后不再显示额外的发帖和排序悬浮按钮；底栏横滑切换首页与消息。 |
+| 导航与页面切换 | 底部提供“首页、发帖、消息”三个入口，发帖按钮先打开草稿箱，可继续旧稿或新建独立帖子；切换首页或消息时退出草稿箱并恢复原浏览页，保留列表位置与草稿内容。首页左上角头像展开个人侧栏，右上角搜索，保留“最新”“热门”两个分类，关闭悬浮球后不再显示额外的发帖和排序悬浮按钮；底栏横滑切换首页与消息。 |
 | 消息与实时聊天 | 通知、频道和直接消息集中在“消息”页；整合实时同步、未读提醒和回复风格的聊天编辑器。通知与聊天统一提供已读、搜索和顶部下拉刷新操作，聊天批量已读保留操作期间新到的消息。 |
 | 个人侧栏与详细主页 | 三处共用资料内容与徽章样式，保留各自布局：详细主页头像在上、粗体名称在下，社区分/叠放徽章位于下一行的 @用户名 后面；侧栏与头像弹窗名称位于头像右侧，社区分/徽章放在简介上方，加入时间/最近活跃放在简介下方。侧栏及弹窗点击头像进入详细主页，侧栏右上双箭头切换账号。收藏、历史、草稿、关注、分类、标签及账号工具集中在侧栏，底部固定设置与深浅色切换；返回时恢复侧栏滚动位置。详细主页默认打开“总结”，保留背景图、上滑收栏和分类吸顶，回到顶部后下拉刷新。 |
 | 统计、等级与徽章 | 总结中的八项统计采用带原 emoji 的两排四列布局；自己的 Lv 标记可打开等级积分；三处徽章预览均进入独立网格页，保留筛选、数量与单枚详情。徽章请求失败时保留已有缓存，不再将网络失败显示为已获得 0 枚。 |
@@ -50,9 +50,11 @@
 
 ## 获取与构建
 
-目前以本地构建体验为主，后续发布信息以 [本仓库 Releases](https://github.com/Mingrui-Ai/linuxdo-android/releases) 为准。
+从 [本仓库 Releases](https://github.com/Mingrui-Ai/linuxdo-android/releases/tag/enhanced-v1.0) 下载 `linuxdo-enhanced-1.0-arm64-v8a.apk`，支持 Android 8.0 及以上的 ARM64 设备。发布页同时提供 SHA-256 校验值、签名证书指纹和源码标签。
 
-当前测试包名为 `org.linuxdo.android.debug`，应用名称为“LinuxDo 增强版”，可与上游原版共存。使用同一签名覆盖安装可保留已有测试数据。独立 Release 的包名、更新源与图标配置仍在准备中；当前应用内更新地址仍指向上游，体验增强版请使用本分支构建的 APK。
+正式版名称为“LinuxDo 增强版”，版本 `1.0`（versionCode 100），独立包名 `org.linuxdo.android.enhanced`，使用独立签名与蓝绿色 L+ 图标。应用内自动/手动更新检测及 APK 更新下载均已关闭，不接收上游更新；旧测试版缓存的上游更新提示也会清除。后续版本请从“设置 → 增强版发布页”手动获取。
+
+正式版可与原版、测试版并存，首次安装需要重新登录；登录后读取同一账号的网页资料、历史和草稿。本机设置、未同步内容不会自动从测试版迁移，请保留测试版直到确认需要的内容已同步。测试包仍使用 `org.linuxdo.android.debug` 与原调试签名，覆盖安装保留原有测试数据。
 
 ### 准备环境
 
@@ -63,7 +65,7 @@
 先获取增强版开发分支：
 
 ```powershell
-git clone --branch independent/main --single-branch https://github.com/Mingrui-Ai/linuxdo-android.git
+git clone --branch master --single-branch https://github.com/Mingrui-Ai/linuxdo-android.git
 cd linuxdo-android
 ```
 
@@ -84,11 +86,15 @@ cd linuxdo-android
 
 macOS / Linux 可使用 `sh ./gradlew :app:assembleDebug` 编译，生成路径相同。
 
+### 正式版签名构建
+
+本地根目录的 `keystore.properties` 配置 `storeFile`、`storePassword`、`keyAlias`、`keyPassword` 后，运行 `./gradlew :app:assembleRelease`；APK 位于 `app/build/outputs/apk/release/`。未配置签名时生成 unsigned APK，不能作为正式安装包分发。密钥、口令和该配置文件均不提交仓库；后续正式版须使用同一签名才能覆盖升级。
+
 ## 参与开发
 
-欢迎向[本仓库](https://github.com/Mingrui-Ai/linuxdo-android/pulls)提交改进 PR，目标分支为 `independent/main`。提交问题修复时，请说明构建版本或提交号、设备型号、Android 版本和复现步骤；截图与日志请先移除账号凭据及其他隐私信息。
+欢迎向[本仓库](https://github.com/Mingrui-Ai/linuxdo-android/pulls)提交改进 PR，目标分支为 `master`。提交问题修复时，请说明构建版本或提交号、设备型号、Android 版本和复现步骤；截图与日志请先移除账号凭据及其他隐私信息。
 
-增强版在 `independent/main` 独立迭代，向上游贡献的改动会另行整理为 PR。
+增强版在 `master` 独立维护，`independent/main` 同步保留，向上游贡献的改动会另行整理为 PR。
 
 ## 授权与致谢
 

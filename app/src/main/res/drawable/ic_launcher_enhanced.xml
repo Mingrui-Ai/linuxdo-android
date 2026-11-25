@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp" android:height="108dp"
+    android:viewportWidth="108" android:viewportHeight="108">
+    <!-- 独立 L+ 标记，所有前景位于自适应图标安全区域。 -->
+    <path android:fillColor="#FFFFFF"
+        android:pathData="M32,30 L43,30 L43,65 L62,65 L62,76 L32,76 Z" />
+    <path android:fillColor="#36E0C5"
+        android:pathData="M65,33 L74,33 L74,42 L83,42 L83,51 L74,51 L74,60 L65,60 L65,51 L56,51 L56,42 L65,42 Z" />
+</vector>

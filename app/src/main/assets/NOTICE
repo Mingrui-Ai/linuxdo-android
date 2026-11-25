@@ -1,0 +1,21 @@
+LinuxDo 增强版 1.0
+非官方衍生版本 · 免费 · 非商业 · 无广告
+
+原作：xuemk / LinuxDo Android
+Copyright (c) 2026 xuemk
+原仓库：https://github.com/xuemk/linuxdo-android
+增强版维护：Mingrui-Ai
+增强版源码：https://github.com/Mingrui-Ai/linuxdo-android
+
+主要修改：个人侧栏与详细主页、原生个人资料编辑、历史/已读/草稿同步、消息聊天、阅读跳楼与交互修复；使用独立包名/签名/图标，关闭应用内更新。
+
+原作者允许免费、非商业、无广告的衍生 APK 分发。完整原项目许可证附在下方；组件不单独用于其他项目。
+
+第三方组件保留各自许可：
+Mozilla GeckoView（MPL 2.0）：https://www.mozilla.org/MPL/2.0/
+AndroidX、Compose、Kotlin、OkHttp、Coil（Apache 2.0）：https://www.apache.org/licenses/LICENSE-2.0
+Jsoup（MIT）：https://jsoup.org/license
+CommonMark Java（BSD 2-Clause）：https://github.com/commonmark/commonmark-java
+Jakarta Mail（EPL 2.0 / GPL 2.0 with Classpath Exception）：https://github.com/jakartaee/mail-api
+Eclipse Angus Activation（BSD 3-Clause）：https://github.com/eclipse-ee4j/angus-activation
+完整依赖版本见源码 app/build.gradle.kts；点击“第三方许可证”可查看发布依赖附带的原文。GeckoView 为未经修改的 Mozilla 135.0.20250130195129 构建，其对应源码由 Mozilla 提供：https://hg.mozilla.org/releases/mozilla-release/
