@@ -75,6 +75,11 @@ import androidx.compose.material.icons.filled.Search
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.Text
+import androidx.compose.material3.DrawerValue
+import androidx.compose.material3.rememberDrawerState
+import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.rememberUpdatedState
+import androidx.compose.ui.semantics.clearAndSetSemantics
 import org.linuxdo.android.ui.screen.PostAction
 import org.linuxdo.android.ui.screen.PostActionIcon
 import androidx.activity.compose.BackHandler
@@ -146,6 +151,7 @@ import org.linuxdo.android.ui.screen.BlacklistScreen
 import org.linuxdo.android.ui.screen.UserCardBottomSheet
 import org.linuxdo.android.ui.screen.UserProfileScreen
 import org.linuxdo.android.ui.screen.ProfileBadgesScreen
+import org.linuxdo.android.ui.screen.AccountSwitchBottomSheet
 import org.linuxdo.android.ui.screen.PrivateMessageComposeSheet
 import org.linuxdo.android.ui.nav.MainTab
 import org.linuxdo.android.ui.nav.TabBar
@@ -631,13 +637,16 @@ private fun NativeWebLoginDialog(
 
 @Composable
 private fun MainNavigation(state: UiState, viewModel: MainViewModel, lifecycle: Lifecycle) {
-    val stacks = MainTab.entries.associateWith { tab ->
+    val stacks = MainTab.primaryTabs.associateWith { tab ->
         key(tab) { rememberSaveable(saver = NavStack.Saver) { NavStack(tab.root) } }
     }
-    val scrollRequests = MainTab.entries.associateWith { tab ->
+    val scrollRequests = MainTab.primaryTabs.associateWith { tab ->
         key(tab) { rememberSaveable { mutableIntStateOf(0) } }
     }
     var selected by rememberSaveable { mutableStateOf(MainTab.Latest) }
+    // 老版本停留在“我的”时回到首页，避免恢复已删除的主导航栈。
+    if (selected !in MainTab.primaryTabs) selected = MainTab.Latest
+    val currentSelected by rememberUpdatedState(selected)
     val holder = rememberSaveableStateHolder()
     val stack = stacks.getValue(selected)
     val scrollToTopRequest = scrollRequests.getValue(selected).intValue
@@ -664,6 +673,18 @@ private fun MainNavigation(state: UiState, viewModel: MainViewModel, lifecycle: 
     val topicCreator by viewModel.topicCreator.collectAsStateWithLifecycle()
     val drafts by viewModel.drafts.collectAsStateWithLifecycle()
     val accountState by viewModel.accounts.collectAsStateWithLifecycle()
+    val drawerState = rememberDrawerState(DrawerValue.Closed)
+    val drawerScope = rememberCoroutineScope()
+    val drawerVisible = drawerState.currentValue != DrawerValue.Closed || drawerState.targetValue != DrawerValue.Closed
+    var showDrawerAccounts by remember { mutableStateOf(false) }
+    var showDrawerScore by remember { mutableStateOf(false) }
+    var drawerReturnEntry by rememberSaveable { mutableStateOf<Long?>(null) }
+    var drawerReturnTab by rememberSaveable { mutableStateOf<String?>(null) }
+    var drawerReturnReady by rememberSaveable { mutableStateOf(false) }
+    var drawerNavigating by remember { mutableStateOf(false) }
+    val drawerAccount = accountState.accounts.firstOrNull { it.userId == accountState.activeUserId }
+        ?.takeIf { it.username.equals(state.username, ignoreCase = true) }
+    val drawerProfile = rememberDrawerProfile(state.username, accountState.activeUserId, drawerVisible)
     val history by viewModel.history.collectAsStateWithLifecycle()
     val userCard by viewModel.userCard.collectAsStateWithLifecycle()
     val followList by viewModel.followList.collectAsStateWithLifecycle()
@@ -797,6 +818,16 @@ private fun MainNavigation(state: UiState, viewModel: MainViewModel, lifecycle: 
         }
     }
     val browsing = state.screen == Screen.List
+    LaunchedEffect(browsing, accountState.switching, accountState.activeUserId) {
+        if (!browsing || accountState.switching) {
+            showDrawerAccounts = false
+            showDrawerScore = false
+            drawerReturnEntry = null
+            drawerReturnTab = null
+            drawerReturnReady = false
+            drawerState.snapTo(DrawerValue.Closed)
+        }
+    }
     LaunchedEffect(browsing, savedTopicsUserId) {
         if (!browsing || savedTopicsUserId <= 0L) showSavedTopics = false
     }
@@ -814,11 +845,11 @@ private fun MainNavigation(state: UiState, viewModel: MainViewModel, lifecycle: 
     }
     val contentObscured = topicCreator.open || composer.open || detailOverlay || showSavedTopics || topicSearch.open || metadataEditor.open ||
         showConnectSheet || globalBrowserUrl != null || privateMessageRecipient != null || accountState.switching ||
-        userCard.loading || userCard.user != null || userCard.error != null
+        userCard.loading || userCard.user != null || userCard.error != null || drawerVisible || showDrawerAccounts || showDrawerScore
     val visibleRoute = stack.current
     val isKeyboardOpen = WindowInsets.ime.getBottom(LocalDensity.current) > 0
     val isDetailRoute = visibleRoute is Route.TopicDetail || visibleRoute == Route.Chat ||
-        visibleRoute is Route.ChatRoom || visibleRoute == Route.Search
+        visibleRoute is Route.ChatRoom || visibleRoute == Route.Search || visibleRoute == Route.Profile || visibleRoute is Route.UserProfile
     val navigationLifecycleState by lifecycle.currentStateFlow.collectAsStateWithLifecycle()
     val listForeground = navigationLifecycleState.isAtLeast(Lifecycle.State.RESUMED) && !contentObscured
     DisposableEffect(lifecycle, browsing, accountState.activeUserId) {
@@ -878,9 +909,93 @@ private fun MainNavigation(state: UiState, viewModel: MainViewModel, lifecycle: 
     fun openCategories() {
         if (stack.current != Route.CategoryList) stack.push(Route.CategoryList)
     }
-    val boardSwipe = Modifier.boundedTabSwipe(selected.ordinal, MainTab.entries.size,
-        enabled = browsing && !contentObscured) { selectBoard(MainTab.entries[it]) }
-    Box(Modifier.fillMaxSize()) {
+    fun openPersonalDrawer() {
+        if (!browsing || contentObscured) return
+        viewModel.refreshAccounts()
+        viewModel.loadCdkScore()
+        drawerScope.launch { drawerState.open() }
+    }
+    fun drawerNavigate(action: () -> Unit) {
+        if (drawerNavigating || drawerState.targetValue == DrawerValue.Closed || accountState.switching) return
+        drawerNavigating = true
+        val accountId = accountState.activeUserId
+        val sourceTab = selected
+        val sourceEntry = stack.entries.last().id
+        drawerReturnEntry = stack.entries.last().id
+        drawerReturnTab = selected.name
+        drawerReturnReady = false
+        drawerScope.launch {
+            try {
+                drawerState.close()
+                if (viewModel.state.value.screen == Screen.List && !viewModel.accounts.value.switching &&
+                    viewModel.accounts.value.activeUserId == accountId && currentSelected == sourceTab && stack.entries.last().id == sourceEntry) {
+                    action()
+                    drawerReturnReady = true
+                }
+            } finally {
+                drawerNavigating = false
+            }
+        }
+    }
+    val drawerScore = cdkScoreState.score.takeIf { cdkScoreState.username.equals(state.username, ignoreCase = true) }
+    val drawerDark = IosTheme.colors.isDark
+    val onDrawerAction: (PersonalDrawerAction) -> Unit = { action ->
+        drawerNavigate {
+            val username = state.username
+            when (action) {
+                PersonalDrawerAction.Profile -> if (username != null) stack.push(Route.Profile)
+                PersonalDrawerAction.Bookmarks -> if (username != null) stack.push(Route.UserTopics(username, "我的收藏", true))
+                PersonalDrawerAction.History -> stack.push(Route.BrowsingHistory)
+                PersonalDrawerAction.Drafts -> stack.push(Route.Drafts)
+                PersonalDrawerAction.Following -> if (username != null) stack.push(Route.FollowList(username))
+                PersonalDrawerAction.Badges -> if (username != null) stack.push(Route.UserBadges(username))
+                PersonalDrawerAction.Level -> showConnectSheet = true
+                PersonalDrawerAction.Categories -> { viewModel.setCategorySubTab(CategorySectionTab.CATEGORIES); openCategories() }
+                PersonalDrawerAction.Tags -> { viewModel.setCategorySubTab(CategorySectionTab.TAGS); openCategories() }
+                PersonalDrawerAction.Blacklist -> stack.push(Route.Blacklist)
+                PersonalDrawerAction.Settings -> stack.push(Route.Settings)
+                PersonalDrawerAction.Share -> if (username != null) context.startActivity(Intent.createChooser(Intent(Intent.ACTION_SEND).apply {
+                    type = "text/plain"
+                    putExtra(Intent.EXTRA_TEXT, "${Config.BASE_URL}/u/${Uri.encode(username)}")
+                }, "分享个人主页"))
+                is PersonalDrawerAction.CategoryTopics -> stack.push(Route.CategoryTopics(action.category.id, action.category.slug, action.category.name))
+                is PersonalDrawerAction.TagTopics -> stack.push(Route.TagTopics(action.tag))
+                is PersonalDrawerAction.Web -> globalBrowserUrl = action.url
+            }
+        }
+    }
+    LaunchedEffect(drawerReturnEntry, drawerReturnTab, drawerReturnReady, selected, stack.entries.last().id,
+        globalBrowserUrl, showConnectSheet, browsing, accountState.switching, topicCreator.open) {
+        if (drawerReturnReady && drawerReturnEntry == stack.entries.last().id && drawerReturnTab == selected.name &&
+            globalBrowserUrl == null && !showConnectSheet && !topicCreator.open && browsing && !accountState.switching) {
+            drawerReturnReady = false
+            drawerReturnEntry = null
+            drawerReturnTab = null
+            // 清除回程标记会重启本 effect，动画由稳定的界面作用域完成。
+            drawerScope.launch { drawerState.open() }
+        }
+    }
+    BackHandler(enabled = drawerVisible && !showDrawerAccounts && !showDrawerScore) {
+        drawerScope.launch { drawerState.close() }
+    }
+    val boardSwipe = Modifier.boundedTabSwipe(MainTab.primaryTabs.indexOf(selected), MainTab.primaryTabs.size,
+        enabled = browsing && !contentObscured) { selectBoard(MainTab.primaryTabs[it]) }
+    PersonalDrawerHost(
+        drawerState = drawerState,
+        gesturesEnabled = drawerVisible && !showDrawerAccounts && !showDrawerScore && browsing && !accountState.switching,
+        drawerContent = {
+            key(accountState.activeUserId, state.username) {
+                PersonalDrawerContent(state.username, drawerAccount, drawerProfile, drawerScore, categories, tagsState,
+                    onLoadCategories = { viewModel.loadCategories() }, onLoadTags = { viewModel.loadTags() },
+                    onAction = onDrawerAction,
+                    onAccounts = { viewModel.refreshAccounts(); showDrawerAccounts = true },
+                    onCommunityScore = { viewModel.loadCdkScore(); showDrawerScore = true },
+                    onToggleTheme = { viewModel.setThemeMode(if (drawerDark) ThemeMode.Light else ThemeMode.Dark) },
+                    onLogin = { drawerScope.launch { drawerState.close(); viewModel.addAccount() } })
+            }
+        },
+    ) {
+    Box(Modifier.fillMaxSize().then(if (drawerVisible) Modifier.clearAndSetSemantics {} else Modifier)) {
         Box(Modifier.fillMaxSize()) {
             holder.SaveableStateProvider(selected.name) {
                 androidx.compose.runtime.CompositionLocalProvider(
@@ -891,7 +1006,8 @@ private fun MainNavigation(state: UiState, viewModel: MainViewModel, lifecycle: 
                 ) {
                 key(selected) {
                     IosNavHost(stack,
-                        interactive = browsing && !topicCreator.open && !showSavedTopics && !topicSearch.open && !metadataEditor.open,
+                        interactive = browsing && !topicCreator.open && !showSavedTopics && !topicSearch.open && !metadataEditor.open &&
+                            !drawerVisible && !showDrawerAccounts && !showDrawerScore,
                         listBars = listBars.takeIf { browsing && listForeground && !isDetailRoute && !isKeyboardOpen },
                         contentWindowInsets = { route ->
                             if (route == Route.Profile || route is Route.UserProfile) WindowInsets(0)
@@ -966,6 +1082,7 @@ private fun MainNavigation(state: UiState, viewModel: MainViewModel, lifecycle: 
                                 onScrollBusyChanged = viewModel::setTopicListScrollBusy,
                                 active = active && listForeground,
                                 scrollToTopRequest = scrollToTopRequest,
+                                homeLeading = { PersonalDrawerAvatar(state.username, drawerAccount, ::openPersonalDrawer) },
                                 trailing = {
                                     IconButton(onClick = ::openSearch, modifier = Modifier.size(48.dp)) {
                                         Icon(Icons.Default.Search, contentDescription = "搜索", tint = IosTheme.colors.label)
@@ -1443,28 +1560,16 @@ private fun MainNavigation(state: UiState, viewModel: MainViewModel, lifecycle: 
                                         username = profileUsername,
                                         active = active,
                                         accountState = accountState,
-                                        onRefreshAccounts = viewModel::refreshAccounts,
-                                        onSwitchAccount = viewModel::switchAccount,
-                                        onRemoveAccount = viewModel::removeAccount,
                                         onAddAccount = viewModel::addAccount,
                                         onOpenTopic = { id, title, post -> stack.push(Route.TopicDetail(id, title, post)) },
                                         onOpenUser = { stack.push(Route.UserProfile(it)) },
                                         onOpenBadges = { stack.push(Route.UserBadges(it)) },
-                                        onBookmarks = { profileUsername?.let { stack.push(Route.UserTopics(it, "我的收藏", true)) } },
-                                        onOpenDrafts = { stack.push(Route.Drafts) },
-                                        onSettings = { stack.push(Route.Settings) },
                                         onOpenConnect = { showConnectSheet = true },
-                                        onOpenHistory = { stack.push(Route.BrowsingHistory) },
-                                        onOpenFollowing = { profileUsername?.let { stack.push(Route.FollowList(it)) } },
-                                        onOpenAppsPlaza = { globalBrowserUrl = "${Config.BASE_URL}/apps" },
-                                        onOpenBlacklist = { stack.push(Route.Blacklist) },
-                                        onOpenLdcStore = { globalBrowserUrl = org.linuxdo.android.ui.screen.ProfileWebApp.Store.url },
-                                        onOpenLdcMail = { globalBrowserUrl = org.linuxdo.android.ui.screen.ProfileWebApp.Mail.url },
                                         onEditProfile = { globalBrowserUrl = "${Config.BASE_URL}/my/preferences/profile" },
                                         cdkScore = cdkScoreState.score.takeIf { cdkScoreState.username.equals(profileUsername, ignoreCase = true) },
                                         onLoadCdkScore = { viewModel.loadCdkScore() },
                                         scrollToTopRequest = scrollToTopRequest,
-                                        onBack = if (profileRoute != null) ({ stack.pop(); Unit }) else null,
+                                        onBack = if (stack.canPop) ({ stack.pop(); Unit }) else null,
                                     )
                                 } else if (profileRoute != null) {
                                     UserProfileScreen(
@@ -1890,7 +1995,7 @@ private fun MainNavigation(state: UiState, viewModel: MainViewModel, lifecycle: 
                 },
                 unreadCount = state.unreadCount + chatUnread,
             ) { tab ->
-                if (browsing) {
+                if (browsing && !contentObscured) {
                     if (tab == selected) {
                         stacks.getValue(tab).popToRoot()
                         scrollRequests.getValue(tab).intValue++
@@ -1958,6 +2063,23 @@ private fun MainNavigation(state: UiState, viewModel: MainViewModel, lifecycle: 
             modifier = Modifier.zIndex(18f),
         )
     }
+    }
+    if (showDrawerAccounts) {
+        AccountSwitchBottomSheet(accountState,
+            onDismiss = { showDrawerAccounts = false },
+            onSwitch = { id ->
+                showDrawerAccounts = false
+                drawerReturnEntry = null
+                drawerReturnReady = false
+                drawerScope.launch { drawerState.snapTo(DrawerValue.Closed); viewModel.switchAccount(id) }
+            },
+            onRemoveAccount = viewModel::removeAccount,
+            onAddAccount = {
+                showDrawerAccounts = false
+                drawerScope.launch { drawerState.close(); viewModel.addAccount() }
+            })
+    }
+    if (showDrawerScore) CommunityScoreDialog(drawerScore, { viewModel.loadCdkScore() }, { showDrawerScore = false })
     if (showConnectSheet) {
         ConnectWebSheet(
             state = trustReport,

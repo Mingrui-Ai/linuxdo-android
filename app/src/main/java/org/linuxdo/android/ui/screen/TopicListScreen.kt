@@ -200,6 +200,7 @@ fun TopicListScreen(
     active: Boolean = true,
     scrollToTopRequest: Int = 0,
     trailing: @Composable () -> Unit = {},
+    homeLeading: @Composable () -> Unit = {},
     currentFeed: HomeFeedType? = null,
     feedStates: Map<HomeFeedType, TopicListUiState> = emptyMap(),
     onFeedSelect: ((HomeFeedType) -> Unit)? = null,
@@ -678,6 +679,7 @@ fun TopicListScreen(
                                 },
                                 actionWidth = 48.dp,
                                 actions = trailing,
+                                leading = homeLeading,
                             )
                         }
                     }

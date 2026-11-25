@@ -29,7 +29,13 @@ import org.linuxdo.android.ui.design.IosTheme
 enum class MainTab(val label: String, val root: Route) {
     Latest("首页", Route.TopicList),
     Messages("消息", Route.Notifications),
-    Profile("我的", Route.Profile),
+    // 仅供旧版保存状态反序列化；不再创建导航栈或绘制底栏入口。
+    @Deprecated("个人中心已迁移至首页侧栏")
+    Profile("我的", Route.Profile);
+
+    companion object {
+        val primaryTabs = listOf(Latest, Messages)
+    }
 }
 
 // 发帖是操作按钮，不加入主页面的返回栈或横滑顺序。
@@ -37,7 +43,6 @@ private enum class BottomBarItem(val label: String, val tab: MainTab? = null) {
     Home(MainTab.Latest.label, MainTab.Latest),
     CreateTopic("发帖"),
     Messages(MainTab.Messages.label, MainTab.Messages),
-    Profile(MainTab.Profile.label, MainTab.Profile),
 }
 
 @Composable
@@ -160,34 +165,6 @@ fun TabBar(
                                         drawPath(envPath, color, style = Stroke(width = stroke, cap = StrokeCap.Round))
                                         drawLine(color, Offset(envLeft, envTop), Offset(size.width / 2, envMidY), stroke, StrokeCap.Round)
                                         drawLine(color, Offset(envRight, envTop), Offset(size.width / 2, envMidY), stroke, StrokeCap.Round)
-                                    }
-                                }
-                                BottomBarItem.Profile -> {
-                                    val headCenter = Offset(size.width / 2, size.height * 0.28f)
-                                    val headRadius = size.width * 0.20f
-                                    if (isSelected) {
-                                        drawCircle(color, headRadius, headCenter)
-                                        val bodyPath = Path().apply {
-                                            moveTo(size.width * 0.12f, size.height * 0.88f)
-                                            cubicTo(
-                                                size.width * 0.12f, size.height * 0.56f,
-                                                size.width * 0.88f, size.height * 0.56f,
-                                                size.width * 0.88f, size.height * 0.88f
-                                            )
-                                            close()
-                                        }
-                                        drawPath(bodyPath, color)
-                                    } else {
-                                        drawCircle(color, headRadius, headCenter, style = Stroke(stroke))
-                                        drawArc(
-                                            color,
-                                            180f,
-                                            180f,
-                                            false,
-                                            Offset(size.width * 0.12f, size.height * 0.54f),
-                                            Size(size.width * 0.76f, size.height * 0.68f),
-                                            style = Stroke(stroke)
-                                        )
                                     }
                                 }
                             }
