@@ -977,8 +977,12 @@ fun TopicDetailScreen(
                 .minByOrNull { abs(it.post.postNumber - locatePost.postNumber) }?.post ?: locatePost
         } else locatePost
     }
-    // 只观察目标正文是否就绪，其他楼层分帧发布时不重启正在进行的定位。
-    val locateBodyReady = locateRowPost?.let { preparedBodies[it.id]?.matches(it) == true } ?: true
+    // 居中定位会把目标前面的楼层留在视口内。它们从占位展开为正文/多个切片时，
+    // LazyColumn 保持的是首个可见项的位置，目标就会被挤走；先准备好目标及其前序正文。
+    val locateRowIndex = rows.indexOfFirst { it.post.id == locateRowPost?.id }
+    val locateBodyReady = locateRowIndex >= 0 && rows.take(locateRowIndex + 1).all { row ->
+        preparedBodies[row.post.id]?.matches(row.post) == true
+    }
     LaunchedEffect(active, locateTarget, pendingTargetFloor, state.posts, rows, locateBodyReady, treeView, state.loading, state.error, located, state.previousIds.isNotEmpty(), explicitLocateVersion) {
         val targetLocateNumber = pendingTargetFloor ?: locateTarget
         val needLocate = (!located && locateTarget != null) || pendingTargetFloor != null
@@ -987,12 +991,12 @@ fun TopicDetailScreen(
             // 否则 located 永远为 false，会连带锁死倒序切换等依赖它的逻辑。
             // 降级为「第一个不小于目标楼层的可见楼层」，再不行就按帖子顺序找最近的一层。
             val target = locatePost ?: run { located = true; pendingTargetFloor = null; return@LaunchedEffect }
-            if (!locateBodyReady) return@LaunchedEffect
             val isUserJump = pendingTargetFloor != null
             if (treeView && isUserJump) {
                 // 楼中楼模式下的用户手动跳转: 严格对齐到主楼(depth == 0), 绝不跳进子回复层
                 val effectivePost = locateRowPost ?: target
                 val index = rows.indexOfFirst { it.post.id == effectivePost.id }
+                if (index >= 0 && !locateBodyReady) return@LaunchedEffect
                 if (index >= 0) {
                     scrollToFloor(index)
                     highlightedPost = effectivePost.id
@@ -1006,18 +1010,19 @@ fun TopicDetailScreen(
                     if (needUncollapse || needExpand) {
                         if (needUncollapse) collapsed = collapsed.filterNot { it in ancestors }
                         if (needExpand) expanded = (expanded + ancestors).distinct()
-                        withFrameNanos { }
-                        withFrameNanos { }
+                        // 等新 rows 生效后再算索引，不能继续使用展开前捕获的列表。
+                        return@LaunchedEffect
                     }
                 }
                 val index = rows.indexOfFirst { it.post.postNumber == anchorPostNumber }
+                if (index >= 0 && !locateBodyReady) return@LaunchedEffect
                 if (index >= 0) {
                     scrollToFloor(index)
                     withFrameNanos { }
                     if (list.layoutInfo.visibleItemsInfo.none { postIdFromListKey(it.key) == target.id }) {
                         scrollToFloor(index)
                     }
-                    if (isUserJump) highlightedPost = target.id
+                    highlightedPost = target.id
                 }
             }
             // 无论是否滚动成功都终结定位，避免状态悬挂。

@@ -3667,11 +3667,12 @@ class TopicRepository(
             is JsonObject -> jsonEl.objects("reactions").ifEmpty { jsonEl.objects("posts") }
             else -> emptyList()
         }
+        val reactionEmojis = if (reactionList.isNotEmpty()) emojiUrls() else emptyMap()
         val items = reactionList.mapNotNull { item ->
             val id = item.number("id") ?: return@mapNotNull null
             val post = item["post"] as? JsonObject
             val reaction = item["reaction"] as? JsonObject
-            val reactionValue = reaction?.text("reaction_value")?.ifBlank { reaction?.text("id") } ?: "heart"
+            val reactionValue = reaction?.text("reaction_value").orEmpty().trim().trim(':').ifBlank { "heart" }
             val topicId = post?.number("topic_id") ?: 0L
             val postNumber = post?.number("post_number")?.toInt() ?: 1
             val title = post?.text("topic_title")?.ifBlank { "回应动态" } ?: "回应动态"
@@ -3682,12 +3683,15 @@ class TopicRepository(
                 postNumber = postNumber,
                 title = title,
                 categoryId = null,
-                categoryName = "回应 :$reactionValue:",
-                categoryColor = "E11D48",
+                categoryName = "回应",
+                categoryColor = null,
                 createdAt = item.text("created_at").ifBlank { null },
                 commentExcerpt = excerpt,
                 username = username,
                 avatarUrl = null,
+                reactionName = reactionValue,
+                reactionUrl = reactionEmojis[reactionValue]
+                    ?: "${Config.BASE_URL}/images/emoji/twemoji/$reactionValue.png?v=15",
             )
         }.distinctBy { it.id }
         val minId = reactionList.mapNotNull { it.number("id") }.minOrNull()

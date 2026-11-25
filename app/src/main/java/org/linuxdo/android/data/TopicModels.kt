@@ -245,6 +245,8 @@ data class UserReplyItem(
     val commentExcerpt: String,
     val username: String,
     val avatarUrl: String?,
+    val reactionName: String? = null,
+    val reactionUrl: String? = null,
 )
 
 data class UserRepliesUiState(

@@ -12,6 +12,7 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.CircleShape
@@ -214,7 +215,7 @@ private fun UserReplyCard(
             .clickable(onClick = onClick)
             .padding(horizontal = 16.dp, vertical = 12.dp),
     ) {
-        // 顶部行：头像 + 用户名 + 分类 + 相对时间
+        // 用户名占满剩余宽度，分类/回应与时间共同贴齐右侧。
         Row(
             modifier = Modifier.fillMaxWidth(),
             verticalAlignment = Alignment.CenterVertically,
@@ -236,11 +237,23 @@ private fun UserReplyCard(
                 color = IosTheme.colors.secondaryLabel,
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
-                modifier = Modifier.weight(1f, fill = false),
+                modifier = Modifier.weight(1f),
             )
-            Spacer(Modifier.weight(1f))
+            Spacer(Modifier.width(8.dp))
             item.categoryName?.let { catName ->
-                Row(verticalAlignment = Alignment.CenterVertically) {
+                Row(
+                    modifier = Modifier.widthIn(max = 200.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    if (item.reactionName != null) {
+                        AsyncImage(
+                            model = item.reactionUrl,
+                            contentDescription = "回应：${item.reactionName}",
+                            modifier = Modifier.size(20.dp),
+                            contentScale = ContentScale.Fit,
+                        )
+                        Spacer(Modifier.width(4.dp))
+                    }
                     item.categoryColor?.let { hex ->
                         val dotColor = runCatching { Color(android.graphics.Color.parseColor("#$hex")) }.getOrDefault(IosTheme.colors.accent)
                         Box(
@@ -256,13 +269,15 @@ private fun UserReplyCard(
                         style = IosTheme.type.caption,
                         color = IosTheme.colors.secondaryLabel,
                         maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier.weight(1f, fill = false),
                     )
                 }
-                Spacer(Modifier.width(8.dp))
             }
-            item.createdAt?.let { timeStr ->
+            item.createdAt?.let { time ->
+                Spacer(Modifier.width(8.dp))
                 Text(
-                    text = RelativeTime.format(timeStr),
+                    text = RelativeTime.format(time),
                     style = IosTheme.type.caption,
                     color = IosTheme.colors.tertiaryLabel,
                     maxLines = 1,
@@ -292,6 +307,12 @@ private fun UserReplyCard(
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
             )
+        }
+        item.postNumber?.takeIf { it > 1 }?.let { number ->
+            Spacer(Modifier.height(8.dp))
+            Text("#$number", style = IosTheme.type.caption,
+                color = IosTheme.colors.tertiaryLabel, maxLines = 1,
+                textAlign = TextAlign.End, modifier = Modifier.fillMaxWidth())
         }
     }
     IosDivider(startIndent = 16.dp)
