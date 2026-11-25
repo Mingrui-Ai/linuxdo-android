@@ -86,9 +86,14 @@ private fun ProfileStatusEmoji(raw: String) {
     val isShortcode = code.matches(Regex("[a-zA-Z0-9_+\\-:]+"))
     val url by produceState<String?>(null, code) {
         if (isShortcode) value = profileWebsiteUrl(repo.emojiUrls()[code])
+            ?: "${org.linuxdo.android.Config.BASE_URL}/images/emoji/twemoji/$code.png?v=15"
     }
     var failed by remember(url) { mutableStateOf(false) }
-    val fallback = if (!isShortcode) raw else renderEmojiShortcodes(":$code:")?.takeIf { it.isNotBlank() } ?: "💬"
+    val fallback = if (!isShortcode) raw else when (code) {
+        "mag" -> "🔍"
+        "mag_right" -> "🔎"
+        else -> renderEmojiShortcodes(":$code:")?.takeIf { it.isNotBlank() } ?: "💬"
+    }
     // 图片加载期间也保留可见表情，索引/图片失败不影响查看状态文字。
     Text(fallback, fontSize = 18.sp)
     if (url != null && !failed) {
