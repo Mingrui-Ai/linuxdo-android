@@ -31,6 +31,7 @@ fun UserCardBottomSheet(
     onDismiss: () -> Unit,
     onOpenProfile: (String) -> Unit,
     onOpenBadges: (String) -> Unit,
+    onOpenNetwork: (String, Boolean) -> Unit,
     communityScore: CdkScoreUiState? = null,
     onOpenCommunityScore: (() -> Unit)? = null,
 ) {
@@ -58,7 +59,8 @@ fun UserCardBottomSheet(
                         communityScore = communityScore?.score,
                         communityScoreLoading = communityScore?.loading == true,
                         needsAuthorization = communityScore?.needsAuthorization == true,
-                        onOpenCommunityScore = onOpenCommunityScore, loading = state.loading)
+                        onOpenCommunityScore = onOpenCommunityScore, loading = state.loading,
+                        onOpenNetwork = { onOpenNetwork(user.username, it) })
                     state.error?.let { Text(it, style = IosTheme.type.caption, color = IosTheme.colors.secondaryLabel) }
                     Spacer(Modifier.height(4.dp))
                 }

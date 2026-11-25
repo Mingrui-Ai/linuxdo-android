@@ -2200,6 +2200,10 @@ private fun MainNavigation(state: UiState, viewModel: MainViewModel, lifecycle: 
                 stack.push(Route.UserBadges(username))
             },
             communityScore = drawerScore.takeIf { userCard.isSelf },
+            onOpenNetwork = { username, followers ->
+                viewModel.closeUserCard()
+                stack.push(Route.ProfileNetwork(username, followers))
+            },
             onOpenCommunityScore = if (userCard.isSelf) ({
                 viewModel.closeUserCard()
                 viewModel.loadCdkScore(userInitiated = true)

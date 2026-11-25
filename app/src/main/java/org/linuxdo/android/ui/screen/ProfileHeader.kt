@@ -153,8 +153,8 @@ internal fun ProfileHeader(
             }
             Spacer(Modifier.height(8.dp))
             ProfileDetails(card, badges, badgesLoading, onOpenBadges,
-                loading = card == null, showAchievements = false)
-            ProfilePublicDetails(card, onOpenNetwork, onOpenWebsite, onOpenTopic)
+                loading = card == null, showAchievements = false, onOpenNetwork = onOpenNetwork)
+            ProfilePublicDetails(card, onOpenWebsite, onOpenTopic)
             Spacer(Modifier.height(12.dp))
         }
     }
