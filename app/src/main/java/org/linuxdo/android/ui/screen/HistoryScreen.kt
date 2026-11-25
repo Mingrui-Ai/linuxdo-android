@@ -46,9 +46,6 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import coil.compose.AsyncImage
 import java.time.Instant
-import java.time.LocalDate
-import java.time.ZoneId
-import java.time.format.DateTimeFormatter
 import org.linuxdo.android.data.ReadingHistoryEntry
 import org.linuxdo.android.data.avatarUrlOf
 import org.linuxdo.android.ui.design.IosDivider
@@ -65,6 +62,10 @@ fun HistoryScreen(
     loading: Boolean,
     onQueryChange: (String) -> Unit,
     onClear: () -> Unit,
+    onRefresh: () -> Unit,
+    onLoadMore: () -> Unit,
+    hasMore: Boolean,
+    error: String?,
     onOpenTopic: (Long, String, Int?) -> Unit,
     onBack: () -> Unit,
 ) {
@@ -72,7 +73,7 @@ fun HistoryScreen(
         val filtered = entries.filter { entry ->
             query.isBlank() || entry.title.contains(query.trim(), ignoreCase = true) || entry.topicId.toString().contains(query.trim())
         }
-        filtered.groupBy { dayLabel(it.lastSeenAt) }
+        if (filtered.isEmpty()) emptyMap() else mapOf("最近浏览" to filtered)
     }
 
     IosLargeTitleScaffold(
@@ -141,12 +142,19 @@ fun HistoryScreen(
                         contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp),
                     ) {
                         Text(
-                            "清空",
+                            "清本机",
                             color = IosTheme.colors.secondaryLabel,
                             style = IosTheme.type.subheadline,
                         )
                     }
                 }
+            }
+        }
+        item("history-sync") {
+            Row(Modifier.fillMaxWidth().padding(horizontal = 16.dp), verticalAlignment = Alignment.CenterVertically) {
+                Text(error ?: if (loading) "正在同步…" else "与网页已读记录同步", modifier = Modifier.weight(1f),
+                    style = IosTheme.type.footnote, color = IosTheme.colors.secondaryLabel)
+                TextButton(onClick = onRefresh, enabled = !loading) { Text("刷新") }
             }
         }
         if (loading && entries.isEmpty()) {
@@ -178,6 +186,11 @@ fun HistoryScreen(
                         entry.lastSeenPostNumber.takeIf { it > 1 },
                     )
                 }
+            }
+        }
+        if (hasMore) item("history-more") {
+            TextButton(onClick = onLoadMore, enabled = !loading, modifier = Modifier.fillMaxWidth()) {
+                Text(if (loading) "正在加载…" else "加载更早记录")
             }
         }
     }
@@ -345,7 +358,7 @@ private fun HistoryRow(
                     HistoryClockGlyph(IosTheme.colors.tertiaryLabel)
                     Spacer(Modifier.width(3.dp))
                     Text(
-                        text = RelativeTime.format(Instant.ofEpochMilli(entry.lastSeenAt).toString()),
+                        text = if (entry.lastSeenAt > 0) RelativeTime.format(Instant.ofEpochMilli(entry.lastSeenAt).toString()) else "网页同步",
                         style = IosTheme.type.caption.copy(fontSize = 11.sp),
                         color = IosTheme.colors.secondaryLabel,
                     )
@@ -424,15 +437,5 @@ private fun parseHexColor(hex: String?): Color? {
     val clean = hex.removePrefix("#")
     val value = clean.toLongOrNull(16) ?: return null
     return if (clean.length == 6) Color(0xFF000000 or value) else Color(value)
-}
-
-private fun dayLabel(timestamp: Long): String {
-    val zone = ZoneId.systemDefault()
-    val date = Instant.ofEpochMilli(timestamp).atZone(zone).toLocalDate()
-    return when (date) {
-        LocalDate.now(zone) -> "今天"
-        LocalDate.now(zone).minusDays(1) -> "昨天"
-        else -> date.format(DateTimeFormatter.ofPattern("yyyy年M月d日"))
-    }
 }
 

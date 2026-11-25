@@ -1562,7 +1562,7 @@ fun SettingsScreen(
                     Column(Modifier.weight(1f)) {
                         Text("同步楼层与阅读时长", style = IosTheme.type.body.copy(fontSize = 14.5.sp), fontWeight = FontWeight.Normal)
                         Text(
-                            "在后台实时记录阅读位置与社区足迹",
+                            "同步实际阅读楼层与时长，离线记录联网后补传",
                             style = IosTheme.type.footnote.copy(fontSize = 12.sp),
                             color = IosTheme.colors.secondaryLabel,
                             modifier = Modifier.padding(top = 3.dp),
@@ -5190,7 +5190,7 @@ fun DraftsScreen(
                                 )
                                 Spacer(Modifier.height(6.dp))
                                 Text(
-                                    text = "在发帖界面点击“保存”即可将草稿存放在这里",
+                                    text = "发帖与回复会自动保存，并与网页草稿同步",
                                     style = IosTheme.type.footnote,
                                     color = IosTheme.colors.tertiaryLabel,
                                 )
@@ -5272,8 +5272,8 @@ private fun DraftCard(
             .replace(Regex("\\s+"), " ")
             .trim()
     }
-    val timeText = remember(draft.createdAt) {
-        RelativeTime.format(draft.createdAt)
+    val timeText = remember(draft.createdAt, draft.syncStatus) {
+        draft.syncStatus ?: RelativeTime.format(draft.createdAt)
     }
 
     Box(
@@ -6915,6 +6915,9 @@ fun TopicCreatorSheet(
 
     var editorView by remember { mutableStateOf<RichMarkdownEditorView?>(null) }
 
+    LaunchedEffect(editorView, state.loadingDraft, state.remoteRevision) {
+        if (!state.loadingDraft) editorView?.setInitialMarkdown(state.raw, state.attachments)
+    }
     LaunchedEffect(state.attachments) {
         editorView?.syncAttachments(state.attachments)
     }
@@ -7081,6 +7084,7 @@ fun TopicCreatorSheet(
         IosDivider()
 
         // 错误或保存成功轻提示
+        state.syncStatus?.let { Text(it, style = IosTheme.type.footnote, color = IosTheme.colors.secondaryLabel) }
         state.error?.let { err ->
             Row(
                 modifier = Modifier
@@ -7424,6 +7428,7 @@ fun TopicCreatorSheet(
                 BasicTextField(
                     value = state.title,
                     onValueChange = onTitleChange,
+                    enabled = !state.loadingDraft && !state.submitting,
                     textStyle = IosTheme.type.headline.copy(
                         fontSize = 18.sp,
                         fontWeight = FontWeight.SemiBold,
@@ -7508,6 +7513,7 @@ fun TopicCreatorSheet(
                 update = { view ->
                     view.updateThemeColors(textColorInt, hintColorInt)
                     view.setTextSize(android.util.TypedValue.COMPLEX_UNIT_PX, editorTextSizePx)
+                    view.isEnabled = !state.loadingDraft && !state.submitting
                     view.setCompletionSource(completionSource, categoryId = state.categoryId)
                     view.setOnEditPollListener { span, spec ->
                         editingPollTarget = Pair(span, spec)
@@ -7545,7 +7551,7 @@ fun TopicCreatorSheet(
         IosDivider()
 
         // 底部工具栏：图片上传、文件上传、Emoji、快捷 Markdown、字数提示
-        val canPickMedia = !state.uploading && !state.submitting && !state.savingDraft
+        val canPickMedia = !state.loadingDraft && !state.uploading && !state.submitting && !state.savingDraft
         Row(
             modifier = Modifier
                 .fillMaxWidth()
@@ -7770,7 +7776,7 @@ fun TopicCreatorSheet(
                 }
 
                 Text(
-                    text = "保存草稿？",
+                    text = "草稿还在同步中",
                     style = IosTheme.type.largeTitle.copy(fontWeight = FontWeight.Bold, fontSize = 22.sp),
                     color = IosTheme.colors.label,
                     textAlign = TextAlign.Center,
@@ -7779,7 +7785,7 @@ fun TopicCreatorSheet(
                 Spacer(Modifier.height(10.dp))
 
                 Text(
-                    text = "当前有未保存的内容，关闭前是否\n将其保存为草稿？",
+                    text = "可以等待同步到网页后退出，\n也可以保留在手机，联网后继续同步。",
                     style = IosTheme.type.body.copy(fontSize = 15.sp, lineHeight = 22.sp),
                     color = IosTheme.colors.secondaryLabel,
                     textAlign = TextAlign.Center,
@@ -7810,7 +7816,7 @@ fun TopicCreatorSheet(
 
                 Spacer(Modifier.height(12.dp))
 
-                // 浅红背景红字胶囊按钮：放弃更改
+                // 保留本机草稿，退出后仍可重试同步
                 Box(
                     modifier = Modifier
                         .fillMaxWidth()
@@ -7825,7 +7831,7 @@ fun TopicCreatorSheet(
                     contentAlignment = Alignment.Center,
                 ) {
                     Text(
-                        text = "放弃更改",
+                        text = "保留手机草稿并退出",
                         style = IosTheme.type.headline.copy(fontWeight = FontWeight.SemiBold, fontSize = 16.sp),
                         color = Color(0xFFFF453A),
                     )

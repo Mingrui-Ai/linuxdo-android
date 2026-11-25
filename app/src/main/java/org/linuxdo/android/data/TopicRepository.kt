@@ -561,6 +561,10 @@ class TopicRepository(
         ) else result
     }
 
+    /** 与网页 /my/activity/read 共用的账号已读列表，按服务端最近访问顺序分页。 */
+    suspend fun fetchReadHistory(page: Int = 0): TopicPage =
+        toPage(json.decodeFromString(request("/read.json?page=$page", present = false)), awaitCategories = false)
+
     suspend fun fetchLatest(page: Int, awaitCategories: Boolean = true, present: Boolean = true): TopicPage =
         fetchFeed(HomeFeedType.Latest, page, awaitCategories, present = present)
 
@@ -2371,8 +2375,14 @@ class TopicRepository(
      * GET /drafts.json
      */
     suspend fun fetchDrafts(burst: Boolean = false): List<DraftItem> {
-        val root = objectRequest("/drafts.json?offset=0&limit=50", burst = burst)
-        val draftObjs = root.objects("drafts")
+        val draftObjs = mutableListOf<JsonObject>()
+        var offset = 0
+        do {
+            val page = objectRequest("/drafts.json?offset=$offset&limit=50", burst = burst && offset == 0).objects("drafts")
+            draftObjs.addAll(page)
+            offset += page.size
+        } while (page.size == 50)
+
         val known = categoryCache ?: categories()
         return draftObjs.mapNotNull { obj ->
             val draftKey = obj.text("draft_key").takeIf { it.isNotBlank() } ?: return@mapNotNull null
@@ -2384,6 +2394,7 @@ class TopicRepository(
 
             val raw = dataObj?.text("reply").orEmpty()
             val topicId = obj.number("topic_id") ?: dataObj?.number("topic_id")
+                ?: draftKey.removePrefix("topic_").toLongOrNull()
             val action = dataObj?.text("action")?.takeIf { it.isNotBlank() }
                 ?: if (topicId != null && topicId > 0L) "reply" else "createTopic"
             val title = dataObj?.text("title")?.takeIf { it.isNotBlank() }
@@ -2396,7 +2407,7 @@ class TopicRepository(
                     ?: (elem as? JsonObject)?.text("name")?.takeIf { it.isNotBlank() }
                     ?: (elem as? JsonObject)?.text("id")?.takeIf { it.isNotBlank() }
             }
-            val replyToPostNumber = dataObj?.text("postId")?.toIntOrNull()?.takeIf { it > 0 }
+            val replyToPostNumber = dataObj?.text("reply_to_post_number")?.toIntOrNull()?.takeIf { it > 0 }
                 ?: obj.text("post_number").toIntOrNull()?.takeIf { it > 0 }
             val postId = dataObj?.number("postId")
             val excerptSource = obj.text("excerpt").ifBlank { raw }
@@ -2430,68 +2441,6 @@ class TopicRepository(
     }
 
     /**
-     * 保存草稿至 Discourse 服务端（POST /drafts.json）。
-     * 若遇到 409 Conflict（跨端编辑导致 sequence 过期），自动拉取最新 sequence 重试一次。
-     */
-    suspend fun saveDraft(
-        draftKey: String = "new_topic",
-        sequence: Long = 0L,
-        title: String = "",
-        raw: String,
-        categoryId: Int? = null,
-        tags: List<String> = emptyList(),
-        action: String = "createTopic",
-        topicId: Long? = null,
-        replyToPostNumber: Int? = null,
-    ): Long {
-        val cleanTags = tags.map { it.trim() }.filter { it.isNotEmpty() }.distinct()
-        val dataMap = mutableMapOf<String, JsonElement>(
-            "reply" to JsonPrimitive(raw),
-            "action" to JsonPrimitive(action),
-            "title" to JsonPrimitive(title.trim()),
-            "categoryId" to (categoryId?.takeIf { it > 0 }?.let { JsonPrimitive(it) } ?: JsonNull),
-            "tags" to JsonArray(cleanTags.map { JsonPrimitive(it) }),
-            "archetypeId" to JsonPrimitive("regular"),
-            "metaData" to JsonNull,
-            "composerTime" to JsonPrimitive(1500),
-            "typingTime" to JsonPrimitive(1200),
-        )
-        if (topicId != null && topicId > 0L) {
-            dataMap["topic_id"] = JsonPrimitive(topicId)
-        }
-        if (replyToPostNumber != null && replyToPostNumber > 0) {
-            dataMap["postId"] = JsonPrimitive(replyToPostNumber)
-        }
-        val dataString = JsonObject(dataMap).toString()
-
-        suspend fun doSave(seq: Long): Long {
-            val payload = JsonObject(
-                mapOf(
-                    "draft_key" to JsonPrimitive(draftKey),
-                    "sequence" to JsonPrimitive(seq),
-                    "data" to JsonPrimitive(dataString),
-                ),
-            ).toString()
-            val responseText = mutate("/drafts.json", "POST", payload)
-            val root = runCatching { json.parseToJsonElement(responseText).jsonObject }.getOrNull()
-            return root?.text("draft_sequence")?.toLongOrNull() ?: (seq + 1L)
-        }
-
-        return try {
-            doSave(sequence)
-        } catch (e: HttpStatusException) {
-            if (e.status == 409) {
-                val latestSeq = runCatching {
-                    fetchDrafts(burst = true).firstOrNull { it.draftKey == draftKey }?.sequence
-                }.getOrNull() ?: 0L
-                doSave(latestSeq)
-            } else {
-                throw e
-            }
-        }
-    }
-
-    /**
      * 删除服务端草稿（DELETE /drafts/{draft_key}.json）。
      */
     suspend fun deleteDraft(draftKey: String, sequence: Long = 0L) {
@@ -2509,18 +2458,25 @@ class TopicRepository(
                 payload,
             )
         }
-        try {
-            doDelete(sequence)
-        } catch (e: HttpStatusException) {
-            if (e.status == 409) {
-                val latestSeq = runCatching {
-                    fetchDrafts(burst = true).firstOrNull { it.draftKey == draftKey }?.sequence
-                }.getOrNull() ?: return
-                doDelete(latestSeq)
-            } else {
-                throw e
-            }
-        }
+        val current = fetchDraft(draftKey)
+        check(current.sequence == sequence) { "草稿已在其他设备更新，请刷新后再删除" }
+        doDelete(sequence)
+        check(fetchDraft(draftKey).content == null) { "草稿已在其他设备更新，已保留最新版本，请刷新" }
+    }
+
+    suspend fun fetchDraft(key: String): RemoteDraft {
+        val response = objectRequest("/drafts/${encode(key)}.json")
+        val data = (response["draft"] as? JsonPrimitive)?.contentOrNull
+        val content = data?.takeIf { it.isNotBlank() }?.let { decodeSyncedDraft(key, it) }
+        return RemoteDraft(response.number("draft_sequence") ?: 0L, content, data)
+    }
+
+    /** 保留网页草稿的扩展字段，用原 sequence 提交，409 绝不自动覆盖。 */
+    suspend fun saveSyncedDraft(key: String, sequence: Long, content: SyncedDraftContent, remoteData: String?): Long {
+        val body = JsonObject(mapOf("draft_key" to JsonPrimitive(key), "sequence" to JsonPrimitive(sequence),
+            "data" to JsonPrimitive(encodeSyncedDraft(content, remoteData)))).toString()
+        val result = json.parseToJsonElement(mutate("/drafts.json", "POST", body)).jsonObject
+        return result.number("draft_sequence") ?: error("草稿保存结果未确认，请稍后重试")
     }
 
     /** 编辑楼层。PUT /posts/{id}.json 返回的 post 被包在 `{"post":{...}}` 里,要解一层。 */

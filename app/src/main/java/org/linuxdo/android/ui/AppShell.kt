@@ -662,6 +662,23 @@ private fun MainNavigation(state: UiState, viewModel: MainViewModel, lifecycle: 
     val notificationFilter by viewModel.notificationFilter.collectAsStateWithLifecycle()
     val composer by viewModel.composer.collectAsStateWithLifecycle()
     val topicCreator by viewModel.topicCreator.collectAsStateWithLifecycle()
+    val draftConflict by viewModel.draftConflict.collectAsStateWithLifecycle()
+    draftConflict?.let { conflict ->
+        androidx.compose.material3.AlertDialog(
+            onDismissRequest = viewModel::dismissDraftConflict,
+            title = { Text("两端草稿内容不同") },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                    Text("手机和网页都有修改，请选择继续使用的版本。")
+                    Text("手机：${conflict.local.content.raw.ifBlank { conflict.local.content.title }.take(180)}")
+                    Text("网页：${conflict.remote.content?.let { it.raw.ifBlank { it.title }.take(180) } ?: "草稿已删除"}")
+                    TextButton(onClick = viewModel::dismissDraftConflict) { Text("稍后处理，两端保留") }
+                }
+            },
+            confirmButton = { TextButton(onClick = { viewModel.resolveDraftConflict(true) }) { Text("使用手机版本") } },
+            dismissButton = { TextButton(onClick = { viewModel.resolveDraftConflict(false) }) { Text("使用网页版本") } },
+        )
+    }
     val drafts by viewModel.drafts.collectAsStateWithLifecycle()
     val accountState by viewModel.accounts.collectAsStateWithLifecycle()
     val history by viewModel.history.collectAsStateWithLifecycle()
@@ -783,6 +800,16 @@ private fun MainNavigation(state: UiState, viewModel: MainViewModel, lifecycle: 
         if (autoReadClipboardEnabled) {
             viewModel.checkClipboard(context)
         }
+    }
+
+    DisposableEffect(lifecycle) {
+        viewModel.setAccountSyncForeground(lifecycle.currentState.isAtLeast(Lifecycle.State.RESUMED))
+        val observer = LifecycleEventObserver { _, event ->
+            if (event == Lifecycle.Event.ON_RESUME) viewModel.setAccountSyncForeground(true)
+            if (event == Lifecycle.Event.ON_PAUSE) viewModel.setAccountSyncForeground(false)
+        }
+        lifecycle.addObserver(observer)
+        onDispose { lifecycle.removeObserver(observer); viewModel.setAccountSyncForeground(false) }
     }
 
     DisposableEffect(lifecycle, autoReadClipboardEnabled) {
@@ -936,6 +963,7 @@ private fun MainNavigation(state: UiState, viewModel: MainViewModel, lifecycle: 
                                 }
                                 is Route.UserTopics -> viewModel.loadUserTopics(route.username, route.isBookmark)
                                 is Route.UserReplies -> viewModel.loadUserReplies(route.username, filter = route.filter)
+                                Route.BrowsingHistory -> viewModel.loadHistory()
                                 Route.Drafts -> {
                                     if (!categories.loaded && !categories.loading) viewModel.loadCategories()
                                     viewModel.loadDrafts(refresh = true)
@@ -1492,7 +1520,9 @@ private fun MainNavigation(state: UiState, viewModel: MainViewModel, lifecycle: 
                                 onBack = { stack.pop() },
                                 onRefresh = { viewModel.loadDrafts(refresh = true) },
                                 onEditDraft = { draft ->
-                                    if (draft.topicId != null && draft.topicId > 0L) {
+                                    if (draft.action == "createPrivateMessage" || (draft.topicId == null && draft.archetype != "regular")) {
+                                        globalBrowserUrl = "${Config.BASE_URL}/my/activity/drafts"
+                                    } else if (draft.topicId != null && draft.topicId > 0L) {
                                         stack.pop()
                                         stack.push(Route.TopicDetail(draft.topicId, draft.title, draft.replyToPostNumber))
                                         viewModel.openReplyWithDraft(draft)
@@ -1510,6 +1540,10 @@ private fun MainNavigation(state: UiState, viewModel: MainViewModel, lifecycle: 
                                 loading = history.loading,
                                 onQueryChange = viewModel::setHistoryQuery,
                                 onClear = viewModel::clearHistory,
+                                onRefresh = { viewModel.loadHistory() },
+                                onLoadMore = { viewModel.loadHistory(refresh = false) },
+                                hasMore = history.hasMore,
+                                error = history.error,
                                 onOpenTopic = { id, title, postNumber ->
                                     stack.push(Route.TopicDetail(id, title, postNumber))
                                 },

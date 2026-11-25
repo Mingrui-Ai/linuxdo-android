@@ -980,6 +980,8 @@ data class DraftItem(
     val avatarUrl: String? = null,
     val closed: Boolean = false,
     val archetype: String = "regular",
+    val syncStatus: String? = null,
+    val localOnly: Boolean = false,
 ) {
     val isNewTopic: Boolean
         get() = action == "createTopic" || draftKey.startsWith("new_topic") || topicId == null || topicId <= 0L
