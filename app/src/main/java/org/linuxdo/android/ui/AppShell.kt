@@ -685,6 +685,7 @@ private fun MainNavigation(state: UiState, viewModel: MainViewModel, lifecycle: 
     val drawerAccount = accountState.accounts.firstOrNull { it.userId == accountState.activeUserId }
         ?.takeIf { it.username.equals(state.username, ignoreCase = true) }
     val drawerProfile = rememberDrawerProfile(state.username, accountState.activeUserId, drawerVisible)
+    val drawerBadges = rememberDrawerBadges(state.username, accountState.activeUserId, drawerVisible)
     val history by viewModel.history.collectAsStateWithLifecycle()
     val userCard by viewModel.userCard.collectAsStateWithLifecycle()
     val followList by viewModel.followList.collectAsStateWithLifecycle()
@@ -912,7 +913,7 @@ private fun MainNavigation(state: UiState, viewModel: MainViewModel, lifecycle: 
     fun openPersonalDrawer() {
         if (!browsing || contentObscured) return
         viewModel.refreshAccounts()
-        viewModel.loadCdkScore()
+        viewModel.loadCdkScore(userInitiated = true)
         drawerScope.launch { drawerState.open() }
     }
     fun drawerNavigate(action: () -> Unit) {
@@ -937,7 +938,7 @@ private fun MainNavigation(state: UiState, viewModel: MainViewModel, lifecycle: 
             }
         }
     }
-    val drawerScore = cdkScoreState.score.takeIf { cdkScoreState.username.equals(state.username, ignoreCase = true) }
+    val drawerScore = cdkScoreState.takeIf { it.username.equals(state.username, ignoreCase = true) } ?: CdkScoreUiState()
     val drawerDark = IosTheme.colors.isDark
     val onDrawerAction: (PersonalDrawerAction) -> Unit = { action ->
         drawerNavigate {
@@ -985,11 +986,11 @@ private fun MainNavigation(state: UiState, viewModel: MainViewModel, lifecycle: 
         gesturesEnabled = drawerVisible && !showDrawerAccounts && !showDrawerScore && browsing && !accountState.switching,
         drawerContent = {
             key(accountState.activeUserId, state.username) {
-                PersonalDrawerContent(state.username, drawerAccount, drawerProfile, drawerScore, categories, tagsState,
+                PersonalDrawerContent(state.username, drawerAccount, drawerProfile, drawerScore, drawerBadges, drawerVisible, categories, tagsState,
                     onLoadCategories = { viewModel.loadCategories() }, onLoadTags = { viewModel.loadTags() },
                     onAction = onDrawerAction,
                     onAccounts = { viewModel.refreshAccounts(); showDrawerAccounts = true },
-                    onCommunityScore = { viewModel.loadCdkScore(); showDrawerScore = true },
+                    onCommunityScore = { viewModel.loadCdkScore(userInitiated = true); showDrawerScore = true },
                     onToggleTheme = { viewModel.setThemeMode(if (drawerDark) ThemeMode.Light else ThemeMode.Dark) },
                     onLogin = { drawerScope.launch { drawerState.close(); viewModel.addAccount() } })
             }
@@ -1567,7 +1568,11 @@ private fun MainNavigation(state: UiState, viewModel: MainViewModel, lifecycle: 
                                         onOpenConnect = { showConnectSheet = true },
                                         onEditProfile = { globalBrowserUrl = "${Config.BASE_URL}/my/preferences/profile" },
                                         cdkScore = cdkScoreState.score.takeIf { cdkScoreState.username.equals(profileUsername, ignoreCase = true) },
+                                        cdkScoreLoading = drawerScore.loading,
+                                        cdkScoreError = drawerScore.error,
                                         onLoadCdkScore = { viewModel.loadCdkScore() },
+                                        onReloadCdkScore = { viewModel.loadCdkScore(userInitiated = true) },
+                                        onOpenCdkWebsite = { globalBrowserUrl = "https://cdk.linux.do/" },
                                         scrollToTopRequest = scrollToTopRequest,
                                         onBack = if (stack.canPop) ({ stack.pop(); Unit }) else null,
                                     )
@@ -2079,7 +2084,13 @@ private fun MainNavigation(state: UiState, viewModel: MainViewModel, lifecycle: 
                 drawerScope.launch { drawerState.close(); viewModel.addAccount() }
             })
     }
-    if (showDrawerScore) CommunityScoreDialog(drawerScore, { viewModel.loadCdkScore() }, { showDrawerScore = false })
+    if (showDrawerScore) CommunityScoreDialog(drawerScore.score, { viewModel.loadCdkScore(userInitiated = true) },
+        drawerScore.loading, drawerScore.error,
+        onOpenWebsite = if (drawerScore.error != null) ({
+            showDrawerScore = false
+            onDrawerAction(PersonalDrawerAction.Web("https://cdk.linux.do/"))
+        }) else null,
+    ) { showDrawerScore = false }
     if (showConnectSheet) {
         ConnectWebSheet(
             state = trustReport,
@@ -2094,16 +2105,19 @@ private fun MainNavigation(state: UiState, viewModel: MainViewModel, lifecycle: 
         )
     }
     globalBrowserUrl?.let { url ->
-        InAppBrowserSheet(
-            url = url,
-            onDismiss = {
+        val dismissBrowser = {
                 val closedUrl = globalBrowserUrl
                 globalBrowserUrl = null
                 if (closedUrl?.contains("/my/preferences") == true) {
                     viewModel.syncSignaturePreference(fromWebPreferences = true)
                 }
-            },
-        )
+                if (closedUrl?.let { Uri.parse(it).host } == "cdk.linux.do") viewModel.onCdkWebsiteClosed()
+        }
+        if (Uri.parse(url).host == "cdk.linux.do") {
+            CdkAuthorizationSheet(onDismiss = dismissBrowser)
+        } else {
+            InAppBrowserSheet(url = url, onDismiss = dismissBrowser)
+        }
     }
     if (userCard.loading || userCard.user != null || userCard.error != null) {
         UserCardBottomSheet(

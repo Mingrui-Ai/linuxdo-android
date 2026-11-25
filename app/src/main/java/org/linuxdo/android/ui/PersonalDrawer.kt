@@ -45,12 +45,16 @@ import org.linuxdo.android.Config
 import org.linuxdo.android.data.AccountSession
 import org.linuxdo.android.data.Category
 import org.linuxdo.android.data.UserCardData
+import org.linuxdo.android.data.UserBadgeItem
 import org.linuxdo.android.data.avatarUrlOf
 import org.linuxdo.android.data.orderedCategoryGroups
 import org.linuxdo.android.ui.design.*
 import org.linuxdo.android.ui.screen.LevelBadge
 import org.linuxdo.android.ui.screen.LINUXDO_APPS_PLAZA_URL
 import org.linuxdo.android.ui.screen.ProfileWebApp
+import org.linuxdo.android.ui.screen.ProfileBadgePreview
+import org.linuxdo.android.ui.screen.ProfileCommunityScore
+import org.linuxdo.android.ui.format.RelativeTime
 
 internal sealed interface PersonalDrawerAction {
     data object Profile : PersonalDrawerAction
@@ -97,12 +101,18 @@ internal fun rememberDrawerProfile(username: String?, accountId: Long, open: Boo
     var card by remember(username, accountId) {
         mutableStateOf(username?.let { repository?.getCachedUserCard(it) })
     }
+    var refreshedAt by remember(username, accountId) { mutableLongStateOf(0L) }
     LaunchedEffect(username, accountId, open) {
         if (!open || username.isNullOrBlank() || repository == null) return@LaunchedEffect
+        repository.getCachedUserCard(username)?.let { card = it }
+        if (refreshedAt > 0L && android.os.SystemClock.elapsedRealtime() - refreshedAt < 60_000L) return@LaunchedEffect
         try {
-            val loaded = repository.fetchUserCard(username)
+            val loaded = repository.fetchUserCard(username, forceRefresh = true)
             currentCoroutineContext().ensureActive()
-            if (loaded.username.equals(username, ignoreCase = true)) card = loaded
+            if (loaded.username.equals(username, ignoreCase = true)) {
+                card = loaded
+                refreshedAt = android.os.SystemClock.elapsedRealtime()
+            }
         } catch (error: CancellationException) {
             throw error
         } catch (_: Exception) {
@@ -110,6 +120,34 @@ internal fun rememberDrawerProfile(username: String?, accountId: Long, open: Boo
         }
     }
     return card?.takeIf { it.username.equals(username, ignoreCase = true) }
+}
+
+internal data class DrawerBadges(val items: List<UserBadgeItem>?, val loading: Boolean)
+
+@Composable
+internal fun rememberDrawerBadges(username: String?, accountId: Long, open: Boolean): DrawerBadges {
+    val repository = (LocalContext.current.applicationContext as? App)?.container?.topicRepository
+    var badges by remember(username, accountId) {
+        mutableStateOf(username?.let { repository?.getCachedUserBadges(it) })
+    }
+    var loading by remember(username, accountId) { mutableStateOf(false) }
+    LaunchedEffect(username, accountId, open) {
+        if (!open || username.isNullOrBlank() || repository == null) return@LaunchedEffect
+        repository.getCachedUserBadges(username)?.let { badges = it }
+        loading = true
+        try {
+            val loaded = repository.fetchUserBadges(username)
+            currentCoroutineContext().ensureActive()
+            badges = loaded
+        } catch (error: CancellationException) {
+            throw error
+        } catch (_: Exception) {
+            // 保留已获得的预览；完整徽章页提供错误提示和重试。
+        } finally {
+            loading = false
+        }
+    }
+    return DrawerBadges(badges, loading)
 }
 
 @Composable
@@ -127,12 +165,15 @@ internal fun PersonalDrawerAvatar(
     }
 }
 
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 internal fun PersonalDrawerContent(
     username: String?,
     account: AccountSession?,
     card: UserCardData?,
-    communityScore: Int?,
+    communityScore: CdkScoreUiState,
+    badges: DrawerBadges,
+    visible: Boolean,
     categories: CategoriesUiState,
     tags: TagsUiState,
     onLoadCategories: () -> Unit,
@@ -183,13 +224,14 @@ internal fun PersonalDrawerContent(
                 }
                 if (loggedIn) {
                     Spacer(Modifier.height(12.dp))
-                    UserBioText(card?.bioExcerpt, "还没有填写个人简介", IosTheme.type.footnote, colors.label,
-                        emptyColor = colors.secondaryLabel, maxLines = 2)
-                    Row(Modifier.fillMaxWidth().padding(top = 4.dp), verticalAlignment = Alignment.CenterVertically) {
-                        DrawerCompactAction("社区分 ${communityScore ?: "—"}", Icons.Default.Star,
-                            Modifier.weight(1f), onCommunityScore)
-                        Box(Modifier.size(0.5.dp, 14.dp).background(colors.separator))
-                        DrawerCompactAction("我的徽章", Icons.Default.Star, Modifier.weight(1f)) { onAction(PersonalDrawerAction.Badges) }
+                    UserBioText(card?.bioExcerpt, "还没有填写个人简介", IosTheme.type.body.copy(fontSize = 13.sp), colors.label,
+                        emptyColor = colors.secondaryLabel, maxLines = 2, modifier = Modifier.fillMaxWidth(), loadImages = visible)
+                    DrawerProfileDates(card?.createdAt, card?.lastSeenAt, visible)
+                    FlowRow(Modifier.fillMaxWidth().padding(top = 4.dp, bottom = 4.dp),
+                        horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                        ProfileCommunityScore(communityScore.score, onCommunityScore, communityScore.loading,
+                            communityScore.needsAuthorization)
+                        ProfileBadgePreview(badges.items, badges.loading) { onAction(PersonalDrawerAction.Badges) }
                     }
                 } else {
                     TextButton(onClick = onLogin, modifier = Modifier.fillMaxWidth().padding(top = 8.dp)) {
@@ -307,13 +349,26 @@ private fun DrawerQuickAction(label: String, icon: ImageVector, modifier: Modifi
 }
 
 @Composable
-private fun DrawerCompactAction(label: String, icon: ImageVector, modifier: Modifier, onClick: () -> Unit) {
-    Row(modifier.heightIn(min = 44.dp).clickable(role = Role.Button, onClick = onClick).padding(horizontal = 4.dp),
-        verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-        Icon(icon, null, tint = IosTheme.colors.secondaryLabel, modifier = Modifier.size(16.dp))
-        Text(label, style = IosTheme.type.caption, color = IosTheme.colors.secondaryLabel)
+@OptIn(ExperimentalLayoutApi::class)
+private fun DrawerProfileDates(createdAt: String?, lastSeenAt: String?, visible: Boolean) {
+    var now by remember { mutableStateOf(java.time.Instant.now()) }
+    LaunchedEffect(visible) {
+        while (visible) {
+            now = java.time.Instant.now()
+            kotlinx.coroutines.delay(60_000L)
+        }
+    }
+    FlowRow(Modifier.fillMaxWidth().padding(top = 7.dp),
+        horizontalArrangement = Arrangement.spacedBy(12.dp), verticalArrangement = Arrangement.spacedBy(3.dp)) {
+        Text("加入时间 ${drawerJoinDate(createdAt)}", style = IosTheme.type.caption, color = IosTheme.colors.secondaryLabel)
+        Text("最近活跃 ${if (lastSeenAt.isNullOrBlank()) "未公开" else RelativeTime.format(lastSeenAt, now)}",
+            style = IosTheme.type.caption, color = IosTheme.colors.secondaryLabel)
     }
 }
+
+internal fun drawerJoinDate(raw: String?): String = runCatching {
+    java.time.OffsetDateTime.parse(raw).atZoneSameInstant(java.time.ZoneId.systemDefault()).toLocalDate().toString()
+}.getOrDefault("—")
 
 @Composable
 private fun DrawerDisclosure(label: String, icon: ImageVector, onExpand: () -> Unit = {}, content: @Composable ColumnScope.() -> Unit) {
@@ -356,14 +411,17 @@ private fun DrawerLoadState(loading: Boolean, error: String?, empty: Boolean) {
 }
 
 @Composable
-internal fun CommunityScoreDialog(score: Int?, onReload: () -> Unit, onDismiss: () -> Unit) {
+internal fun CommunityScoreDialog(score: Int?, onReload: () -> Unit, loading: Boolean = false, error: String? = null,
+    onOpenWebsite: (() -> Unit)? = null, onDismiss: () -> Unit) {
     AlertDialog(onDismissRequest = onDismiss, title = { Text("社区分") }, text = {
         Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
-            Text(score?.toString() ?: "暂未获取", style = IosTheme.type.largeTitle, color = IosTheme.colors.accent)
+            Text(score?.toString() ?: if (loading) "正在获取…" else "暂未获取", style = IosTheme.type.largeTitle, color = IosTheme.colors.accent)
             Text("社区分根据获得的徽章结算。")
+            if (error != null) Text(error, style = IosTheme.type.footnote, color = IosTheme.colors.secondaryLabel)
+            if (onOpenWebsite != null) TextButton(onClick = onOpenWebsite) { Text("打开社区分网站") }
         }
     }, confirmButton = { TextButton(onClick = onDismiss) { Text("完成") } },
-        dismissButton = if (score == null) ({ TextButton(onClick = onReload) { Text("重新获取") } }) else null,
+        dismissButton = if (score == null) ({ TextButton(onClick = onReload, enabled = !loading) { Text("重新获取") } }) else null,
         containerColor = IosTheme.colors.card)
 }
 

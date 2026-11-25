@@ -4,8 +4,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.text.InlineTextContent
 import androidx.compose.foundation.text.appendInlineContent
 import androidx.compose.material3.Text
-import androidx.compose.runtime.Composable
-import androidx.compose.runtime.remember
+import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
@@ -21,6 +20,9 @@ import org.jsoup.Jsoup
 import org.jsoup.nodes.TextNode
 import org.linuxdo.android.ui.html.InlineText
 import org.linuxdo.android.ui.html.contentUrl
+import org.linuxdo.android.net.IMAGE_AUTO_RETRY_LIMIT
+import org.linuxdo.android.net.awaitImageRetrySlot
+import org.linuxdo.android.net.isTransientImageError
 
 /** 资料卡和详细主页共用简介渲染，保留普通及自定义表情图片。 */
 @Composable
@@ -32,25 +34,25 @@ internal fun UserBioText(
     modifier: Modifier = Modifier,
     emptyColor: Color = color,
     maxLines: Int = 2,
+    loadImages: Boolean = true,
 ) {
     val runs = remember(html) { bioInlineText(html.orEmpty()) }
-    val text = remember(runs) {
+    // 侧栏关闭时释放图片请求；重开可从缓存恢复，避免保留一次失败的 painter。
+    var unavailable by remember(html, loadImages) { mutableStateOf(emptySet<String>()) }
+    val text = remember(runs, unavailable) {
         buildAnnotatedString {
             runs.forEach { run ->
                 val url = run.emojiUrl
-                if (url == null) append(run.text) else appendInlineContent(url, run.text.ifBlank { "表情" })
+                if (url == null) append(run.text)
+                else if (url in unavailable) append(run.text.ifBlank { "[表情]" })
+                else appendInlineContent(url, run.text.ifBlank { "表情" })
             }
         }
     }
-    val emojis = remember(runs) {
+    val emojis = remember(runs, loadImages) {
         runs.mapNotNull { it.emojiUrl }.distinct().associateWith { url ->
             InlineTextContent(Placeholder(1.15.em, 1.15.em, PlaceholderVerticalAlign.TextCenter)) { alt ->
-                AsyncImage(
-                    model = url,
-                    contentDescription = alt,
-                    contentScale = ContentScale.Fit,
-                    modifier = Modifier.fillMaxSize(),
-                )
+                if (loadImages) BioEmojiImage(url, alt) { unavailable = unavailable + url }
             }
         }
     }
@@ -62,6 +64,28 @@ internal fun UserBioText(
         maxLines = maxLines,
         overflow = TextOverflow.Ellipsis,
         modifier = modifier,
+    )
+}
+
+@Composable
+private fun BioEmojiImage(url: String, alt: String, onUnavailable: () -> Unit) {
+    var retry by remember(url) { mutableIntStateOf(0) }
+    var pendingRetry by remember(url) { mutableStateOf(false) }
+    if (pendingRetry) {
+        LaunchedEffect(url, retry) {
+            awaitImageRetrySlot(retry)
+            retry++
+            pendingRetry = false
+        }
+    }
+    val request = rememberAnimatedImageRequest(url, retry)
+    AsyncImage(
+        model = request ?: url, contentDescription = alt,
+        contentScale = ContentScale.Fit, modifier = Modifier.fillMaxSize(),
+        onError = { state ->
+            if (isTransientImageError(state.result.throwable) && retry < IMAGE_AUTO_RETRY_LIMIT) pendingRetry = true
+            else onUnavailable()
+        },
     )
 }
 
