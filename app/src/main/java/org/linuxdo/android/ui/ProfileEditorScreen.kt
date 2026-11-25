@@ -113,7 +113,7 @@ private fun ProfileEditorContent(username: String, userId: Long, onDismiss: () -
         BackHandler(onBack=close)
         Column(Modifier.fillMaxSize().background(colors.groupedBackground).systemBarsPadding().imePadding()) {
             IosNavBar(title="编辑个人资料",onBack=close,trailing={
-                TextButton(onClick=model::save,enabled=state.dirty && state.editable) { Text(if(state.saving) "保存中…" else "保存") }
+                TextButton(onClick=model::save,enabled=state.dirty && state.editable) { Text(if(state.saving) "保存中…" else if(state.pendingConfirmation.isNotEmpty() && ProfileFields.changes(state.data!!.values,state.values).all { (k,v) -> state.pendingConfirmation[k]==v }) "核对保存" else "保存") }
             })
             if(state.loading || state.saving || state.uploading!=null) LinearProgressIndicator(Modifier.fillMaxWidth())
             Column(Modifier.weight(1f).verticalScroll(rememberScrollState()).padding(16.dp),verticalArrangement=Arrangement.spacedBy(16.dp)) {
@@ -123,6 +123,14 @@ private fun ProfileEditorContent(username: String, userId: Long, onDismiss: () -
                 }
                 state.error?.let { Text(it,color=MaterialTheme.colorScheme.error) }
                 state.notice?.let { Text(it,color=colors.accent) }
+                if(state.pendingConfirmation.isNotEmpty()) {
+                    Row(verticalAlignment=Alignment.CenterVertically) {
+                        TextButton(onClick={model.checkPendingSave()},enabled=state.editable && !state.checkingConfirmation) {
+                            Text(if(state.checkingConfirmation) "正在核对…" else "核对保存结果")
+                        }
+                        TextButton(onClick=model::retryPendingSave,enabled=state.editable && !state.checkingConfirmation) { Text("重新提交") }
+                    }
+                }
                 state.data?.let { data ->
                     fun value(key:String)=state.values[key].orEmpty()
                     fun enabled(key:String)=state.editable && key in data.permissions

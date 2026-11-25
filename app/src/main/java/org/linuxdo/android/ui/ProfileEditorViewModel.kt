@@ -31,6 +31,8 @@ internal data class ProfileEditorUiState(
     val topicError: String? = null,
     val searching: Boolean = false,
     val sessionExpired: Boolean = false,
+    val pendingConfirmation: Map<String,String> = emptyMap(),
+    val checkingConfirmation: Boolean = false,
 ) {
     val dirty: Boolean get() = data?.let { ProfileFields.changes(it.values,values).isNotEmpty() } == true
     val busy: Boolean get() = loading || saving || uploading != null
@@ -48,6 +50,8 @@ internal class ProfileEditorViewModel(application: Application) : AndroidViewMod
     private var username = ""
     private var work: Job? = null
     private var search: Job? = null
+    private var confirmation: Job? = null
+    private var confirmationRevision = 0L
     private var remoteConflict: ProfileEditorData? = null
     private var badgeRoot: JsonObject? = null
     private var epoch = 0L
@@ -65,14 +69,14 @@ internal class ProfileEditorViewModel(application: Application) : AndroidViewMod
     private fun finish(token: Long, update: (ProfileEditorUiState) -> ProfileEditorUiState) {
         if (epoch != token) return
         _state.update {
-            if (sameSession()) update(it) else it.copy(loading=false,saving=false,uploading=null,searching=false,
+            if (sameSession()) update(it) else it.copy(loading=false,saving=false,uploading=null,searching=false,checkingConfirmation=false,
                 sessionExpired=true,error="登录会话已变化，请从网页刷新后继续编辑")
         }
     }
 
     fun open(id: Long, name: String) {
         if (id == userId && name == username && generation == store.sessionGeneration && (_state.value.dirty || _state.value.busy)) return
-        epoch++; searchRevision++; work?.cancel(); search?.cancel()
+        stopConfirmation(); epoch++; searchRevision++; work?.cancel(); search?.cancel()
         userId=id; username=name; generation=store.sessionGeneration; badgeRoot=null
         _state.value=ProfileEditorUiState()
         reload()
@@ -94,6 +98,7 @@ internal class ProfileEditorViewModel(application: Application) : AndroidViewMod
             _state.update { it.copy(sessionExpired=true,error="账号已变化，请关闭后重新打开") }
             return
         }
+        stopConfirmation()
         generation=store.sessionGeneration
         badgeRoot=null; remoteConflict=null
         val token=epoch
@@ -119,13 +124,15 @@ internal class ProfileEditorViewModel(application: Application) : AndroidViewMod
 
     fun acceptRemote() {
         val remote=remoteConflict ?: return
-        _state.update { it.copy(data=remote,values=remote.values+ProfileFields.changes(it.data!!.values,it.values).filterKeys { key -> key !in it.conflicts },conflicts=emptySet(),notice="已采用网页版本，其他修改仍保留") }
+        stopConfirmation()
+        _state.update { it.copy(data=remote,values=remote.values+ProfileFields.changes(it.data!!.values,it.values).filterKeys { key -> key !in it.conflicts },pendingConfirmation=it.pendingConfirmation-it.conflicts,conflicts=emptySet(),notice="已采用网页版本，其他修改仍保留") }
         remoteConflict=null
     }
 
     fun keepEdits() {
         val remote=remoteConflict ?: return
-        _state.update { it.copy(data=remote,values=remote.values+ProfileFields.changes(it.data!!.values,it.values),conflicts=emptySet(),notice="已保留本次修改，请再次保存") }
+        stopConfirmation()
+        _state.update { it.copy(data=remote,values=remote.values+ProfileFields.changes(it.data!!.values,it.values),pendingConfirmation=it.pendingConfirmation-it.conflicts,conflicts=emptySet(),notice="已保留本次修改，请再次保存") }
         remoteConflict=null
     }
 
@@ -133,6 +140,12 @@ internal class ProfileEditorViewModel(application: Application) : AndroidViewMod
         val original=_state.value
         val base=original.data ?: return
         if (!original.editable || !original.dirty) return
+        val dirty=ProfileFields.changes(base.values,original.values)
+        if (dirty.all { (key,value) -> original.pendingConfirmation[key]==value }) {
+            checkPendingSave()
+            return
+        }
+        stopConfirmation()
         val token=epoch
         val guard=sessionGuard()
         work=viewModelScope.launch {
@@ -140,6 +153,8 @@ internal class ProfileEditorViewModel(application: Application) : AndroidViewMod
             var attempted=false
             val edited=original.values
             val changes=ProfileFields.changes(base.values,edited)
+            // Keep successful writes separate from failed or never-dispatched fields.
+            val accepted=original.pendingConfirmation.filter { (key,value) -> changes[key]==value }.keys.toMutableSet()
             fun remainingChanges(saved: ProfileEditorData) = changes.filter { (key,value) ->
                 !ProfileFields.equivalent(key,value,saved.values[key].orEmpty())
             }
@@ -147,11 +162,16 @@ internal class ProfileEditorViewModel(application: Application) : AndroidViewMod
                 guard(); publish(saved,guard)
                 val remaining=remainingChanges(saved)
                 val confirmed=changes.keys-remaining.keys
-                _state.value=ProfileEditorUiState(data=saved,values=saved.values+remaining,
-                    notice=if(remaining.isEmpty()) "已保存到网页" else confirmed.takeIf { it.isNotEmpty() }
-                        ?.joinToString("、",prefix="已确认保存："){ProfileFields.labels[it].orEmpty()},
-                    error=if(remaining.isEmpty()) null else "以下修改的保存结果暂未确认："+
-                        remaining.keys.joinToString("、"){ProfileFields.labels[it].orEmpty()}+"。修改已保留，请稍后再次保存核对。")
+                val pending=remaining.filterKeys { it in accepted }
+                val unresolved=remaining.keys-pending.keys
+                _state.value=ProfileEditorUiState(data=saved,values=saved.values+remaining,pendingConfirmation=pending,
+                    notice=when {
+                        remaining.isEmpty() -> "已保存到网页"
+                        pending.isNotEmpty() -> "网页已接收修改，正在等待资料更新："+fieldNames(pending.keys)
+                        else -> confirmed.takeIf { it.isNotEmpty() }?.let { "已确认保存："+fieldNames(it) }
+                    },
+                    error=if(unresolved.isEmpty()) null else "以下修改的保存结果暂未确认："+
+                        fieldNames(unresolved)+"。修改已保留，请稍后重试。")
             }
             suspend fun verifySaved() {
                 var saved=load(guard)
@@ -167,29 +187,32 @@ internal class ProfileEditorViewModel(application: Application) : AndroidViewMod
             try {
                 ProfileFields.validate(edited,changes.keys)
                 val fresh=load(guard)
-                val conflicts=ProfileFields.conflicts(base.values,fresh.values,edited)
+                val conflicts=ProfileFields.conflicts(base.values,fresh.values,edited).filterNot { key ->
+                    original.pendingConfirmation[key]?.let { ProfileFields.equivalent(key,it,fresh.values[key].orEmpty()) } == true
+                }.toSet()
                 if (conflicts.isNotEmpty()) {
                     remoteConflict=fresh
                     _state.update { it.copy(conflicts=conflicts) }
                     return@launch
                 }
-                val pending=changes.filter { (key,value) -> !ProfileFields.equivalent(key,value,fresh.values[key].orEmpty()) }
+                val pending=changes.filter { (key,value) -> key !in accepted && !ProfileFields.equivalent(key,value,fresh.values[key].orEmpty()) }
                 require(pending.keys.all { it in fresh.permissions }) { "网页上的编辑权限已变化，请重新加载资料" }
                 // Preserve remote changes to untouched fields before starting the independent writes.
                 _state.update { it.copy(data=fresh,values=fresh.values+changes) }
-                suspend fun put(suffix: String, body: JsonObject) {
+                suspend fun put(suffix: String, body: JsonObject, keys: Set<String>) {
                     guard(); attempted=true
                     repository.profileEditorWrite(path+suffix,body,userId,generation)
-                    guard()
+                    guard(); accepted.addAll(keys)
+                    _state.update { it.copy(pendingConfirmation=it.pendingConfirmation+changes.filterKeys { key -> key in keys }) }
                 }
                 val regular=pending.filterKeys { it !in setOf("avatar","featured_topic","card_badge") }
-                if (regular.isNotEmpty()) put(".json",ProfileFields.payload(regular))
-                pending["avatar"]?.let { put("/preferences/avatar/pick",ProfileFields.avatarPayload(it)) }
+                if (regular.isNotEmpty()) put(".json",ProfileFields.payload(regular),regular.keys)
+                pending["avatar"]?.let { put("/preferences/avatar/pick",ProfileFields.avatarPayload(it),setOf("avatar")) }
                 pending["featured_topic"]?.let { id ->
-                    put(if (id.isEmpty()) "/clear-featured-topic" else "/feature-topic",buildJsonObject { if (id.isNotEmpty()) put("topic_id",id.toLong()) })
+                    put(if (id.isEmpty()) "/clear-featured-topic" else "/feature-topic",buildJsonObject { if (id.isNotEmpty()) put("topic_id",id.toLong()) },setOf("featured_topic"))
                 }
                 pending["card_badge"]?.let { id ->
-                    put("/preferences/card-badge",buildJsonObject { put("user_badge_id",id.toLongOrNull()?.let(::JsonPrimitive) ?: JsonNull) })
+                    put("/preferences/card-badge",buildJsonObject { put("user_badge_id",id.toLongOrNull()?.let(::JsonPrimitive) ?: JsonNull) },setOf("card_badge"))
                 }
                 verifySaved()
             } catch (e: CancellationException) { throw e }
@@ -198,8 +221,69 @@ internal class ProfileEditorViewModel(application: Application) : AndroidViewMod
                 // A failed response may have reached the server. Re-read before deciding what needs retrying.
                 if (attempted) try { verifySaved() }
                 catch(e: CancellationException) { throw e } catch(_: Exception) { }
-            } finally { finish(token) { it.copy(saving=false) } }
+            } finally {
+                finish(token) { it.copy(saving=false) }
+                if (epoch==token && sameSession() && _state.value.pendingConfirmation.isNotEmpty()) checkPendingSave(automatic=true)
+            }
         }
+    }
+
+    private fun fieldNames(keys: Set<String>) = keys.joinToString("、") { ProfileFields.labels[it].orEmpty() }
+
+    private fun stopConfirmation() {
+        confirmationRevision++; confirmation?.cancel(); confirmation=null
+        _state.update { it.copy(checkingConfirmation=false) }
+    }
+
+    /** Poll only successful-but-not-yet-visible writes; never replay a save in the background. */
+    fun checkPendingSave(automatic: Boolean = false) {
+        if (!_state.value.editable || _state.value.pendingConfirmation.isEmpty()) return
+        stopConfirmation()
+        val revision=confirmationRevision
+        val token=epoch
+        val session=sessionGuard()
+        val guard={ session(); if (revision!=confirmationRevision) throw CancellationException("核对已更新") }
+        confirmation=viewModelScope.launch {
+            _state.update { it.copy(checkingConfirmation=true) }
+            try {
+                for (waitMillis in if(automatic) listOf(3_000L,6_000L,10_000L) else listOf(0L)) {
+                    delay(waitMillis); guard()
+                    if (_state.value.pendingConfirmation.isEmpty()) break
+                    val saved=load(guard); guard()
+                    val current=_state.value
+                    val confirmed=current.pendingConfirmation.filter { (key,value) ->
+                        ProfileFields.equivalent(key,value,saved.values[key].orEmpty())
+                    }.keys
+                    if (confirmed.isEmpty()) continue
+                    // Merge only confirmed fields; edits made while this read was in flight win.
+                    val values=current.values+saved.values.filterKeys { it in confirmed && current.values[it]==current.pendingConfirmation[it] }
+                    val baseline=current.data!!.copy(values=current.data.values+saved.values.filterKeys { it in confirmed })
+                    val pending=current.pendingConfirmation-confirmed
+                    val stillDirty=ProfileFields.changes(baseline.values,values).isNotEmpty()
+                    publish(saved,guard)
+                    _state.value=current.copy(data=baseline,values=values,pendingConfirmation=pending,
+                        error=if(stillDirty) current.error else null,
+                        notice=if(pending.isNotEmpty()) "仍在核对："+fieldNames(pending.keys)
+                            else if(stillDirty) "先前修改已保存，当前编辑尚未保存" else "已保存到网页")
+                    if(pending.isEmpty()) break
+                }
+                guard()
+                if (_state.value.pendingConfirmation.isNotEmpty()) _state.update { it.copy(
+                    notice="网页暂未返回最新资料："+fieldNames(it.pendingConfirmation.keys)+"。修改已保留，可核对结果或重新提交。") }
+            } catch(e: CancellationException) { throw e }
+            catch(_: Exception) {
+                if (revision==confirmationRevision) finish(token) { it.copy(notice="暂时无法核对保存结果，修改已保留，联网后可再次核对。") }
+            } finally {
+                if (revision==confirmationRevision) finish(token) { it.copy(checkingConfirmation=false) }
+            }
+        }
+    }
+
+    fun retryPendingSave() {
+        if (!_state.value.editable) return
+        stopConfirmation()
+        _state.update { it.copy(pendingConfirmation=emptyMap()) }
+        save()
     }
 
     private fun publish(data: ProfileEditorData, guard: () -> Unit) {
@@ -216,6 +300,7 @@ internal class ProfileEditorViewModel(application: Application) : AndroidViewMod
         val data=s.data ?: return
         if (!s.editable || field !in data.permissions || (field=="avatar" && "upload_avatar" !in data.permissions)) return
         val uploadType=when(field) { "avatar"->"avatar"; "bio_raw"->"composer"; "profile_background_upload_url"->"profile_background"; "card_background_upload_url"->"card_background"; else->return }
+        stopConfirmation()
         val guard=sessionGuard()
         val token=epoch
         work=viewModelScope.launch {
@@ -267,5 +352,5 @@ internal class ProfileEditorViewModel(application: Application) : AndroidViewMod
         }
     }
 
-    fun close() { epoch++; searchRevision++; work?.cancel(); search?.cancel(); _state.value=ProfileEditorUiState(); badgeRoot=null; remoteConflict=null }
+    fun close() { stopConfirmation(); epoch++; searchRevision++; work?.cancel(); search?.cancel(); _state.value=ProfileEditorUiState(); badgeRoot=null; remoteConflict=null }
 }
