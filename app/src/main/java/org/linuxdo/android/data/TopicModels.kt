@@ -980,6 +980,8 @@ data class DraftItem(
     val avatarUrl: String? = null,
     val closed: Boolean = false,
     val archetype: String = "regular",
+    val syncStatus: String? = null,
+    val localOnly: Boolean = false,
 ) {
     val isNewTopic: Boolean
         get() = action == "createTopic" || draftKey.startsWith("new_topic") || topicId == null || topicId <= 0L
@@ -1933,6 +1935,14 @@ object AvatarCache {
 
     fun clear() {
         synchronized(lock) { cache.clear() }
+    }
+
+    internal fun replace(username: String, animatedAvatar: String?) {
+        val key = keyOf(username) ?: return
+        synchronized(lock) {
+            cache[key] = animatedAvatar?.takeIf(::isAnimatedAvatarPath) ?: NON_ANIMATED_SENTINEL
+            trimLocked()
+        }
     }
 }
 

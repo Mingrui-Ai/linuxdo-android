@@ -89,8 +89,41 @@ class HistoryStore(context: Context) {
     }
 
     @Synchronized
+    fun mergeRemote(userId: Long, incoming: List<ReadingHistoryEntry>, reset: Boolean, preserveOlder: Boolean = false): List<ReadingHistoryEntry> {
+        val key = "remote_$userId"
+        val previous = if (reset && !preserveOlder) emptyList() else preferences.getString(key, null)?.let {
+            json.decodeFromString<List<ReadingHistoryEntry>>(it)
+        }.orEmpty()
+        val merged = (if (reset) incoming + previous else previous + incoming).distinctBy { it.topicId }
+        preferences.edit {
+            putString(key, json.encodeToString(merged))
+            if (reset) putLong("remote_fetched_$userId", System.currentTimeMillis())
+        }
+        return syncedEntries(userId)
+    }
+
+    @Synchronized
+    fun syncedEntries(userId: Long = currentUserId): List<ReadingHistoryEntry> {
+        val local = entries(userId)
+        val remote = preferences.getString("remote_$userId", null)?.let {
+            json.decodeFromString<List<ReadingHistoryEntry>>(it)
+        }.orEmpty()
+        val localById = local.associateBy { it.topicId }
+        val ids = remote.map { it.topicId }.toSet()
+        val fetchedAt = preferences.getLong("remote_fetched_$userId", 0L)
+        val recent = local.filter { it.lastSeenAt > fetchedAt }
+        val recentIds = recent.map { it.topicId }.toSet()
+        return recent + remote.filterNot { it.topicId in recentIds }.map { entry ->
+            localById[entry.topicId]?.let { cached -> entry.copy(
+                lastSeenAt = cached.lastSeenAt,
+                lastSeenPostNumber = maxOf(entry.lastSeenPostNumber, cached.lastSeenPostNumber),
+            ) } ?: entry
+        } + local.filter { it.topicId !in ids && it.topicId !in recentIds }
+    }
+
+    @Synchronized
     fun clear(userId: Long = currentUserId) {
-        preferences.edit { remove(storageKey(userId)) }
+        preferences.edit { remove(storageKey(userId)); remove("remote_$userId") }
     }
 
     @Synchronized

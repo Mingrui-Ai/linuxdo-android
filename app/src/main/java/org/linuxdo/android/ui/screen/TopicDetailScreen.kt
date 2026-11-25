@@ -3490,8 +3490,8 @@ private fun ComposerSheet(
     var previewingImage by remember { mutableStateOf<String?>(null) }
     var editorView by remember(target) { mutableStateOf<RichMarkdownEditorView?>(null) }
 
-    // 编辑原文异步取回时只替换一次草稿。
-    LaunchedEffect(target, composer.loadingDraft) {
+    // 服务端草稿恢复或冲突选择后刷新内容，普通输入不重置光标。
+    LaunchedEffect(target, composer.loadingDraft, composer.remoteRevision) {
         if (!composer.loadingDraft) {
             editorView?.setInitialMarkdown(composer.draft, composer.attachments)
         }
@@ -3520,7 +3520,7 @@ private fun ComposerSheet(
     val pickFile = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
         uri?.let(onAttach)
     }
-    val busy = composer.submitting || composer.uploading
+    val busy = composer.submitting || composer.uploading || composer.loadingDraft
 
     BackHandler(enabled = true) {
         when {
@@ -3658,6 +3658,7 @@ private fun ComposerSheet(
                 }
             }
 
+            composer.syncStatus?.let { Text(it, style = IosTheme.type.caption, color = IosTheme.colors.secondaryLabel) }
             composer.error?.let {
                 Text(it, style = IosTheme.type.footnote, color = IosTheme.colors.destructive, maxLines = 1)
             }

@@ -19,6 +19,7 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
@@ -366,6 +367,10 @@ fun UserProfileScreen(
     val coroutineScope = rememberCoroutineScope()
     val repo = (context.applicationContext as? App)?.container?.topicRepository
     var userCard by remember(username) { mutableStateOf<UserCardData?>(repo?.getCachedUserCard(username)) }
+    val profileEditRevision by org.linuxdo.android.ui.ProfileEditorUpdates.revision.collectAsState()
+    LaunchedEffect(username, profileEditRevision) {
+        if (profileEditRevision > 0) repo?.getCachedUserCard(username)?.let { userCard = it }
+    }
     // 回应、Boost 和已解决接口不带操作者头像，复用主页资料，随异步资料更新一起补齐。
     val profileAvatarUrl = avatarUrlOf(userCard?.avatarTemplate, userCard?.animatedAvatar,
         size = 64, username = username) ?: initialAvatarUrl ?: initialStaticAvatarUrl
