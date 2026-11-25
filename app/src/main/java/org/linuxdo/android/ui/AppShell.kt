@@ -2086,10 +2086,10 @@ private fun MainNavigation(state: UiState, viewModel: MainViewModel, lifecycle: 
     }
     if (showDrawerScore) CommunityScoreDialog(drawerScore.score, { viewModel.loadCdkScore(userInitiated = true) },
         drawerScore.loading, drawerScore.error,
-        onOpenWebsite = if (drawerScore.error != null) ({
+        onOpenWebsite = {
             showDrawerScore = false
             onDrawerAction(PersonalDrawerAction.Web("https://cdk.linux.do/"))
-        }) else null,
+        },
     ) { showDrawerScore = false }
     if (showConnectSheet) {
         ConnectWebSheet(
@@ -2111,10 +2111,19 @@ private fun MainNavigation(state: UiState, viewModel: MainViewModel, lifecycle: 
                 if (closedUrl?.contains("/my/preferences") == true) {
                     viewModel.syncSignaturePreference(fromWebPreferences = true)
                 }
-                if (closedUrl?.let { Uri.parse(it).host } == "cdk.linux.do") viewModel.onCdkWebsiteClosed()
         }
         if (Uri.parse(url).host == "cdk.linux.do") {
-            CdkAuthorizationSheet(onDismiss = dismissBrowser)
+            val cdkUsername = state.username.orEmpty()
+            DisposableEffect(cdkUsername) {
+                viewModel.setCdkAuthorizationOpen(true)
+                onDispose { viewModel.setCdkAuthorizationOpen(false) }
+            }
+            key(cdkUsername) {
+                CdkAuthorizationSheet(username = cdkUsername, onAuthorized = { generation, score ->
+                    viewModel.onCdkAuthorized(cdkUsername, generation, score)
+                    dismissBrowser()
+                }, onDismiss = dismissBrowser)
+            }
         } else {
             InAppBrowserSheet(url = url, onDismiss = dismissBrowser)
         }

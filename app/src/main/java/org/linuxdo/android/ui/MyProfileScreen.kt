@@ -58,7 +58,7 @@ fun ProfileScreen(
         )
         if (showCommunityScore) {
             CommunityScoreDialog(cdkScore, onReloadCdkScore, cdkScoreLoading, cdkScoreError,
-                onOpenWebsite = if (cdkScoreError != null) ({ showCommunityScore = false; onOpenCdkWebsite() }) else null,
+                onOpenWebsite = { showCommunityScore = false; onOpenCdkWebsite() },
             ) { showCommunityScore = false }
         }
     }

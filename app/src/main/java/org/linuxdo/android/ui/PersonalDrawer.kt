@@ -418,7 +418,7 @@ internal fun CommunityScoreDialog(score: Int?, onReload: () -> Unit, loading: Bo
             Text(score?.toString() ?: if (loading) "正在获取…" else "暂未获取", style = IosTheme.type.largeTitle, color = IosTheme.colors.accent)
             Text("社区分根据获得的徽章结算。")
             if (error != null) Text(error, style = IosTheme.type.footnote, color = IosTheme.colors.secondaryLabel)
-            if (onOpenWebsite != null) TextButton(onClick = onOpenWebsite) { Text("打开社区分网站") }
+            if (onOpenWebsite != null) TextButton(onClick = onOpenWebsite) { Text(if (score == null) "验证并获取" else "重新授权") }
         }
     }, confirmButton = { TextButton(onClick = onDismiss) { Text("完成") } },
         dismissButton = if (score == null) ({ TextButton(onClick = onReload, enabled = !loading) { Text("重新获取") } }) else null,
