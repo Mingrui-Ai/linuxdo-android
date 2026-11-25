@@ -1903,6 +1903,9 @@ class TopicRepository(
         return list
     }
 
+    suspend fun fetchProfileNetwork(username: String, followers: Boolean): List<FollowUser> =
+        fetchFollowList(username, if (followers) "followers" else "following")
+
     private suspend fun fetchFollowList(username: String, listName: String, present: Boolean = true): List<FollowUser> {
         val result = json.parseToJsonElement(request("/u/${encode(username)}/follow/$listName", present = present)) as? JsonArray
             ?: return emptyList()

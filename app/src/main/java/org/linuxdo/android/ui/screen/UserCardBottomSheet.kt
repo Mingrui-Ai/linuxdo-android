@@ -81,5 +81,6 @@ internal fun CompactUserIdentityHeader(
 ) {
     ProfileIdentity(user.username, user.cleanDisplayName, user.trustLevel,
         avatarUrlOf(user.avatarTemplate, user.animatedAvatar ?: AvatarCache.get(user.username), 160, user.username),
-        avatarUrlOf(user.avatarTemplate, size = 160), modifier = modifier, onOpenProfile = onOpenProfile)
+        avatarUrlOf(user.avatarTemplate, size = 160), modifier = modifier, onOpenProfile = onOpenProfile,
+        status = user.status, title = user.title)
 }

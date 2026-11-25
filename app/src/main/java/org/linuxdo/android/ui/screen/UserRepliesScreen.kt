@@ -346,6 +346,8 @@ fun UserProfileScreen(
     initialStaticAvatarUrl: String? = null,
     onOpenTopic: (Long, String, Int?) -> Unit,
     onOpenBadges: () -> Unit,
+    onOpenNetwork: (Boolean) -> Unit,
+    onOpenWebsite: (String) -> Unit,
     onOpenUser: ((String) -> Unit)? = null,
     onChat: ((String) -> Unit)? = null,
     onComposePrivateMessage: ((String) -> Unit)? = null,
@@ -657,6 +659,7 @@ fun UserProfileScreen(
                     communityScoreLoading = communityScoreLoading, needsAuthorization = communityScoreNeedsAuthorization,
                     onOpenLevel = onOpenLevel,
                     badges = badges, badgesLoading = badgesLoading, onOpenBadges = onOpenBadges,
+                    onOpenNetwork = onOpenNetwork, onOpenWebsite = onOpenWebsite, onOpenTopic = onOpenTopic,
                 )
                 profileError?.let { message ->
                     Row(verticalAlignment = Alignment.CenterVertically) {

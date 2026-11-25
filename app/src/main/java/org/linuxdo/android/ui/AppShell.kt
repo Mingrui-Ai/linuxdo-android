@@ -1601,6 +1601,8 @@ private fun MainNavigation(state: UiState, viewModel: MainViewModel, lifecycle: 
                                         onOpenTopic = { id, title, post -> stack.push(Route.TopicDetail(id, title, post)) },
                                         onOpenUser = { stack.push(Route.UserProfile(it)) },
                                         onOpenBadges = { stack.push(Route.UserBadges(it)) },
+                                        onOpenNetwork = { name, followers -> stack.push(Route.ProfileNetwork(name, followers)) },
+                                        onOpenWebsite = { globalBrowserUrl = it },
                                         onOpenConnect = { showConnectSheet = true },
                                         onEditProfile = { globalBrowserUrl = "${Config.BASE_URL}/my/preferences/profile" },
                                         cdkScore = cdkScoreState.score.takeIf { cdkScoreState.username.equals(profileUsername, ignoreCase = true) },
@@ -1621,6 +1623,8 @@ private fun MainNavigation(state: UiState, viewModel: MainViewModel, lifecycle: 
                                         onOpenTopic = { id, title, post -> stack.push(Route.TopicDetail(id, title, post)) },
                                         onOpenUser = { stack.push(Route.UserProfile(it)) },
                                         onOpenBadges = { stack.push(Route.UserBadges(profileRoute.username)) },
+                                        onOpenNetwork = { stack.push(Route.ProfileNetwork(profileRoute.username, it)) },
+                                        onOpenWebsite = { globalBrowserUrl = it },
                                         onChat = { target -> viewModel.openChatWithUser(target) { stack.push(it) } },
                                         onComposePrivateMessage = { privateMessageRecipient = it },
                                         onSetFollowing = viewModel::setProfileFollowing,
@@ -1702,6 +1706,12 @@ private fun MainNavigation(state: UiState, viewModel: MainViewModel, lifecycle: 
                                     onBack = { stack.pop() },
                                 )
                             }
+
+                            is Route.ProfileNetwork -> org.linuxdo.android.ui.screen.ProfileNetworkScreen(
+                                username = route.username, followers = route.followers,
+                                accountId = accountState.activeUserId,
+                                onBack = { stack.pop() }, onOpenUser = viewModel::openUserCard,
+                            )
 
                             is Route.FollowList -> FollowListScreen(
                                 state = followList,

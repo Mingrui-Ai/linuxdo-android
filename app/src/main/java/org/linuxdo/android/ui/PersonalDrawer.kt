@@ -196,6 +196,7 @@ internal fun PersonalDrawerContent(
                         avatarUrl = avatarUrlOf(card?.avatarTemplate ?: account?.avatarTemplate,
                             card?.animatedAvatar ?: account?.animatedAvatar, 160, username),
                         staticAvatarUrl = avatarUrlOf(card?.avatarTemplate ?: account?.avatarTemplate, size = 160),
+                        status = card?.status, title = card?.title,
                         onOpenProfile = { onAction(PersonalDrawerAction.Profile) },
                         onOpenLevel = { onAction(PersonalDrawerAction.Level) },
                         trailing = {

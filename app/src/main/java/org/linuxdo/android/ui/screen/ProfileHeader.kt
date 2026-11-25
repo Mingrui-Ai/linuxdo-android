@@ -52,6 +52,9 @@ internal fun ProfileHeader(
     badges: List<UserBadgeItem>?,
     badgesLoading: Boolean,
     onOpenBadges: () -> Unit,
+    onOpenNetwork: (Boolean) -> Unit,
+    onOpenWebsite: (String) -> Unit,
+    onOpenTopic: (Long, String, Int?) -> Unit,
 ) {
     val colors = IosTheme.colors
     val context = LocalContext.current
@@ -115,8 +118,8 @@ internal fun ProfileHeader(
                 )
                 Spacer(Modifier.height(24.dp))
                 Row(Modifier.fillMaxWidth().padding(horizontal = 16.dp), verticalAlignment = Alignment.Bottom) {
-                    UserAvatar(avatarUrl = avatar, fallbackUrl = staticAvatar, username = username,
-                        modifier = Modifier.size(78.dp).border(3.dp, surface, CircleShape), cornerRadius = 39.dp)
+                    ProfileAvatar(username, avatar, staticAvatar, card?.status, 78.dp,
+                        avatarModifier = Modifier.border(3.dp, surface, CircleShape))
                 }
             }
         }
@@ -145,9 +148,13 @@ internal fun ProfileHeader(
                         communityScoreLoading, needsAuthorization, onOpenCommunityScore)
                 }
             }
+            profileDisplayTitle(card?.title, card?.trustLevel)?.let {
+                Text(it, style = IosTheme.type.caption, color = colors.secondaryLabel)
+            }
             Spacer(Modifier.height(8.dp))
             ProfileDetails(card, badges, badgesLoading, onOpenBadges,
                 loading = card == null, showAchievements = false)
+            ProfilePublicDetails(card, onOpenNetwork, onOpenWebsite, onOpenTopic)
             Spacer(Modifier.height(12.dp))
         }
     }

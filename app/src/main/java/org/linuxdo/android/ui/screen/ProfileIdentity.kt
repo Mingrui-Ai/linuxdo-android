@@ -30,6 +30,8 @@ internal fun ProfileIdentity(
     staticAvatarUrl: String?,
     modifier: Modifier = Modifier,
     avatarSize: Dp = 56.dp,
+    status: org.linuxdo.android.data.ProfileStatus? = null,
+    title: String? = null,
     onOpenProfile: (() -> Unit)? = null,
     onOpenLevel: (() -> Unit)? = null,
     trailing: @Composable (() -> Unit)? = null,
@@ -39,8 +41,7 @@ internal fun ProfileIdentity(
         onClickLabel = "查看 @$username 的详细主页", onClick = onOpenProfile) else Modifier
     Row(modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-        UserAvatar(avatarUrl, staticAvatarUrl, username, Modifier.size(avatarSize).then(openProfile),
-            cornerRadius = avatarSize / 2)
+        ProfileAvatar(username, avatarUrl, staticAvatarUrl, status, avatarSize, onOpenProfile = onOpenProfile)
         Column(Modifier.weight(1f)) {
             Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                 Text(displayName, style = IosTheme.type.largeTitle, color = colors.label,
@@ -54,6 +55,10 @@ internal fun ProfileIdentity(
             }
             Text("@$username", style = IosTheme.type.caption, color = colors.secondaryLabel,
                 maxLines = 1, overflow = TextOverflow.Ellipsis)
+            org.linuxdo.android.data.profileDisplayTitle(title, level)?.let {
+                Text(it, style = IosTheme.type.caption, color = colors.secondaryLabel,
+                    maxLines = 1, overflow = TextOverflow.Ellipsis)
+            }
         }
         trailing?.invoke()
     }
