@@ -20,7 +20,7 @@ import org.linuxdo.android.data.UserCardData
 import org.linuxdo.android.ui.design.*
 import org.linuxdo.android.ui.format.RelativeTime
 
-/** 侧栏、头像弹窗和详细主页共用身份顺序与排版。 */
+/** 侧栏与头像弹窗使用横向身份区域，详细主页保留头像在上的布局。 */
 @Composable
 internal fun ProfileIdentity(
     username: String,
@@ -59,7 +59,7 @@ internal fun ProfileIdentity(
     }
 }
 
-/** 三处固定为：简介 → 加入/活跃 → 社区分/徽章。未知数据不冒充真实数值。 */
+/** 共用资料内容；简要视图在简介前展示成就，详细主页把成就放在名称旁。 */
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
 internal fun ProfileDetails(
@@ -73,6 +73,7 @@ internal fun ProfileDetails(
     onOpenCommunityScore: (() -> Unit)? = null,
     loading: Boolean = false,
     active: Boolean = true,
+    showAchievements: Boolean = true,
 ) {
     val colors = IosTheme.colors
     var showBio by remember(card?.username) { mutableStateOf(false) }
@@ -84,6 +85,10 @@ internal fun ProfileDetails(
         }
     }
     Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(7.dp)) {
+        if (showAchievements) {
+            ProfileAchievements(badges, badgesLoading, onOpenBadges, communityScore,
+                communityScoreLoading, needsAuthorization, onOpenCommunityScore)
+        }
         UserBioText(card?.bioExcerpt, if (loading) "正在加载资料…" else "还没有填写个人简介",
             IosTheme.type.body.copy(fontSize = 13.sp), colors.label, maxLines = 2,
             emptyColor = colors.secondaryLabel, loadImages = active,
@@ -95,21 +100,31 @@ internal fun ProfileDetails(
             Text("最近活跃 ${if (card?.lastSeenAt.isNullOrBlank()) if (loading) "…" else "未公开" else RelativeTime.format(card?.lastSeenAt, now)}",
                 style = IosTheme.type.caption, color = colors.secondaryLabel)
         }
-        FlowRow(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-            if (onOpenCommunityScore != null) {
-                ProfileCommunityScore(communityScore, onOpenCommunityScore, communityScoreLoading, needsAuthorization)
-            } else {
-                Box(Modifier.heightIn(min = 32.dp), contentAlignment = Alignment.CenterStart) {
-                    Text("社区分 未公开", color = colors.secondaryLabel, fontSize = 12.sp)
-                }
-            }
-            ProfileBadgePreview(badges, badgesLoading, onOpenBadges)
-        }
     }
     if (showBio) AlertDialog(onDismissRequest = { showBio = false }, title = { Text("个人简介") },
         text = { UserBioText(card?.bioExcerpt, "还没有填写个人简介", IosTheme.type.body, colors.label,
             maxLines = Int.MAX_VALUE, modifier = Modifier.heightIn(max = 360.dp).verticalScroll(rememberScrollState())) },
         confirmButton = { TextButton(onClick = { showBio = false }) { Text("完成") } }, containerColor = colors.card)
+}
+
+@OptIn(ExperimentalLayoutApi::class)
+@Composable
+internal fun ProfileAchievements(
+    badges: List<UserBadgeItem>?,
+    badgesLoading: Boolean,
+    onOpenBadges: () -> Unit,
+    communityScore: Int? = null,
+    communityScoreLoading: Boolean = false,
+    needsAuthorization: Boolean = false,
+    onOpenCommunityScore: (() -> Unit)? = null,
+) {
+    FlowRow(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+        // CDK 只提供当前授权账号的分数，他人资料不显示此字段。
+        if (onOpenCommunityScore != null) {
+            ProfileCommunityScore(communityScore, onOpenCommunityScore, communityScoreLoading, needsAuthorization)
+        }
+        ProfileBadgePreview(badges, badgesLoading, onOpenBadges)
+    }
 }
 
 internal fun profileJoinDate(raw: String?): String = runCatching {

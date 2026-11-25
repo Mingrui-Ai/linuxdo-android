@@ -2,8 +2,10 @@ package org.linuxdo.android.ui.screen
 
 import android.content.Intent
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
@@ -17,6 +19,8 @@ import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import coil.compose.AsyncImage
@@ -110,16 +114,39 @@ internal fun ProfileHeader(
                     },
                 )
                 Spacer(Modifier.height(24.dp))
-                ProfileIdentity(username, card?.cleanDisplayName ?: username, card?.trustLevel,
-                    avatar, staticAvatar, modifier = Modifier.padding(horizontal = 18.dp),
-                    avatarSize = 78.dp, onOpenLevel = onOpenLevel)
+                Row(Modifier.fillMaxWidth().padding(horizontal = 16.dp), verticalAlignment = Alignment.Bottom) {
+                    UserAvatar(avatarUrl = avatar, fallbackUrl = staticAvatar, username = username,
+                        modifier = Modifier.size(78.dp).border(3.dp, surface, CircleShape), cornerRadius = 39.dp)
+                }
             }
         }
-        Column(Modifier.padding(horizontal = 18.dp, vertical = 12.dp)) {
+        Column(Modifier.padding(horizontal = 18.dp)) {
+            Spacer(Modifier.height(10.dp))
+            FlowRow(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(12.dp),
+                verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                Row(Modifier.widthIn(max = 260.dp).align(Alignment.CenterVertically),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text(card?.cleanDisplayName ?: username, fontSize = 24.sp, fontWeight = FontWeight.Bold,
+                        color = colors.label, maxLines = 1, overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier.weight(1f, false))
+                    card?.trustLevel?.let { level ->
+                        Box(Modifier.heightIn(min = 32.dp).then(if (onOpenLevel != null)
+                            Modifier.clickable(onClickLabel = "等级与积分", onClick = onOpenLevel) else Modifier),
+                            contentAlignment = Alignment.Center) { LevelBadge(level) }
+                    }
+                }
+                Box(Modifier.align(Alignment.CenterVertically)) {
+                    ProfileAchievements(badges, badgesLoading, onOpenBadges, communityScore,
+                        communityScoreLoading, needsAuthorization, onOpenCommunityScore)
+                }
+            }
+            Text("@$username", color = colors.secondaryLabel, fontSize = 12.sp,
+                maxLines = 1, overflow = TextOverflow.Ellipsis)
+            Spacer(Modifier.height(8.dp))
             ProfileDetails(card, badges, badgesLoading, onOpenBadges,
-                communityScore = communityScore, communityScoreLoading = communityScoreLoading,
-                needsAuthorization = needsAuthorization, onOpenCommunityScore = onOpenCommunityScore,
-                loading = card == null)
+                loading = card == null, showAchievements = false)
+            Spacer(Modifier.height(12.dp))
         }
     }
     previewingBackgroundUrl?.let { url ->
