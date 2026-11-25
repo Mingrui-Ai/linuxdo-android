@@ -59,7 +59,7 @@ internal fun ProfileIdentity(
     }
 }
 
-/** 共用资料内容；简要视图在简介前展示成就，详细主页把成就放在名称旁。 */
+/** 共用资料内容；简要视图在简介前展示成就，详细主页把成就放在 @用户名 旁。 */
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
 internal fun ProfileDetails(

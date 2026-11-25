@@ -122,27 +122,29 @@ internal fun ProfileHeader(
         }
         Column(Modifier.padding(horizontal = 18.dp)) {
             Spacer(Modifier.height(10.dp))
-            FlowRow(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(12.dp),
+            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                Text(card?.cleanDisplayName ?: username, fontSize = 24.sp, fontWeight = FontWeight.Bold,
+                    color = colors.label, maxLines = 1, overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.weight(1f, false))
+                card?.trustLevel?.let { level ->
+                    Box(Modifier.heightIn(min = 32.dp).then(if (onOpenLevel != null)
+                        Modifier.clickable(onClickLabel = "等级与积分", onClick = onOpenLevel) else Modifier),
+                        contentAlignment = Alignment.Center) { LevelBadge(level) }
+                }
+            }
+            FlowRow(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp),
                 verticalArrangement = Arrangement.spacedBy(2.dp)) {
-                Row(Modifier.widthIn(max = 260.dp).align(Alignment.CenterVertically),
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    Text(card?.cleanDisplayName ?: username, fontSize = 24.sp, fontWeight = FontWeight.Bold,
-                        color = colors.label, maxLines = 1, overflow = TextOverflow.Ellipsis,
-                        modifier = Modifier.weight(1f, false))
-                    card?.trustLevel?.let { level ->
-                        Box(Modifier.heightIn(min = 32.dp).then(if (onOpenLevel != null)
-                            Modifier.clickable(onClickLabel = "等级与积分", onClick = onOpenLevel) else Modifier),
-                            contentAlignment = Alignment.Center) { LevelBadge(level) }
-                    }
+                Box(Modifier.heightIn(min = 32.dp).align(Alignment.CenterVertically),
+                    contentAlignment = Alignment.CenterStart) {
+                    Text("@$username", color = colors.secondaryLabel, fontSize = 12.sp,
+                        maxLines = 1, overflow = TextOverflow.Ellipsis)
                 }
                 Box(Modifier.align(Alignment.CenterVertically)) {
                     ProfileAchievements(badges, badgesLoading, onOpenBadges, communityScore,
                         communityScoreLoading, needsAuthorization, onOpenCommunityScore)
                 }
             }
-            Text("@$username", color = colors.secondaryLabel, fontSize = 12.sp,
-                maxLines = 1, overflow = TextOverflow.Ellipsis)
             Spacer(Modifier.height(8.dp))
             ProfileDetails(card, badges, badgesLoading, onOpenBadges,
                 loading = card == null, showAchievements = false)
