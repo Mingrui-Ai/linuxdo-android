@@ -140,12 +140,29 @@ internal class ProfileEditorViewModel(application: Application) : AndroidViewMod
             var attempted=false
             val edited=original.values
             val changes=ProfileFields.changes(base.values,edited)
-            fun acceptVerified(saved: ProfileEditorData, failure: String? = null) {
+            fun remainingChanges(saved: ProfileEditorData) = changes.filter { (key,value) ->
+                !ProfileFields.equivalent(key,value,saved.values[key].orEmpty())
+            }
+            fun acceptVerified(saved: ProfileEditorData) {
                 guard(); publish(saved,guard)
-                val remaining=changes.filter { (key,value) -> !ProfileFields.equivalent(key,value,saved.values[key].orEmpty()) }
+                val remaining=remainingChanges(saved)
+                val confirmed=changes.keys-remaining.keys
                 _state.value=ProfileEditorUiState(data=saved,values=saved.values+remaining,
-                    notice=if(remaining.isEmpty()) "已保存到网页" else null,
-                    error=if(remaining.isEmpty()) null else failure ?: ("网页未接受以下修改，已保留待处理："+remaining.keys.joinToString("、"){ProfileFields.labels[it].orEmpty()}))
+                    notice=if(remaining.isEmpty()) "已保存到网页" else confirmed.takeIf { it.isNotEmpty() }
+                        ?.joinToString("、",prefix="已确认保存："){ProfileFields.labels[it].orEmpty()},
+                    error=if(remaining.isEmpty()) null else "以下修改的保存结果暂未确认："+
+                        remaining.keys.joinToString("、"){ProfileFields.labels[it].orEmpty()}+"。修改已保留，请稍后再次保存核对。")
+            }
+            suspend fun verifySaved() {
+                var saved=load(guard)
+                // A successful write can briefly be followed by an older read. Recheck only
+                // unresolved fields, without replaying writes or publishing the stale snapshot.
+                for (waitMillis in listOf(600L,1400L)) {
+                    if (!attempted || remainingChanges(saved).isEmpty()) break
+                    delay(waitMillis); guard()
+                    saved=load(guard)
+                }
+                acceptVerified(saved)
             }
             try {
                 ProfileFields.validate(edited,changes.keys)
@@ -174,12 +191,12 @@ internal class ProfileEditorViewModel(application: Application) : AndroidViewMod
                 pending["card_badge"]?.let { id ->
                     put("/preferences/card-badge",buildJsonObject { put("user_badge_id",id.toLongOrNull()?.let(::JsonPrimitive) ?: JsonNull) })
                 }
-                acceptVerified(load(guard))
+                verifySaved()
             } catch (e: CancellationException) { throw e }
             catch (e: Exception) {
                 finish(token) { it.copy(error=(if(attempted) "保存结果尚未确认，修改已保留。" else "")+(e.message ?: "保存失败，请重试")) }
                 // A failed response may have reached the server. Re-read before deciding what needs retrying.
-                if (attempted) try { acceptVerified(load(guard),"部分资料未保存，剩余修改已保留。"+(e.message ?: "请重试")) }
+                if (attempted) try { verifySaved() }
                 catch(e: CancellationException) { throw e } catch(_: Exception) { }
             } finally { finish(token) { it.copy(saving=false) } }
         }

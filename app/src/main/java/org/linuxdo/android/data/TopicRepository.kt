@@ -1619,7 +1619,11 @@ class TopicRepository(
     /** Native profile editor shares the same pacing, CSRF and session checks as all other writes. */
     internal suspend fun profileEditorRead(path: String, userId: Long, generation: Long): JsonObject {
         checkWriteSession(userId, generation)
-        return json.parseToJsonElement(request(path, beforeDispatch = { checkWriteSession(userId, generation) }))
+        // The editor compares writes against this response. Never reuse a browser/CDN response
+        // for a previous visit to the same profile URL, including the pre-save conflict check.
+        val readPath = if (path.startsWith("/u/") && path.endsWith(".json"))
+            "$path?_=${java.util.UUID.randomUUID()}" else path
+        return json.parseToJsonElement(request(readPath, beforeDispatch = { checkWriteSession(userId, generation) }))
             .jsonObject.also { checkWriteSession(userId, generation) }
     }
 
