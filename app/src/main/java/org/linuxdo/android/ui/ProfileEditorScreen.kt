@@ -14,6 +14,8 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.selection.LocalTextSelectionColors
+import androidx.compose.foundation.text.selection.TextSelectionColors
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -21,10 +23,11 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.compositeOver
+import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.platform.LocalFocusManager
-import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.text.TextRange
 import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.unit.dp
@@ -52,6 +55,33 @@ import java.util.Locale
 /** A standalone editor keeps navigation/layout refactors independent from profile data changes. */
 @Composable
 internal fun ProfileEditorDialog(username: String, userId: Long, onDismiss: () -> Unit) {
+    val colors=IosTheme.colors
+    // Material inputs/dialogs need the same palette as the surrounding IosTheme cards.
+    val scheme=remember(colors) {
+        val onAccent=if(colors.accent.luminance()>0.179f) Color.Black else Color.White
+        (if(colors.isDark) darkColorScheme() else lightColorScheme()).copy(
+            primary=colors.accent,onPrimary=onAccent,
+            secondary=colors.accent,onSecondary=onAccent,
+            secondaryContainer=colors.fieldBackground.compositeOver(colors.card),onSecondaryContainer=colors.label,
+            background=colors.groupedBackground,onBackground=colors.label,
+            surface=colors.card,onSurface=colors.label,
+            surfaceVariant=colors.card,onSurfaceVariant=colors.secondaryLabel.compositeOver(colors.card),
+            surfaceContainerHigh=colors.card,surfaceTint=Color.Transparent,
+            outline=colors.secondaryLabel.compositeOver(colors.card),outlineVariant=colors.separator.compositeOver(colors.card),
+            error=colors.destructive,
+        )
+    }
+    MaterialTheme(colorScheme=scheme) {
+        CompositionLocalProvider(
+            LocalContentColor provides colors.label,
+            LocalTextStyle provides IosTheme.type.body,
+            LocalTextSelectionColors provides TextSelectionColors(colors.accent,colors.accent.copy(alpha=0.35f)),
+        ) { ProfileEditorContent(username,userId,onDismiss) }
+    }
+}
+
+@Composable
+private fun ProfileEditorContent(username: String, userId: Long, onDismiss: () -> Unit) {
     val model: ProfileEditorViewModel = viewModel(key="native-profile-editor-$userId")
     val state by model.state.collectAsStateWithLifecycle()
     val context=LocalContext.current
@@ -231,27 +261,21 @@ private fun profileStatusEmojiCode(value:String):String = value.trim().trim(':')
 @Composable private fun ProfileBioEditor(raw:String,enabled:Boolean,emojiUrls:Map<String,String>,onUpload:()->Unit,onChange:(String)->Unit) {
     var text by remember { mutableStateOf(TextFieldValue(raw)) }
     var emojis by remember { mutableStateOf(false) }
-    var preview by rememberSaveable { mutableStateOf(false) }
-    val focus = LocalFocusManager.current
-    val keyboard = LocalSoftwareKeyboardController.current
     LaunchedEffect(raw) { if(raw!=text.text) text=TextFieldValue(raw,TextRange(raw.length)) }
     fun insert(before:String,after:String="") {
         val start=text.selection.min;val end=text.selection.max
         val updated=text.text.take(start)+before+text.text.substring(start,end)+after+text.text.drop(end)
         text=TextFieldValue(updated,TextRange(start+before.length,end+before.length));onChange(updated)
     }
-    Row(Modifier.fillMaxWidth(),horizontalArrangement=Arrangement.spacedBy(8.dp)) {
-        FilterChip(selected=!preview,onClick={preview=false},label={Text("编辑")})
-        FilterChip(selected=preview,onClick={focus.clearFocus();keyboard?.hide();emojis=false;preview=true},label={Text("预览")})
-    }
-    if(preview) ProfileBioPreview(raw,emojiUrls) else {
     Row(Modifier.horizontalScroll(rememberScrollState())) {
         listOf("粗体" to ("**" to "**"),"斜体" to ("_" to "_"),"标题" to ("\n## " to ""),"链接" to ("[" to "](https://)"),"引用" to ("\n> " to ""),"列表" to ("\n- " to ""),"代码" to ("`" to "`")).forEach { (label,markers) -> TextButton(onClick={insert(markers.first,markers.second)},enabled=enabled){Text(label)} }
         TextButton(onClick={emojis=!emojis},enabled=enabled){Text("表情")}
         TextButton(onClick=onUpload,enabled=enabled){Text("图片")}
     }
     OutlinedTextField(value=text,onValueChange={text=it;onChange(it.text)},enabled=enabled,modifier=Modifier.fillMaxWidth().heightIn(min=160.dp),minLines=4,label={Text("支持 Markdown 和表情")})
-    }
+    HorizontalDivider(color=IosTheme.colors.separator)
+    Text("预览",style=IosTheme.type.footnote,color=IosTheme.colors.secondaryLabel)
+    ProfileBioPreview(raw,emojiUrls)
     if(emojis) ProfileEmojiDialog(onDismiss={emojis=false}) { insert(":$it:");emojis=false }
 }
 
@@ -266,7 +290,7 @@ private fun profileStatusEmojiCode(value:String):String = value.trim().trim(':')
         catch(e:CancellationException) { throw e }
         catch(_:Exception) { error="预览暂时无法显示" }
     }
-    Column(Modifier.fillMaxWidth().heightIn(min=160.dp).padding(vertical=8.dp),verticalArrangement=Arrangement.spacedBy(10.dp)) {
+    Column(Modifier.fillMaxWidth().heightIn(min=48.dp).padding(vertical=8.dp),verticalArrangement=Arrangement.spacedBy(10.dp)) {
         when {
             raw.isBlank() -> Text("填写自我介绍后可在这里预览",color=IosTheme.colors.secondaryLabel)
             error!=null -> { Text(error!!); TextButton(onClick={retry++}){Text("重试")} }
