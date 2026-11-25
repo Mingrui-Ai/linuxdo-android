@@ -1419,6 +1419,7 @@ private fun MainNavigation(state: UiState, viewModel: MainViewModel, lifecycle: 
                                 }
                                 TopicListScreen(
                                     title = "# ${route.tag}",
+                                    showHeaderActions = true,
                                     state = topicState,
                                     feedGraphicMode = feedGraphicMode,
                                     feedDisplayMode = feedDisplayMode,
@@ -1445,7 +1446,7 @@ private fun MainNavigation(state: UiState, viewModel: MainViewModel, lifecycle: 
                                     },
                                     sortOrder = topicSortOrder,
                                     sortAscending = topicSortAscending,
-                                    onSortChange = { viewModel.setTopicSort(it) },
+                                    onSortChange = { viewModel.setTopicSort(it, currentTag = route.tag) },
                                     floatingBallEnabled = floatingBallEnabled,
                                     floatingBallActions = floatingBallActions,
                                     floatingBallXRatio = floatingBallXRatio,
@@ -1497,6 +1498,7 @@ private fun MainNavigation(state: UiState, viewModel: MainViewModel, lifecycle: 
                                 TopicListScreen(
                                     title = route.name,
                                     state = categoryTopics[route.categoryId] ?: TopicListUiState(),
+                                    showHeaderActions = true,
                                     feedGraphicMode = feedGraphicMode,
                                     feedDisplayMode = feedDisplayMode,
                                     showTopicUnreadDot = showTopicUnreadDot,
