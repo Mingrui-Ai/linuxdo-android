@@ -777,7 +777,8 @@ fun TopicListScreen(
                         },
                         modifier = Modifier.fillMaxSize(),
                     )
-                } else {
+                } else if (currentFeed == null) {
+                    // 首页关闭悬浮球后不再补显示独立按钮，发帖统一从底栏进入。
                     Column(
                         modifier = Modifier
                             .align(Alignment.BottomEnd)
