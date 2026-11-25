@@ -3707,11 +3707,6 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         _history.update { it.copy(query = query) }
     }
 
-    fun clearHistory() {
-        container.historyStore.clear()
-        _history.update { it.copy(entries = emptyList()) }
-    }
-
     fun openUserCard(username: String) {
         openUserCard(username, null, null, null)
     }
@@ -6162,7 +6157,17 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
-    fun openTopicCreator(initialCategoryId: Int? = null) {
+    fun openDrafts(onOpen: () -> Unit) {
+        if (_accounts.value.switching || store.sessionChanging) return
+        if (_state.value.username.isNullOrBlank()) {
+            Toast.makeText(getApplication(), "请先登录账号后发帖", Toast.LENGTH_SHORT).show()
+            addAccount()
+            return
+        }
+        onOpen()
+    }
+
+    fun openTopicCreator(initialCategoryId: Int? = null, newDraft: Boolean = false) {
         if (_accounts.value.switching || store.sessionChanging) return
         if (_topicCreator.value.open || _topicCreator.value.submitting || _topicCreator.value.savingDraft) return
         if (_state.value.username.isNullOrBlank()) {
@@ -6174,10 +6179,12 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             loadCategories()
         }
         val validCategoryId = resolveCreatableCategoryId(initialCategoryId)
-        val existingNewTopicDraft = _drafts.value.items.firstOrNull { it.draftKey == "new_topic" }
+        // Discourse 支持 new_topic 前缀的独立草稿；新建不能覆盖旧稿，key 最长 40 字符。
+        val draftKey = if (newDraft) "new_topic_${java.util.UUID.randomUUID().toString().replace("-", "").take(24)}" else "new_topic"
+        val existingNewTopicDraft = _drafts.value.items.firstOrNull { it.draftKey == draftKey }
         val baseState = TopicCreatorUiState(
             open = true,
-            draftKey = "new_topic",
+            draftKey = draftKey,
             sequence = existingNewTopicDraft?.sequence ?: 0L,
             action = "createTopic",
             title = "",
@@ -6186,7 +6193,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             tags = emptyList(),
         )
         _topicCreator.value = baseState.copy(savedSnapshot = baseState.currentSnapshot, loadingDraft = true)
-        restoreSyncedDraft("new_topic")
+        restoreSyncedDraft(draftKey)
         ensureTopicCreatorCategoryPermissions()
         populateCreatorEmojis()
         loadTopicCreatorTags(validCategoryId)
@@ -6330,6 +6337,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         persistCreatorDraft()
         scheduleDraftSync(current.draftKey, immediate = true)
         _topicCreator.value = TopicCreatorUiState()
+        loadDrafts(refresh = true, silent = true)
     }
 
     fun attachToTopicCreator(uri: Uri) {

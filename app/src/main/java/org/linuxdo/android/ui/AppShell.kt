@@ -896,6 +896,12 @@ private fun MainNavigation(state: UiState, viewModel: MainViewModel, lifecycle: 
             viewModel.setPreviewListVisible(false)
         }
     }
+    fun openDrafts() {
+        viewModel.openDrafts {
+            if (stack.current != Route.Drafts) stack.push(Route.Drafts)
+        }
+    }
+
     fun selectBoard(tab: MainTab) {
         selected = tab
     }
@@ -1008,7 +1014,7 @@ private fun MainNavigation(state: UiState, viewModel: MainViewModel, lifecycle: 
                                 onSetNotificationLevel = { topic, level ->
                                     viewModel.setTopicNotificationLevel(topic.id, level)
                                 },
-                                onCreateTopic = if (state.username != null) ({ viewModel.openTopicCreator(null) }) else null,
+                                onCreateTopic = if (state.username != null) ({ openDrafts() }) else null,
                                 onBookmarkTopic = { topic, onResult ->
                                     viewModel.bookmarkTopicFromList(topic.id, onResult)
                                 },
@@ -1388,7 +1394,7 @@ private fun MainNavigation(state: UiState, viewModel: MainViewModel, lifecycle: 
                                     onSetNotificationLevel = { topic, level ->
                                         viewModel.setTopicNotificationLevel(topic.id, level)
                                     },
-                                    onCreateTopic = if (state.username != null) ({ viewModel.openTopicCreator(route.categoryId.toInt()) }) else null,
+                                    onCreateTopic = if (state.username != null) ({ openDrafts() }) else null,
                                     onBookmarkTopic = { topic, onResult ->
                                         viewModel.bookmarkTopicFromList(topic.id, onResult)
                                     },
@@ -1519,11 +1525,14 @@ private fun MainNavigation(state: UiState, viewModel: MainViewModel, lifecycle: 
                                 categories = categories.items,
                                 onBack = { stack.pop() },
                                 onRefresh = { viewModel.loadDrafts(refresh = true) },
+                                onCreateTopic = {
+                                    val category = (stack.entries.dropLast(1).lastOrNull()?.route as? Route.CategoryTopics)?.categoryId
+                                    viewModel.openTopicCreator(category, newDraft = true)
+                                },
                                 onEditDraft = { draft ->
                                     if (draft.action == "createPrivateMessage" || (draft.topicId == null && draft.archetype != "regular")) {
                                         globalBrowserUrl = "${Config.BASE_URL}/my/activity/drafts"
                                     } else if (draft.topicId != null && draft.topicId > 0L) {
-                                        stack.pop()
                                         stack.push(Route.TopicDetail(draft.topicId, draft.title, draft.replyToPostNumber))
                                         viewModel.openReplyWithDraft(draft)
                                     } else {
@@ -1531,7 +1540,6 @@ private fun MainNavigation(state: UiState, viewModel: MainViewModel, lifecycle: 
                                     }
                                 },
                                 onDeleteDraft = viewModel::deleteDraft,
-                                trailing = {},
                             )
 
                             Route.BrowsingHistory -> HistoryScreen(
@@ -1539,7 +1547,6 @@ private fun MainNavigation(state: UiState, viewModel: MainViewModel, lifecycle: 
                                 query = history.query,
                                 loading = history.loading,
                                 onQueryChange = viewModel::setHistoryQuery,
-                                onClear = viewModel::clearHistory,
                                 onRefresh = { viewModel.loadHistory() },
                                 onLoadMore = { viewModel.loadHistory(refresh = false) },
                                 hasMore = history.hasMore,
@@ -1919,7 +1926,7 @@ private fun MainNavigation(state: UiState, viewModel: MainViewModel, lifecycle: 
                 modifier = boardSwipe,
                 onCreateTopic = {
                     if (browsing && !contentObscured) {
-                        viewModel.openTopicCreator((stack.current as? Route.CategoryTopics)?.categoryId)
+                        openDrafts()
                     }
                 },
                 unreadCount = state.unreadCount + chatUnread,

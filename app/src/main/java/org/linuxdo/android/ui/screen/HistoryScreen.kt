@@ -1,5 +1,27 @@
 package org.linuxdo.android.ui.screen
 
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.setValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.rememberUpdatedState
+import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.runtime.snapshotFlow
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.platform.LocalFocusManager
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
+import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.filter
+import org.linuxdo.android.ui.design.IosActivityIndicator
+import org.linuxdo.android.ui.design.IosNavBar
+import org.linuxdo.android.ui.design.ListNavigationHeader
+import org.linuxdo.android.ui.design.MessageListRefresh
+import org.linuxdo.android.ui.design.scrollListBars
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -19,7 +41,6 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
@@ -50,7 +71,6 @@ import org.linuxdo.android.data.ReadingHistoryEntry
 import org.linuxdo.android.data.avatarUrlOf
 import org.linuxdo.android.ui.design.IosDivider
 import org.linuxdo.android.ui.design.IosLoadingBox
-import org.linuxdo.android.ui.design.IosLargeTitleScaffold
 import org.linuxdo.android.ui.design.IosTheme
 import org.linuxdo.android.ui.design.avatarShape
 import org.linuxdo.android.ui.format.RelativeTime
@@ -61,7 +81,6 @@ fun HistoryScreen(
     query: String,
     loading: Boolean,
     onQueryChange: (String) -> Unit,
-    onClear: () -> Unit,
     onRefresh: () -> Unit,
     onLoadMore: () -> Unit,
     hasMore: Boolean,
@@ -69,128 +88,125 @@ fun HistoryScreen(
     onOpenTopic: (Long, String, Int?) -> Unit,
     onBack: () -> Unit,
 ) {
-    val groups = remember(entries, query) {
-        val filtered = entries.filter { entry ->
+    val list = rememberLazyListState()
+    var searchExpanded by rememberSaveable { mutableStateOf(query.isNotBlank()) }
+    var refreshing by remember { mutableStateOf(false) }
+    var loadingOlder by remember { mutableStateOf(false) }
+    val focus = remember { FocusRequester() }
+    val focusManager = LocalFocusManager.current
+    val canLoadMore by rememberUpdatedState(hasMore && !loading && error == null)
+    val loadMore by rememberUpdatedState(onLoadMore)
+    val filtered = remember(entries, query) {
+        entries.filter { entry ->
             query.isBlank() || entry.title.contains(query.trim(), ignoreCase = true) || entry.topicId.toString().contains(query.trim())
         }
-        if (filtered.isEmpty()) emptyMap() else mapOf("最近浏览" to filtered)
     }
 
-    IosLargeTitleScaffold(
-        title = "浏览历史",
-        showLargeTitle = false,
-        onBack = onBack,
-        backLabel = "返回",
-    ) {
-        item("history-search") {
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(horizontal = 16.dp, vertical = 4.dp),
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
+    LaunchedEffect(loading) {
+        if (!loading) { refreshing = false; loadingOlder = false }
+    }
+    LaunchedEffect(list) {
+        snapshotFlow {
+            val total = list.layoutInfo.totalItemsCount
+            val last = list.layoutInfo.visibleItemsInfo.lastOrNull()?.index ?: -1
+            canLoadMore && list.isScrollInProgress && total > 0 && last >= total - 3
+        }.distinctUntilChanged().filter { it }.collect {
+            loadingOlder = true
+            loadMore()
+        }
+    }
+
+    Column(Modifier.fillMaxSize().background(IosTheme.colors.groupedBackground)) {
+        ListNavigationHeader {
+            IosNavBar(
+                title = "浏览历史", onBack = onBack, backLabel = "返回",
+                trailing = {
+                    Box(
+                        Modifier.size(48.dp).clip(CircleShape)
+                            .clickable {
+                                searchExpanded = !searchExpanded
+                                if (!searchExpanded) { onQueryChange(""); focusManager.clearFocus() }
+                            }
+                            .semantics { contentDescription = if (searchExpanded) "关闭历史搜索" else "搜索历史" },
+                        contentAlignment = Alignment.Center,
+                    ) {
+                        HistorySearchIcon(
+                            if (searchExpanded) IosTheme.colors.accent else IosTheme.colors.label,
+                            Modifier.size(22.dp),
+                        )
+                    }
+                },
+            )
+            if (searchExpanded) {
+                LaunchedEffect(Unit) { focus.requestFocus() }
                 Row(
-                    modifier = Modifier
-                        .weight(1f)
-                        .clip(RoundedCornerShape(50))
-                        .background(IosTheme.colors.fieldBackground)
-                        .padding(horizontal = 12.dp, vertical = 6.dp),
+                    Modifier.fillMaxWidth().background(IosTheme.colors.card).padding(horizontal = 16.dp, vertical = 8.dp)
+                        .clip(RoundedCornerShape(50)).background(IosTheme.colors.fieldBackground)
+                        .padding(horizontal = 12.dp, vertical = 10.dp),
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
-                    HistorySearchIcon(
-                        tint = IosTheme.colors.secondaryLabel,
-                        modifier = Modifier.size(15.dp),
-                    )
-                    Spacer(Modifier.width(8.dp))
                     BasicTextField(
-                        value = query,
-                        onValueChange = onQueryChange,
-                        singleLine = true,
+                        value = query, onValueChange = onQueryChange, singleLine = true,
                         textStyle = IosTheme.type.body.copy(color = IosTheme.colors.label, fontSize = 14.sp),
                         cursorBrush = SolidColor(IosTheme.colors.accent),
-                        modifier = Modifier.weight(1f),
+                        modifier = Modifier.weight(1f).focusRequester(focus),
                         decorationBox = { field ->
                             Box {
-                                if (query.isEmpty()) {
-                                    Text(
-                                        "搜索标题或话题编号",
-                                        style = IosTheme.type.body.copy(fontSize = 14.sp),
-                                        color = IosTheme.colors.secondaryLabel,
-                                    )
-                                }
+                                if (query.isEmpty()) Text("搜索标题或话题编号", style = IosTheme.type.body.copy(fontSize = 14.sp),
+                                    color = IosTheme.colors.secondaryLabel)
                                 field()
                             }
                         },
                     )
-                    if (query.isNotEmpty()) {
-                        Box(
-                            modifier = Modifier
-                                .size(18.dp)
-                                .clip(CircleShape)
-                                .background(IosTheme.colors.secondaryLabel.copy(alpha = 0.2f))
-                                .clickable { onQueryChange("") },
-                            contentAlignment = Alignment.Center,
-                        ) {
-                            Text("✕", fontSize = 10.sp, color = IosTheme.colors.secondaryLabel)
-                        }
+                    if (query.isNotEmpty()) Box(
+                        Modifier.size(24.dp).clip(CircleShape).clickable { onQueryChange("") }
+                            .semantics { contentDescription = "清除搜索内容" },
+                        contentAlignment = Alignment.Center,
+                    ) { Text("✕", fontSize = 12.sp, color = IosTheme.colors.secondaryLabel) }
+                }
+            }
+        }
+        MessageListRefresh(
+            refreshing = refreshing && loading, active = !loading,
+            onRefresh = { refreshing = true; loadingOlder = false; onRefresh() },
+            modifier = Modifier.weight(1f).fillMaxWidth(),
+        ) {
+            LazyColumn(
+                state = list, modifier = Modifier.fillMaxSize().scrollListBars(list),
+                contentPadding = PaddingValues(bottom = 20.dp),
+            ) {
+                error?.let { message ->
+                    item("history-error") {
+                        Text("$message · 下拉重试", modifier = Modifier.fillMaxWidth().padding(16.dp),
+                            style = IosTheme.type.footnote, color = IosTheme.colors.secondaryLabel)
                     }
                 }
-                if (entries.isNotEmpty()) {
-                    Spacer(Modifier.width(8.dp))
-                    TextButton(
-                        onClick = onClear,
-                        contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp),
-                    ) {
-                        Text(
-                            "清本机",
-                            color = IosTheme.colors.secondaryLabel,
-                            style = IosTheme.type.subheadline,
-                        )
+                if (loading && entries.isEmpty()) {
+                    item("history-loading") { IosLoadingBox() }
+                } else if (filtered.isEmpty()) {
+                    item("history-empty") {
+                        Text(if (entries.isEmpty()) "暂无浏览历史，下拉刷新" else "没有匹配的话题",
+                            modifier = Modifier.fillMaxWidth().padding(24.dp), style = IosTheme.type.footnote,
+                            color = IosTheme.colors.secondaryLabel)
                     }
                 }
-            }
-        }
-        item("history-sync") {
-            Row(Modifier.fillMaxWidth().padding(horizontal = 16.dp), verticalAlignment = Alignment.CenterVertically) {
-                Text(error ?: if (loading) "正在同步…" else "与网页已读记录同步", modifier = Modifier.weight(1f),
-                    style = IosTheme.type.footnote, color = IosTheme.colors.secondaryLabel)
-                TextButton(onClick = onRefresh, enabled = !loading) { Text("刷新") }
-            }
-        }
-        if (loading && entries.isEmpty()) {
-            item("history-loading") { IosLoadingBox() }
-        } else if (groups.isEmpty()) {
-            item("history-empty") {
-                Text(
-                    if (entries.isEmpty()) "暂无浏览历史" else "没有匹配的话题",
-                    modifier = Modifier.fillMaxWidth().padding(24.dp),
-                    style = IosTheme.type.footnote,
-                    color = IosTheme.colors.secondaryLabel,
-                )
-            }
-        }
-        groups.forEach { (label, dayEntries) ->
-            item("history-day-$label") {
-                Text(
-                    label,
-                    modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 6.dp),
-                    style = IosTheme.type.caption.copy(fontWeight = FontWeight.SemiBold),
-                    color = IosTheme.colors.secondaryLabel,
-                )
-            }
-            items(dayEntries, key = { it.topicId }) { entry ->
-                HistoryRow(entry = entry, query = query) {
-                    onOpenTopic(
-                        entry.topicId,
-                        entry.title,
-                        entry.lastSeenPostNumber.takeIf { it > 1 },
-                    )
+                if (filtered.isNotEmpty()) item("history-heading") {
+                    Text("最近浏览", modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp),
+                        style = IosTheme.type.caption.copy(fontWeight = FontWeight.SemiBold),
+                        color = IosTheme.colors.secondaryLabel)
                 }
-            }
-        }
-        if (hasMore) item("history-more") {
-            TextButton(onClick = onLoadMore, enabled = !loading, modifier = Modifier.fillMaxWidth()) {
-                Text(if (loading) "正在加载…" else "加载更早记录")
+                items(filtered, key = { it.topicId }) { entry ->
+                    HistoryRow(entry = entry, query = query) {
+                        onOpenTopic(entry.topicId, entry.title, entry.lastSeenPostNumber.takeIf { it > 1 })
+                    }
+                }
+                if (hasMore || loadingOlder) item("history-more") {
+                    Box(Modifier.fillMaxWidth().padding(16.dp), contentAlignment = Alignment.Center) {
+                        if (loading && loadingOlder) IosActivityIndicator(diameter = 22.dp)
+                        else Text(if (error != null) "下拉重试" else "继续上滑加载更早记录",
+                            style = IosTheme.type.footnote, color = IosTheme.colors.tertiaryLabel)
+                    }
+                }
             }
         }
     }

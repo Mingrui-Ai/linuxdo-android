@@ -5117,7 +5117,7 @@ fun DraftsScreen(
     onRefresh: () -> Unit,
     onEditDraft: (DraftItem) -> Unit,
     onDeleteDraft: (DraftItem) -> Unit,
-    trailing: @Composable () -> Unit = {},
+    onCreateTopic: () -> Unit,
 ) {
     val categoryById = remember(categories) { categories.associateBy { it.id.toInt() } }
     var draftPendingDelete by remember { mutableStateOf<DraftItem?>(null) }
@@ -5131,9 +5131,9 @@ fun DraftsScreen(
     ) {
         ListNavigationHeader {
             IosNavBar(
-                title = "我的草稿",
+                title = "草稿箱",
                 onBack = onBack,
-                trailing = trailing,
+                trailing = { IosTextAction("新建帖子", onClick = onCreateTopic) },
             )
         }
 
@@ -5190,7 +5190,7 @@ fun DraftsScreen(
                                 )
                                 Spacer(Modifier.height(6.dp))
                                 Text(
-                                    text = "发帖与回复会自动保存，并与网页草稿同步",
+                                    text = "点击右上角新建帖子，内容会自动保存并同步",
                                     style = IosTheme.type.footnote,
                                     color = IosTheme.colors.tertiaryLabel,
                                 )
