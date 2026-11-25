@@ -3690,17 +3690,6 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
         pageJobs["userCard"] = viewModelScope.launch {
             try {
-                if (followedUsernames.value.isEmpty() && currentAccount != null) {
-                    launch {
-                        val fresh = runCatching { repository.fetchFollowing(currentAccount) }.getOrNull()
-                        if (fresh != null) {
-                            followedUsernames.value = fresh.map { it.username.lowercase() }.toSet()
-                            if (target.lowercase() in followedUsernames.value) {
-                                _userCard.update { it.copy(following = true) }
-                            }
-                        }
-                    }
-                }
                 val user = repository.fetchUserCard(target, forceRefresh = cached != null)
                 val effectiveUser = user.copy(
                     avatarTemplate = user.avatarTemplate ?: staticAvatarUrl ?: primaryAvatarUrl,
@@ -3708,42 +3697,13 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 )
                 val curFollowed = isFollowed || target.lowercase() in followedUsernames.value || effectiveUser.following
                 val curBlocked = isBlocked || target.lowercase() in blockedUsernames.value
-                val hasMetrics = effectiveUser.topicCount > 0 || effectiveUser.postCount > 0 || effectiveUser.likesReceived > 0
                 _userCard.value = UserCardUiState(
                     user = effectiveUser,
                     following = curFollowed,
                     isBlocked = curBlocked,
                     isSelf = isSelf,
-                    loading = !hasMetrics,
+                    loading = false,
                 )
-
-                // 快速并发拉取真实统计数据 (话题、帖子、获赞、徽章、动图头像)
-                val stats = runCatching { repository.fetchUserCardStats(target) }.getOrNull()
-                if (stats != null) {
-                    val cur = _userCard.value.user
-                    if (cur != null && cur.username.equals(target, ignoreCase = true)) {
-                        val finalFollowed = curFollowed || (stats.isFollowed == true)
-                        if (stats.isFollowed == true) {
-                            followedUsernames.value += target.lowercase()
-                        }
-                        val updated = cur.copy(
-                            topicCount = stats.topicCount,
-                            postCount = stats.postCount,
-                            likesReceived = stats.likesReceived,
-                            badges = if (stats.badges.isNotEmpty()) stats.badges else cur.badges,
-                            animatedAvatar = stats.animatedAvatar ?: cur.animatedAvatar,
-                            following = finalFollowed,
-                        )
-                        _userCard.value = _userCard.value.copy(
-                            user = updated,
-                            following = finalFollowed,
-                            loading = false,
-                        )
-                        repository.saveCachedUserCard(updated)
-                    }
-                } else {
-                    _userCard.update { it.copy(loading = false) }
-                }
 
                 if (effectiveUser.animatedAvatar.isNullOrBlank()) {
                     val enriched = runCatching { repository.enrichUserCardAvatar(target, effectiveUser) }.getOrNull()
@@ -3805,33 +3765,19 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
-    fun toggleFollowUser() {
-        val current = _userCard.value
-        val user = current.user ?: return
-        if (current.followUpdating || (!user.canFollow && !current.following) || user.id == store.currentUserId()) return
-        val previous = current.following
-        val nextFollow = !previous
-        _userCard.update { it.copy(following = nextFollow, followUpdating = true, error = null) }
-        val targetLower = user.username.lowercase()
-        if (nextFollow) {
-            followedUsernames.update { it + targetLower }
-        } else {
-            followedUsernames.update { it - targetLower }
-        }
-        pageJobs["follow:${user.username}"] = viewModelScope.launch {
-            try {
-                repository.setFollow(user.username, nextFollow)
-                _userCard.update { it.copy(followUpdating = false) }
-            } catch (error: CancellationException) {
-                throw error
-            } catch (error: Exception) {
-                if (nextFollow) {
-                    followedUsernames.update { it - targetLower }
-                } else {
-                    followedUsernames.update { it + targetLower }
-                }
-                _userCard.update { it.copy(following = previous, followUpdating = false, error = error.message ?: "关注操作失败") }
-            }
+    /** 详细主页调用；成功后才更新关注状态，不再依赖是否打开了头像弹窗。 */
+    suspend fun setProfileFollowing(user: org.linuxdo.android.data.UserCardData, following: Boolean) {
+        val username = _state.value.username ?: error("请先登录")
+        val checkSession = connectSessionCheck(username)
+        checkSession()
+        check(!user.username.equals(username, ignoreCase = true) && (user.canFollow || !following)) { "无法关注此用户" }
+        repository.setFollow(user.username, following)
+        checkSession()
+        val target = user.username.lowercase()
+        followedUsernames.update { if (following) it + target else it - target }
+        repository.saveCachedUserCard((repository.getCachedUserCard(user.username) ?: user).copy(following = following))
+        if (_userCard.value.user?.username.equals(user.username, ignoreCase = true)) {
+            _userCard.update { it.copy(following = following, user = it.user?.copy(following = following)) }
         }
     }
 
@@ -3914,22 +3860,17 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
-    fun toggleBlacklistForUserCard() {
-        val current = _userCard.value
-        val user = current.user ?: return
-        val target = user.username
-        if (current.following) {
+    fun toggleProfileBlacklist(user: org.linuxdo.android.data.UserCardData, following: Boolean) {
+        if (user.username.equals(_state.value.username, ignoreCase = true)) return
+        val target = user.username.lowercase()
+        if (following || target in followedUsernames.value) {
+            android.widget.Toast.makeText(getApplication(), "已关注用户不能拉黑，请先取消关注", android.widget.Toast.LENGTH_SHORT).show()
             return
         }
-        if (current.isBlocked) {
-            removeFromBlacklist(target)
+        if (target in blockedUsernames.value) {
+            removeFromBlacklist(user.username)
         } else {
-            addToBlacklist(
-                username = target,
-                name = user.cleanDisplayName,
-                avatarTemplate = user.avatarTemplate,
-                trustLevel = user.trustLevel,
-            )
+            addToBlacklist(user.username, user.cleanDisplayName, user.avatarTemplate, user.trustLevel)
         }
     }
 

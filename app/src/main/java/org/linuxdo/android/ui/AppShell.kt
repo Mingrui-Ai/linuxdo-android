@@ -1570,7 +1570,8 @@ private fun MainNavigation(state: UiState, viewModel: MainViewModel, lifecycle: 
                                         cdkScore = cdkScoreState.score.takeIf { cdkScoreState.username.equals(profileUsername, ignoreCase = true) },
                                         cdkScoreLoading = drawerScore.loading,
                                         cdkScoreError = drawerScore.error,
-                                        onLoadCdkScore = { viewModel.loadCdkScore() },
+                                        cdkScoreNeedsAuthorization = drawerScore.needsAuthorization,
+                                        onLoadCdkScore = { viewModel.loadCdkScore(userInitiated = true) },
                                         onReloadCdkScore = { viewModel.loadCdkScore(userInitiated = true) },
                                         onOpenCdkWebsite = { globalBrowserUrl = "https://cdk.linux.do/" },
                                         scrollToTopRequest = scrollToTopRequest,
@@ -1586,6 +1587,9 @@ private fun MainNavigation(state: UiState, viewModel: MainViewModel, lifecycle: 
                                         onOpenBadges = { stack.push(Route.UserBadges(profileRoute.username)) },
                                         onChat = { target -> viewModel.openChatWithUser(target) { stack.push(it) } },
                                         onComposePrivateMessage = { privateMessageRecipient = it },
+                                        onSetFollowing = viewModel::setProfileFollowing,
+                                        isBlocked = profileRoute.username.lowercase() in blockedUsernameSet,
+                                        onToggleBlock = viewModel::toggleProfileBlacklist,
                                         onBack = { stack.pop() },
                                     )
                                 }
@@ -2132,21 +2136,20 @@ private fun MainNavigation(state: UiState, viewModel: MainViewModel, lifecycle: 
         UserCardBottomSheet(
             state = userCard,
             onDismiss = viewModel::closeUserCard,
-            onFollow = viewModel::toggleFollowUser,
-            onMessage = { username ->
-                viewModel.closeUserCard()
-                privateMessageRecipient = username
-            },
-            onChat = { username ->
-                viewModel.openChatWithUser(username) { route ->
-                    stack.push(route)
-                }
-            },
-            onOpenTopics = { username ->
+            onOpenProfile = { username ->
                 viewModel.closeUserCard()
                 stack.push(Route.UserProfile(username))
             },
-            onToggleBlock = viewModel::toggleBlacklistForUserCard,
+            onOpenBadges = { username ->
+                viewModel.closeUserCard()
+                stack.push(Route.UserBadges(username))
+            },
+            communityScore = drawerScore.takeIf { userCard.isSelf },
+            onOpenCommunityScore = if (userCard.isSelf) ({
+                viewModel.closeUserCard()
+                viewModel.loadCdkScore(userInitiated = true)
+                showDrawerScore = true
+            }) else null,
         )
     }
     privateMessageRecipient?.let { recipient ->

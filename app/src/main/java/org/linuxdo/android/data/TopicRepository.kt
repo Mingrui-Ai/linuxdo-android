@@ -3482,13 +3482,13 @@ class TopicRepository(
     private suspend fun doFetchUserBadges(username: String): List<UserBadgeItem> {
         val key = username.lowercase().trim().removePrefix("@")
         val userPath = URLEncoder.encode(username, "UTF-8")
-        val userBadgesRaw = runCatching {
-            objectRequest("/user-badges/$userPath.json?grouped=true", present = false, retryAllowed = false)
-        }.getOrNull()
+        // 请求失败必须保留已有预览，不能把“未取得数据”缓存为“0 枚已获得”。
+        val userBadgesRaw = objectRequest("/user-badges/$userPath.json?grouped=true", present = false, retryAllowed = false)
+        check(userBadgesRaw["user_badges"] is JsonArray) { "徽章响应缺少用户记录" }
 
         val allBadgesRaw = getAllBadgesRaw()
 
-        val userBadgesList = userBadgesRaw?.objects("user_badges").orEmpty()
+        val userBadgesList = userBadgesRaw.objects("user_badges")
         val earnedMap = mutableMapOf<Long, Pair<String?, Int>>() // badgeId -> (grantedAt, count)
         userBadgesList.forEach { ub ->
             val bId = ub.number("badge_id") ?: return@forEach
@@ -3498,7 +3498,7 @@ class TopicRepository(
         }
 
         val badgeDefMap = mutableMapOf<Long, JsonObject>()
-        userBadgesRaw?.objects("badges")?.forEach { b ->
+        userBadgesRaw.objects("badges").forEach { b ->
             val id = b.number("id") ?: return@forEach
             badgeDefMap[id] = b
         }

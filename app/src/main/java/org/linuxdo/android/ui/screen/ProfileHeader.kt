@@ -2,12 +2,8 @@ package org.linuxdo.android.ui.screen
 
 import android.content.Intent
 import androidx.compose.foundation.background
-import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
-import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.shape.CircleShape
-import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
@@ -21,8 +17,6 @@ import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
-import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import coil.compose.AsyncImage
@@ -30,7 +24,7 @@ import org.linuxdo.android.Config
 import org.linuxdo.android.data.*
 import org.linuxdo.android.ui.design.*
 
-data class ProfileMenuAction(val label: String, val icon: ImageVector, val onClick: () -> Unit)
+data class ProfileMenuAction(val label: String, val icon: ImageVector, val onClick: () -> Unit, val enabled: Boolean = true)
 
 /** 自己与他人的主页共用资料头部；账号工具只在自己的页面出现。 */
 @OptIn(ExperimentalLayoutApi::class)
@@ -45,9 +39,10 @@ internal fun ProfileHeader(
     onEditProfile: (() -> Unit)?,
     onChat: (() -> Unit)?,
     onPrivateMessage: (() -> Unit)?,
-    onRefresh: () -> Unit,
     menuActions: List<ProfileMenuAction>,
     communityScore: Int?,
+    communityScoreLoading: Boolean = false,
+    needsAuthorization: Boolean = false,
     onOpenCommunityScore: (() -> Unit)?,
     onOpenLevel: (() -> Unit)?,
     badges: List<UserBadgeItem>?,
@@ -57,7 +52,6 @@ internal fun ProfileHeader(
     val colors = IosTheme.colors
     val context = LocalContext.current
     var showMenu by remember(username) { mutableStateOf(false) }
-    var showBio by remember(username) { mutableStateOf(false) }
     var previewingBackgroundUrl by remember(username) { mutableStateOf<String?>(null) }
     val surface = if (colors.isDark) Color(0xFF101113) else Color.White
     val animated = card?.animatedAvatar ?: AvatarCache.get(username)
@@ -98,19 +92,17 @@ internal fun ProfileHeader(
                             }
                             ProfileMenu(
                                 expanded = showMenu,
-                                actions = listOfNotNull(
+                                actions = menuActions + listOfNotNull(
                                     onSwitchAccount?.let { ProfileMenuAction("切换账号", Icons.Default.Person, it) },
                                     onEditProfile?.let { ProfileMenuAction("编辑个人资料", Icons.Default.Edit, it) },
                                     onPrivateMessage?.let { ProfileMenuAction("私信", Icons.Default.Email, it) },
-                                    ProfileMenuAction("分享个人主页", Icons.Default.Share) {
+                                    onChat?.let { ProfileMenuAction("私聊", Icons.Default.Send, it) },
+                                    ProfileMenuAction("分享个人主页", Icons.Default.Share, onClick = {
                                         context.startActivity(Intent.createChooser(Intent(Intent.ACTION_SEND).apply {
                                             type = "text/plain"
                                             putExtra(Intent.EXTRA_TEXT, "${Config.BASE_URL}/u/${android.net.Uri.encode(username)}")
                                         }, "分享个人主页"))
-                                    },
-                                ) + menuActions + listOfNotNull(
-                                    onChat?.let { ProfileMenuAction("发起聊天", Icons.Default.Send, it) },
-                                    ProfileMenuAction("刷新个人主页", Icons.Default.Refresh, onRefresh),
+                                    }),
                                 ),
                                 onDismiss = { showMenu = false },
                             )
@@ -118,48 +110,20 @@ internal fun ProfileHeader(
                     },
                 )
                 Spacer(Modifier.height(24.dp))
-                Row(Modifier.fillMaxWidth().padding(horizontal = 16.dp), verticalAlignment = Alignment.Bottom) {
-                    UserAvatar(avatarUrl = avatar, fallbackUrl = staticAvatar, username = username,
-                        modifier = Modifier.size(78.dp).border(3.dp, surface, CircleShape), cornerRadius = 39.dp)
-                }
+                ProfileIdentity(username, card?.cleanDisplayName ?: username, card?.trustLevel,
+                    avatar, staticAvatar, modifier = Modifier.padding(horizontal = 18.dp),
+                    avatarSize = 78.dp, onOpenLevel = onOpenLevel)
             }
         }
-        Column(Modifier.padding(horizontal = 18.dp)) {
-            Spacer(Modifier.height(10.dp))
-            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                Text(card?.cleanDisplayName ?: username, fontSize = 24.sp, fontWeight = FontWeight.Bold,
-                    color = colors.label, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f, false))
-                card?.trustLevel?.let { level ->
-                    Box(Modifier.heightIn(min = 32.dp)
-                        .then(if (onOpenLevel != null) Modifier.clickable(onClickLabel = "等级与积分", onClick = onOpenLevel) else Modifier),
-                        contentAlignment = Alignment.Center) {
-                        LevelBadge(level)
-                    }
-                }
-            }
-            FlowRow(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                Box(Modifier.heightIn(min = 32.dp), contentAlignment = Alignment.CenterStart) {
-                    Text("@$username", color = colors.secondaryLabel, fontSize = 12.sp)
-                }
-                if (onOpenCommunityScore != null) {
-                    ProfileCommunityScore(communityScore, onOpenCommunityScore)
-                }
-                ProfileBadgePreview(badges, badgesLoading, onOpenBadges)
-            }
-            UserBioText(card?.bioExcerpt, "还没有填写个人简介", IosTheme.type.body.copy(fontSize = 13.sp), colors.label,
-                maxLines = 2, emptyColor = colors.secondaryLabel,
-                modifier = Modifier.fillMaxWidth().padding(top = 8.dp).clickable { showBio = true })
-            Spacer(Modifier.height(12.dp))
+        Column(Modifier.padding(horizontal = 18.dp, vertical = 12.dp)) {
+            ProfileDetails(card, badges, badgesLoading, onOpenBadges,
+                communityScore = communityScore, communityScoreLoading = communityScoreLoading,
+                needsAuthorization = needsAuthorization, onOpenCommunityScore = onOpenCommunityScore,
+                loading = card == null)
         }
     }
     previewingBackgroundUrl?.let { url ->
         ImageViewer(url = url) { previewingBackgroundUrl = null }
-    }
-    if (showBio) {
-        AlertDialog(onDismissRequest = { showBio = false }, title = { Text("个人简介") },
-            text = { UserBioText(card?.bioExcerpt, "还没有填写个人简介", IosTheme.type.body, colors.label,
-                maxLines = Int.MAX_VALUE, modifier = Modifier.heightIn(max = 360.dp).verticalScroll(rememberScrollState())) },
-            confirmButton = { TextButton(onClick = { showBio = false }) { Text("完成") } }, containerColor = colors.card)
     }
 }
 
@@ -187,6 +151,7 @@ private fun ProfileMenu(expanded: Boolean, actions: List<ProfileMenuAction>, onD
                         Text(action.label, color = IosTheme.colors.label)
                     }
                 },
+                enabled = action.enabled,
                 onClick = { onDismiss(); action.onClick() },
             )
         }
