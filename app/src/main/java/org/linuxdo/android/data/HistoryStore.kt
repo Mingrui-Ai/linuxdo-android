@@ -148,6 +148,7 @@ data class TopicReadingPosition(
     val atTop: Boolean = true,
     val filterUserId: Long? = null,
     val descending: Boolean = false,
+    val sortByLikes: Boolean = false,
     val collapsed: List<Long> = emptyList(),
     val expanded: List<Long> = emptyList(),
 ) : java.io.Serializable

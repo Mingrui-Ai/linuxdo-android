@@ -1355,7 +1355,7 @@ private fun MainNavigation(state: UiState, viewModel: MainViewModel, lifecycle: 
                                             }
                                         }
                                     },
-                                    onToggleOrder = { viewModel.toggleCommentOrder(route.topicId) },
+                                    onSelectOrder = { viewModel.setCommentOrder(route.topicId, it) },
                                     onPostsVisible = { viewModel.onPostsVisible(route.topicId, it) },
                                     onLiveViewport = { atEnd, scrolling -> viewModel.onTopicViewport(route.topicId, atEnd, scrolling) },
                                     syncReadProgress = syncReadProgress,

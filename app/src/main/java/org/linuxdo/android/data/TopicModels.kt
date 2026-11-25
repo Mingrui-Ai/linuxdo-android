@@ -1022,6 +1022,7 @@ data class Post(
     @SerialName("polls_votes") val pollsVotes: Map<String, List<String>> = emptyMap(),
     val boosts: List<Boost> = emptyList(),
     val reactions: List<Reaction> = emptyList(),
+    @SerialName("actions_summary") val actionsSummary: List<PostActionSummary> = emptyList(),
     @SerialName("current_user_reaction") val currentUserReaction: Reaction? = null,
     val yours: Boolean = false,
     @SerialName("read") val read: Boolean = false,
@@ -1452,6 +1453,9 @@ data class AttachedMedia(
     val uploadId: Long? get() = uploaded.id
     fun toMarkdown(): String = uploaded.toMarkdown()
 }
+
+@Serializable
+data class PostActionSummary(val id: Int, val count: Int = 0)
 
 @Serializable
 data class Reaction(val id: String, val count: Int = 0, @SerialName("can_undo") val canUndo: Boolean = false)

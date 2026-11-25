@@ -91,6 +91,8 @@ import org.linuxdo.android.data.BlockedUser
 import org.linuxdo.android.data.DiscourseTagInfo
 import org.linuxdo.android.data.DiscourseTagSearchResult
 import org.linuxdo.android.data.Category
+import org.linuxdo.android.data.CommentOrder
+import org.linuxdo.android.data.collectCommentPosts
 import org.linuxdo.android.data.TopicSortOrder
 import org.linuxdo.android.data.FloatingAction
 import org.linuxdo.android.data.flattenCategories
@@ -211,7 +213,7 @@ enum class TopicUnreadDotPosition(val id: String, val label: String) {
             entries.firstOrNull { it.id.equals(id, ignoreCase = true) } ?: Avatar
     }
 }
-enum class DetailLoad { Topic, Next, Previous }
+enum class DetailLoad { Topic, Next, Previous, Order }
 
 private const val TOPIC_DETAIL_CACHE_CAPACITY = 20
 private const val TOPIC_DETAIL_CACHE_TTL_MS = 3 * 60 * 1_000L
@@ -245,6 +247,11 @@ data class DetailUiState(
     val filterUserId: Long? = null,
     /** 评论区是否倒序(最新一级主评论在前)。1 楼主贴永远置顶,不参与翻转。 */
     val descending: Boolean = false,
+    val sortByLikes: Boolean = false,
+    val pendingCommentOrder: CommentOrder? = null,
+    val failedCommentOrder: CommentOrder? = null,
+    val sortLoaded: Int = 0,
+    val sortTotal: Int = 0,
     val noticeMessage: String? = null,
     val flagDialogPost: Post? = null,
     val flagError: String? = null,
@@ -263,6 +270,12 @@ data class DetailUiState(
     val realtimePostIds: Set<Long> = emptySet(),
     val confirmedReadPostNumbers: Set<Int> = emptySet(),
 ) {
+    val commentOrder: CommentOrder get() = when {
+        sortByLikes -> CommentOrder.Likes
+        descending -> CommentOrder.TimeDescending
+        else -> CommentOrder.TimeAscending
+    }
+
     val notificationLevel: TopicNotificationLevel
         get() = TopicNotificationLevel.fromCode(topic?.details?.notificationLevel)
 
@@ -270,11 +283,11 @@ data class DetailUiState(
     val remaining: List<Long> get() {
         val stream = topic?.postStream?.stream.orEmpty()
         // 倒序下"加载更多"是往更早的楼层回溯,不受向下窗口起点的约束。
-        return if (descending) stream.filterNot { it in consumedIds }
+        return if (descending || sortByLikes) stream.filterNot { it in consumedIds }
         else stream.drop(windowStart).filterNot { it in consumedIds }
     }
     /** 倒序时不提供"加载之前的楼层"缺口 —— 那和倒序的回溯加载是同一个方向,会互相抢楼。 */
-    val previousIds: List<Long> get() = if (descending) emptyList()
+    val previousIds: List<Long> get() = if (descending || sortByLikes) emptyList()
         else topic?.postStream?.stream.orEmpty().take(windowStart).filterNot { it in consumedIds }
 }
 
@@ -333,7 +346,7 @@ internal fun mergeConfirmedDetailRead(current: DetailUiState, postNumbers: Set<I
 }
 
 internal fun canAppendRealtimePosts(detail: DetailUiState, pending: Set<Long>, atLatestEnd: Boolean, scrolling: Boolean): Boolean {
-    if (!atLatestEnd || scrolling || detail.filterUserId != null) return false
+    if (!atLatestEnd || scrolling || detail.filterUserId != null || detail.sortByLikes) return false
     val stream = detail.topic?.postStream?.stream.orEmpty().filterNot { it in pending }
     return if (detail.descending) stream.lastOrNull() in detail.consumedIds
     else detail.remaining.none { it !in pending }
@@ -1790,6 +1803,12 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 readTrackers[topicId]?.let { queueReadBatch(topicId, it) }
                 drainReadOutbox()
             }
+            if (_details.value[topicId]?.pendingCommentOrder != null) {
+                pageJobs.remove("topic:$topicId")?.cancel()
+                _details.update { states -> states[topicId]?.let {
+                    states + (topicId to it.copy(loading = false, pendingCommentOrder = null))
+                } ?: states }
+            }
             activeTopicIds.remove(topicId)
             topicLiveAtEnd.remove(topicId)
             topicLiveScrolling.remove(topicId)
@@ -2027,7 +2046,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             val current = states[topicId] ?: return@update states
             // 手工跳楼、排序或刷新已经换了窗口时丢弃这份后台快照。
             if (current.locateVersion != before.locateVersion || current.windowStartId != before.windowStartId ||
-                current.descending != before.descending || current.loading || current.refreshing) return@update states
+                current.commentOrder != before.commentOrder || current.loading || current.refreshing) return@update states
             val currentCursor = current.topic?.messageBusLastId
             if (currentCursor != null && fresh.messageBusLastId != null && currentCursor > fresh.messageBusLastId) return@update states
             val oldStream = before.topic?.postStream?.stream.orEmpty().toSet()
@@ -4730,6 +4749,9 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             reactingPosts = emptySet(),
             reactionErrors = emptyMap(),
             failedLoad = DetailLoad.Topic,
+            pendingCommentOrder = null,
+            failedCommentOrder = null,
+            sortLoaded = 0, sortTotal = 0,
             createdPostId = null,
             locatePostNumber = null,
             noticeMessage = null,
@@ -4748,7 +4770,12 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun retryTopic(id: Long, postNumber: Int? = null) {
-        val failed = _details.value[id]?.failedLoad
+        val detail = _details.value[id]
+        if (detail?.failedLoad == DetailLoad.Order) {
+            detail.failedCommentOrder?.let { setCommentOrder(id, it) }
+            return
+        }
+        val failed = detail?.failedLoad
         loadTopic(id, more = failed == DetailLoad.Next, previous = failed == DetailLoad.Previous,
             retry = true, postNumber = postNumber)
     }
@@ -4798,6 +4825,14 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                         consumed = consumed + fetchedTail.map { it.id }
                     }
                 }
+                if (latest.sortByLikes) {
+                    mergedPosts = collectCommentPosts(freshTopic.postStream.stream,
+                        if (silent) mergedPosts else freshTopic.postStream.posts,
+                        if (silent) consumed else freshTopic.postStream.posts.map { it.id }.toSet(),
+                        fetch = { repository.fetchPosts(id, it, present = !silent) })
+                    consumed = freshTopic.postStream.stream.toSet()
+                }
+                if (generation != accountScopeGeneration) return@launch
                 _details.update { states ->
                     val cur = states[id] ?: return@update states
                     states + (id to cur.copy(
@@ -4860,7 +4895,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         } else {
             _details.value[id] ?: DetailUiState()
         }
-        val current = restoredPosition?.let { base.copy(filterUserId = it.filterUserId, descending = it.descending) } ?: base
+        val current = restoredPosition?.let { base.copy(filterUserId = it.filterUserId, descending = it.descending, sortByLikes = it.sortByLikes) } ?: base
         if (restoredPosition != null) _details.update { it + (id to current) }
         val targetPostNumber = effectivePostNumber ?: resumePostNumber
         val requestPostNumber = effectivePostNumber ?: resumePostNumber?.takeIf { it > 20 }
@@ -4890,7 +4925,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         val hasKnownNewPosts = knownPostsCount != null && knownPostsCount > (current.topic?.postsCount ?: 0)
 
         // 仅在非通知来源、没有已知新回复、且目标楼层已就位时，才直接复用缓存 return
-        if (!isNotificationJump && !more && !previous && current.topic != null && !retry && targetLoaded && !hasKnownNewPosts) {
+        if (!isNotificationJump && !more && !previous && current.topic != null && !retry && targetLoaded && !hasKnownNewPosts &&
+            (!current.sortByLikes || current.remaining.isEmpty())) {
             if (effectivePostNumber != null) {
                 _details.update { states ->
                     states[id]?.let { states + (id to it.copy(locateVersion = it.locateVersion + 1,
@@ -4929,7 +4965,10 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                         current.descending -> current.remaining.takeLast(20)
                         else -> current.remaining.take(20)
                     }
-                    val posts = repository.fetchPosts(id, requested,
+                    val posts = if (current.sortByLikes) {
+                        collectCommentPosts(current.topic?.postStream?.stream.orEmpty(), current.posts, current.consumedIds,
+                            fetch = { repository.fetchPosts(id, it) })
+                    } else repository.fetchPosts(id, requested,
                         present = requested.any { it !in current.realtimePostIds })
                     _details.update {
                         val original = it[id] ?: current
@@ -4937,7 +4976,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                         it + (id to latest.copy(
                             posts = (latest.posts + posts).distinctBy { post -> post.id }.sortedBy { post -> post.postNumber },
                             // 成功请求但没有返回的 ID 已删除或不可见，两个方向都标记为已处理，避免原地重试。
-                            consumedIds = latest.consumedIds + posts.map { post -> post.id } + requested,
+                            consumedIds = latest.consumedIds + posts.map { post -> post.id } +
+                                (if (current.sortByLikes) current.topic?.postStream?.stream.orEmpty() else requested),
                             windowStartId = if (previous) requested.first() else current.windowStartId,
                             error = null, failedLoad = DetailLoad.Topic,
                         ))
@@ -4953,6 +4993,10 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                     val rootPost = current.posts.filter { it.postNumber == 1 }
                     var posts = if (requestPostNumber != null) (rootPost + topic.postStream.posts).distinctBy { it.id }.sortedBy { it.postNumber }
                         else topic.postStream.posts.distinctBy { it.id }
+                    if (current.sortByLikes) {
+                        posts = collectCommentPosts(topic.postStream.stream, posts, posts.map { it.id }.toSet(),
+                            fetch = { repository.fetchPosts(id, it) })
+                    }
                     var effectiveTargetPostNumber = targetPostNumber
                     if (isNotificationJump && effectivePostNumber == null && topic.postsCount > 20 && topic.postStream.stream.isNotEmpty()) {
                         val tailIds = topic.postStream.stream.takeLast(20)
@@ -4970,14 +5014,15 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                     }
                     val newLocateVersion = if (effectiveTargetPostNumber != null) (current.locateVersion + 1) else current.locateVersion
                     _details.update {
-                        it + (id to DetailUiState(topic, posts, posts.map { post -> post.id }.toSet(), category,
+                        it + (id to DetailUiState(topic, posts, if (current.sortByLikes) topic.postStream.stream.toSet() else posts.map { post -> post.id }.toSet(), category,
                             error = if (requestPostNumber != null && resolvedTarget == null) "当前没有可访问的楼层，请稍后重试" else null,
                             emojiUrls = emojis, windowStartId = topic.postStream.posts.minByOrNull { it.postNumber }?.id,
                             locateVersion = newLocateVersion,
                             locatePostNumber = if (isNotificationJump || effectivePostNumber != null) effectiveTargetPostNumber else null,
                             confirmedReadPostNumbers = container.reading.confirmedPostNumbers(id),
                             filterUserId = restoredPosition?.filterUserId,
-                            descending = restoredPosition?.descending ?: false))
+                            descending = current.descending,
+                            sortByLikes = current.sortByLikes))
                     }
                     if (requestPostNumber != null && resolvedTarget != null && resolvedTarget.postNumber != requestPostNumber) {
                         setNoticeMessage(id, "第 $requestPostNumber 楼不可用，已定位到第 ${resolvedTarget.postNumber} 楼")
@@ -5052,66 +5097,85 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         pageJobs["topic:$id"]?.start()
     }
 
-    /**
-     * 切换评论区正序 / 倒序。
-     *
-     * 短帖(楼层已全在手上)和切回正序都是纯内存翻转,0 网络请求。
-     * 长帖切到倒序时只保留 **1 楼 + stream 尾部的连续窗口**,而不是把开头的 2~20 楼和
-     * 尾部的 281~300 楼混排:混排一是滑过 #281 会直接跳到 #20、中间断层两百多楼,
-     * 二是 #299 若回复过 #5,树形排列会把最新回复吸进排在最底部的 #5 楼中楼里。
-     * 切回正序时 windowStartId 仍指着尾窗首个,现有的"加载之前的楼层"缺口会自动补位。
-     */
-    fun toggleCommentOrder(topicId: Long) {
-        val current = _details.value[topicId] ?: return
-        if (current.loading || current.refreshing) return
-        val target = !current.descending
+    /** 时间排序保持分页窗口；点赞排序补齐全部可见回复后原子切换。 */
+    fun setCommentOrder(topicId: Long, target: CommentOrder) {
+        var current = _details.value[topicId] ?: return
+        if (current.pendingCommentOrder != null) {
+            if (current.pendingCommentOrder == target) return
+            pageJobs.remove("topic:$topicId")?.cancel()
+            current = current.copy(loading = false, pendingCommentOrder = null)
+            _details.update { it + (topicId to current) }
+        }
+        if (current.loading || current.refreshing || current.topic == null) return
+        if (current.commentOrder == target && current.error == null) {
+            updateCachedTopicDetail(topicId)
+            return
+        }
         val stream = current.topic?.postStream?.stream.orEmpty()
         val tail = stream.takeLast(TAIL_WINDOW)
         val tailMissing = tail.filterNot { it in current.consumedIds }
-        if (!target || tailMissing.isEmpty()) {
+        if (target != CommentOrder.Likes && (target == CommentOrder.TimeAscending || tailMissing.isEmpty())) {
             _details.update { states ->
-                states[topicId]?.let { states + (topicId to it.copy(descending = target)) } ?: states
+                states[topicId]?.let { states + (topicId to it.copy(
+                    descending = target == CommentOrder.TimeDescending, sortByLikes = false,
+                    pendingCommentOrder = null, failedCommentOrder = null, error = null, failedLoad = DetailLoad.Topic,
+                )) } ?: states
             }
             updateCachedTopicDetail(topicId)
             return
         }
         pageJobs["topic:$topicId"]?.cancel()
+        val generation = accountScopeGeneration
         pageJobs["topic:$topicId"] = viewModelScope.launch(start = CoroutineStart.LAZY) {
-            _details.update { it + (topicId to current.copy(loading = true, error = null, descending = true)) }
+            _details.update { it + (topicId to current.copy(loading = true, error = null,
+                pendingCommentOrder = target, failedCommentOrder = null, sortLoaded = 0, sortTotal = stream.size)) }
             try {
-                val fetched = repository.fetchPosts(topicId, tailMissing)
+                val fetched = if (target == CommentOrder.Likes) {
+                    collectCommentPosts(stream, current.posts, current.consumedIds,
+                        fetch = { repository.fetchPosts(topicId, it) },
+                        onProgress = { done, total ->
+                            if (generation == accountScopeGeneration) _details.update { states -> states[topicId]?.let {
+                                states + (topicId to it.copy(sortLoaded = done, sortTotal = total))
+                            } ?: states }
+                        })
+                } else repository.fetchPosts(topicId, tailMissing)
+                if (generation != accountScopeGeneration || pageJobs["topic:$topicId"] !== coroutineContext[Job]) return@launch
                 _details.update { states ->
                     val latest = states[topicId] ?: return@update states
-                    val merged = (latest.posts.filter { it.postNumber == 1 || it.id in tail } + fetched)
-                        .distinctBy { it.id }
-                        .sortedBy { it.postNumber }
+                    val merged = if (target == CommentOrder.Likes) {
+                        val livePosts = latest.posts.associateBy { it.id }
+                        fetched.map { livePosts[it.id] ?: it }
+                    } else (latest.posts.filter { it.postNumber == 1 || it.id in tail } + fetched)
+                        .distinctBy { it.id }.sortedBy { it.postNumber }
                     val anchor = merged.firstOrNull { it.postNumber > 1 } ?: merged.firstOrNull()
                     states + (topicId to latest.copy(
                         posts = merged,
-                        consumedIds = merged.map { it.id }.toSet(),
-                        windowStartId = anchor?.id ?: latest.windowStartId,
-                        // 窗口换了一批楼层,楼中楼的游标和"已取完"标记跟着作废,否则展开按钮会点不动。
-                        replyCursors = emptyMap(),
-                        completedReplies = emptySet(),
-                        descending = true,
-                        error = null,
-                        failedLoad = DetailLoad.Topic,
+                        consumedIds = if (target == CommentOrder.Likes) stream.toSet() else merged.map { it.id }.toSet() + tail,
+                        windowStartId = if (target == CommentOrder.Likes) stream.firstOrNull() else anchor?.id,
+                        replyCursors = emptyMap(), completedReplies = emptySet(),
+                        descending = target == CommentOrder.TimeDescending,
+                        sortByLikes = target == CommentOrder.Likes,
+                        pendingCommentOrder = null, failedCommentOrder = null,
+                        error = null, failedLoad = DetailLoad.Topic,
                     ))
                 }
                 updateCachedTopicDetail(topicId)
             } catch (error: CancellationException) {
                 throw error
             } catch (error: Exception) {
-                _details.update { states ->
-                    states[topicId]?.let {
-                        states + (topicId to it.copy(descending = current.descending, error = error.message ?: "切换顺序失败"))
-                    } ?: states
-                }
-                handlePageFailure(error) { toggleCommentOrder(topicId) }
+                if (generation != accountScopeGeneration || pageJobs["topic:$topicId"] !== coroutineContext[Job]) return@launch
+                _details.update { states -> states[topicId]?.let {
+                    states + (topicId to it.copy(error = error.message ?: "切换排序失败，请重试",
+                        pendingCommentOrder = null, failedCommentOrder = target, failedLoad = DetailLoad.Order))
+                } ?: states }
+                handlePageFailure(error) { setCommentOrder(topicId, target) }
             } finally {
                 if (pageJobs["topic:$topicId"] === coroutineContext[Job]) {
-                    _details.update { states -> states[topicId]?.let { states + (topicId to it.copy(loading = false)) } ?: states }
+                    _details.update { states -> states[topicId]?.let {
+                        states + (topicId to it.copy(loading = false, pendingCommentOrder = null))
+                    } ?: states }
                     pageJobs.remove("topic:$topicId")
+                    topicLiveSessions[topicId]?.updates?.trySend(Unit)
                 }
             }
         }
@@ -7103,7 +7167,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     fun jumpToFloor(topicId: Long, postNumber: Int) {
         val current = _details.value[topicId] ?: return
         pageJobs.remove("topic:$topicId")?.cancel()
-        val ready = current.copy(loading = false, refreshing = false, error = null)
+        val ready = current.copy(loading = false, refreshing = false, error = null, pendingCommentOrder = null)
         val loadedTarget = resolveLoadedTopicFloor(ready.posts, ready.topic?.postStream?.stream.orEmpty(), postNumber)
         if (loadedTarget != null) {
             // 已加载楼层只更新定位，不重新进入话题、刷新缓存或发起网络请求。
@@ -7124,6 +7188,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             atTop = false,
             filterUserId = ready.filterUserId,
             descending = ready.descending,
+            sortByLikes = ready.sortByLikes,
         ))
     }
 

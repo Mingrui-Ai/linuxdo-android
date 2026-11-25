@@ -232,6 +232,8 @@ import okhttp3.Request
 import org.linuxdo.android.App
 import org.linuxdo.android.Config
 import org.linuxdo.android.data.Post
+import org.linuxdo.android.data.CommentOrder
+import org.linuxdo.android.data.likedPostRows
 import org.linuxdo.android.data.Boost
 import org.linuxdo.android.data.PostFlagReason
 import org.linuxdo.android.data.SignaturePolicy
@@ -483,7 +485,7 @@ fun TopicDetailScreen(
     onAttach: (Uri) -> Unit,
     topicId: Long,
     onRefresh: () -> Unit = {},
-    onToggleOrder: () -> Unit = {},
+    onSelectOrder: (CommentOrder) -> Unit = {},
     onOpenTopic: (Long, String, Int?) -> Unit = { _, _, _ -> },
     onJumpToFloor: (Int) -> Unit = {},
     active: Boolean = true,
@@ -515,6 +517,7 @@ fun TopicDetailScreen(
     onOpenTag: (String) -> Unit = {},
     showTopicScrollbar: Boolean = true,
 ) {
+    val useThreadView = treeView && !state.sortByLikes
     val list = rememberLazyListState()
     val pullState = rememberPullToRefreshState()
     val scope = rememberCoroutineScope()
@@ -624,8 +627,10 @@ fun TopicDetailScreen(
             post.postNumber > 1 && post.username.lowercase() in blockedUsernames
         }
     }
-    val rows = remember(displayedPosts, treeView, collapsed, expanded, state.descending) {
-        if (treeView) {
+    val rows = remember(displayedPosts, useThreadView, collapsed, expanded, state.commentOrder) {
+        if (state.sortByLikes) {
+            likedPostRows(displayedPosts)
+        } else if (useThreadView) {
             threadRows(displayedPosts, collapsed.toSet(), expanded.toSet(), descending = state.descending)
         } else {
             flatPostRows(displayedPosts, descending = state.descending)
@@ -750,11 +755,11 @@ fun TopicDetailScreen(
     }
     val totalPosts = maxOf(state.topic?.postsCount ?: 0, state.topic?.postStream?.stream?.size ?: 0)
     val highestFloor = maxOf(totalPosts, state.topic?.highestPostNumber ?: 0, state.posts.maxOfOrNull { it.postNumber } ?: 1)
-    val maxRootFloor = remember(rows, treeView) {
-        if (treeView) rows.filter { it.depth == 0 }.maxOfOrNull { it.post.postNumber } else null
+    val maxRootFloor = remember(rows, useThreadView) {
+        if (useThreadView) rows.filter { it.depth == 0 }.maxOfOrNull { it.post.postNumber } else null
     }
-    val effectiveFloorTotal = remember(highestFloor, maxRootFloor, state.remaining.isEmpty(), treeView) {
-        if (treeView && state.remaining.isEmpty() && maxRootFloor != null && maxRootFloor > 0) {
+    val effectiveFloorTotal = remember(highestFloor, maxRootFloor, state.remaining.isEmpty(), useThreadView) {
+        if (useThreadView && state.remaining.isEmpty() && maxRootFloor != null && maxRootFloor > 0) {
             maxRootFloor
         } else {
             highestFloor
@@ -762,7 +767,7 @@ fun TopicDetailScreen(
     }
     val hasSideNavigation = showTopicScrollbar && effectiveFloorTotal > 1 && rows.isNotEmpty()
     val hasBottomNavigation = !showTopicScrollbar && effectiveFloorTotal > 3 && !firstPostVisible
-    val readingFloorIndicator by remember(rows, list.firstVisibleItemIndex, effectiveFloorTotal, treeView, state.descending) {
+    val readingFloorIndicator by remember(rows, list.firstVisibleItemIndex, effectiveFloorTotal, useThreadView, state.descending) {
         derivedStateOf {
             val visibleIds = list.layoutInfo.visibleItemsInfo.mapNotNull { postIdFromListKey(it.key) }.toSet()
             val visibleRows = rows.filter { it.post.id in visibleIds }
@@ -779,7 +784,7 @@ fun TopicDetailScreen(
                     rows.firstOrNull { it.post.id == activeRow.rootPostId }?.post ?: activeRow.post
                 }
                 val rootFloor = rootPost.postNumber
-                if (treeView) {
+                if (useThreadView) {
                     // 楼中楼模式: 严格只展示主楼层数，不显示子回复层号
                     ReadingFloorIndicator(rootFloor = rootFloor, subFloor = null, total = effectiveFloorTotal)
                 } else {
@@ -795,7 +800,7 @@ fun TopicDetailScreen(
         }
     }
     val firstPostLoaded = state.posts.any { it.postNumber == 1 }
-    val showTopError = !located || state.failedLoad == DetailLoad.Previous
+    val showTopError = !located || state.failedLoad == DetailLoad.Previous || state.failedLoad == DetailLoad.Order
     val canReply = state.topic?.canReply == true
     // 写操作全局互斥(ViewModel 侧也是),所以其他楼层的按钮要禁用;
     // 但转圈只画在真正被操作的那一条上,否则点一下"解决方案"整页都在转。
@@ -868,12 +873,12 @@ fun TopicDetailScreen(
                 partIndex = slice?.partIndex ?: 0,
                 offset = list.firstVisibleItemScrollOffset,
                 atTop = list.firstVisibleItemIndex == 0,
-                filterUserId = state.filterUserId, descending = state.descending,
+                filterUserId = state.filterUserId, descending = state.descending, sortByLikes = state.sortByLikes,
                 collapsed = collapsed, expanded = expanded,
             )
         } else null
     })
-    LaunchedEffect(active, located, savedPositionRestored, state.filterUserId, state.descending, collapsed, expanded) {
+    LaunchedEffect(active, located, savedPositionRestored, state.filterUserId, state.commentOrder, collapsed, expanded) {
         if (active) snapshotFlow {
             if (!list.isScrollInProgress) latestPositionProvider() else null
         }.collect { position -> position?.let(latestPositionCallback) }
@@ -882,7 +887,7 @@ fun TopicDetailScreen(
         onDispose { if (active) latestPositionProvider()?.let(latestPositionCallback) }
     }
 
-    val latestEdgeVisible = if (state.descending) list.firstVisibleItemIndex <= lazyIndexOf(headRows.size)
+    val latestEdgeVisible = if (state.sortByLikes) false else if (state.descending) list.firstVisibleItemIndex <= lazyIndexOf(headRows.size)
         else !list.canScrollForward
     LaunchedEffect(active, latestEdgeVisible, list.isScrollInProgress, state.filterUserId) {
         onLiveViewport(active && latestEdgeVisible && state.filterUserId == null, list.isScrollInProgress)
@@ -946,7 +951,7 @@ fun TopicDetailScreen(
         }
         // 本地和远端选楼统一直接定位，避免跨过大量富文本回复播放滚动动画。
         // 经过 ViewModel 取消旧请求，防止先选远端、再选本地时被旧结果拉回去。
-        val target = if (treeView && state.posts.any { it.postNumber == clamped }) {
+        val target = if (useThreadView && state.posts.any { it.postNumber == clamped }) {
             rows.asSequence().filter { it.depth == 0 }
                 .minByOrNull { abs(it.post.postNumber - clamped) }?.post?.postNumber ?: clamped
         } else clamped
@@ -959,10 +964,10 @@ fun TopicDetailScreen(
     }
 
     // 切换正/倒序后把视口带回评论区头部,否则用户会停在原先的滚动偏移上、看不出顺序变了。
-    var lastDescending by remember { mutableStateOf(state.descending) }
-    LaunchedEffect(state.descending, state.loading, rows) {
-        if (lastDescending == state.descending || state.loading) return@LaunchedEffect
-        lastDescending = state.descending
+    var lastOrder by remember { mutableStateOf(state.commentOrder) }
+    LaunchedEffect(state.commentOrder, state.loading, rows) {
+        if (lastOrder == state.commentOrder || state.loading) return@LaunchedEffect
+        lastOrder = state.commentOrder
         if (!showOrderBar) return@LaunchedEffect
         // 定位尚未完成时，不允许倒序切换滚动覆盖初始定位位置
         if (!located) return@LaunchedEffect
@@ -973,8 +978,8 @@ fun TopicDetailScreen(
         val number = pendingTargetFloor ?: locateTarget
         number?.let { resolveTopicFloor(state.posts, it) }
     }
-    val locateRowPost = remember(locatePost, rows, treeView, pendingTargetFloor) {
-        if (treeView && pendingTargetFloor != null && locatePost != null) {
+    val locateRowPost = remember(locatePost, rows, useThreadView, pendingTargetFloor) {
+        if (useThreadView && pendingTargetFloor != null && locatePost != null) {
             rows.asSequence().filter { it.depth == 0 }
                 .minByOrNull { abs(it.post.postNumber - locatePost.postNumber) }?.post ?: locatePost
         } else locatePost
@@ -985,7 +990,7 @@ fun TopicDetailScreen(
     val locateBodyReady = locateRowIndex >= 0 && rows.take(locateRowIndex + 1).all { row ->
         preparedBodies[row.post.id]?.matches(row.post) == true
     }
-    LaunchedEffect(active, locateTarget, pendingTargetFloor, state.posts, rows, locateBodyReady, treeView, state.loading, state.error, located, state.previousIds.isNotEmpty(), explicitLocateVersion) {
+    LaunchedEffect(active, locateTarget, pendingTargetFloor, state.posts, rows, locateBodyReady, useThreadView, state.loading, state.error, located, state.previousIds.isNotEmpty(), explicitLocateVersion) {
         val targetLocateNumber = pendingTargetFloor ?: locateTarget
         val needLocate = (!located && locateTarget != null) || pendingTargetFloor != null
         if (active && needLocate && !state.loading && state.error == null && targetLocateNumber != null && (savedPositionRestored || initialPosition == null)) {
@@ -994,7 +999,7 @@ fun TopicDetailScreen(
             // 降级为「第一个不小于目标楼层的可见楼层」，再不行就按帖子顺序找最近的一层。
             val target = locatePost ?: run { located = true; pendingTargetFloor = null; return@LaunchedEffect }
             val isUserJump = pendingTargetFloor != null
-            if (treeView && isUserJump) {
+            if (useThreadView && isUserJump) {
                 // 楼中楼模式下的用户手动跳转: 严格对齐到主楼(depth == 0), 绝不跳进子回复层
                 val effectivePost = locateRowPost ?: target
                 val index = rows.indexOfFirst { it.post.id == effectivePost.id }
@@ -1005,7 +1010,7 @@ fun TopicDetailScreen(
                 }
             } else {
                 val anchorPostNumber = target.postNumber
-                if (treeView) {
+                if (useThreadView) {
                     val ancestors = postAncestorIds(state.posts, anchorPostNumber)
                     val needUncollapse = collapsed.any { it in ancestors }
                     val needExpand = ancestors.any { it !in expanded }
@@ -1120,18 +1125,18 @@ fun TopicDetailScreen(
         val unreadDotVisible = showUnreadDot && signedIn && !post.yours && !post.read &&
             post.postNumber !in state.confirmedReadPostNumbers &&
             (syncReadProgress || post.postNumber !in sessionReadPosts)
-        if (!treeView || row.depth == 0) {
-            val hasExpandedSubtree = treeView && row.subtreeSize > 0 && post.id !in collapsed
+        if (!useThreadView || row.depth == 0) {
+            val hasExpandedSubtree = useThreadView && row.subtreeSize > 0 && post.id !in collapsed
             val unloadedTargetId = row.unloadedCandidateIds.firstOrNull { it !in state.completedReplies }
-            val hasUnloadedRootReplies = treeView && unloadedTargetId != null
-            val showCollapsedSubtreeBar = treeView && !hasExpandedSubtree && (row.allLoadedCount > 0 || hasUnloadedRootReplies)
+            val hasUnloadedRootReplies = useThreadView && unloadedTargetId != null
+            val showCollapsedSubtreeBar = useThreadView && !hasExpandedSubtree && (row.allLoadedCount > 0 || hasUnloadedRootReplies)
             Column(Modifier.fillMaxWidth().background(IosTheme.colors.card)) {
                 PostRow(
                     post = post,
                     slice = slice,
                     isTopicAuthor = isTopicAuthor,
                     compactBottom = hasExpandedSubtree || showCollapsedSubtreeBar,
-                    showReplyToHint = !treeView,
+                    showReplyToHint = !useThreadView,
                     unreadDotVisible = unreadDotVisible,
                     unreadDotPosition = unreadDotPosition,
                     showSignatures = showSignatures,
@@ -1564,9 +1569,10 @@ fun TopicDetailScreen(
                                 }
                                 CommentOrderBar(
                                     total = replyTotal,
-                                    descending = state.descending,
-                                    busy = state.loading || state.refreshing,
-                                    onToggle = onToggleOrder,
+                                    order = state.commentOrder,
+                                    busy = (state.loading || state.refreshing) && state.pendingCommentOrder == null,
+                                    progress = if (state.pendingCommentOrder == CommentOrder.Likes) "正在准备点赞排序 ${state.sortLoaded}/${state.sortTotal}" else null,
+                                    onSelect = onSelectOrder,
                                     authorFilterItems = authorFilterItems,
                                     filterUserId = state.filterUserId,
                                     authorMenuExpanded = authorMenuExpanded,
@@ -1616,7 +1622,7 @@ fun TopicDetailScreen(
                                     val hiddenLocalFloor = state.posts.any { it.postNumber == floor } &&
                                         rows.none { it.post.postNumber == floor }
                                     val target = if (state.filterUserId != null || hiddenLocalFloor) {
-                                        rows.asSequence().filter { !treeView || it.depth == 0 }
+                                        rows.asSequence().filter { !useThreadView || it.depth == 0 }
                                             .minByOrNull { abs(it.post.postNumber - floor) }?.post?.postNumber
                                     } else floor
                                     if (target != null) performJumpToFloor(target)
@@ -2123,16 +2129,17 @@ fun TopicDetailScreen(
 }
 
 /**
- * 评论区头部栏:左侧总回复数与筛选药丸(贴吧模式),右侧 iOS 分段控件样式的「正序 / 倒序」胶囊。
+ * 评论区头部栏:左侧总回复数与筛选药丸(贴吧模式),右侧显示当前排序的菜单。
  * 固定跟在 1 楼下方 —— 向上滑动触顶时吸顶冻结,方便用户随时切换筛选或翻转排序;非顶部取消冻结。
  */
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
 private fun CommentOrderBar(
     total: Int,
-    descending: Boolean,
+    order: CommentOrder,
     busy: Boolean,
-    onToggle: () -> Unit,
+    progress: String?,
+    onSelect: (CommentOrder) -> Unit,
     authorFilterItems: List<AuthorFilterItem> = emptyList(),
     filterUserId: Long? = null,
     authorMenuExpanded: Boolean = false,
@@ -2211,36 +2218,35 @@ private fun CommentOrderBar(
                 }
             }
 
-            // 3. 正序 / 倒序
-            Row(
-                Modifier
-                    .clip(RoundedCornerShape(8.dp))
-                    .background(IosTheme.colors.fieldBackground)
-                    .padding(2.dp),
-            ) {
-                OrderSegment("正序", selected = !descending, enabled = !busy) { if (descending) onToggle() }
-                OrderSegment("倒序", selected = descending, enabled = !busy) { if (!descending) onToggle() }
+            Box {
+                var menuExpanded by remember { mutableStateOf(false) }
+                Row(
+                    Modifier.clip(RoundedCornerShape(8.dp))
+                        .background(IosTheme.colors.fieldBackground)
+                        .clickable(enabled = !busy) { menuExpanded = true }
+                        .padding(horizontal = 10.dp, vertical = 6.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(4.dp),
+                ) {
+                    Text(order.title, style = IosTheme.type.footnote,
+                        color = if (busy) IosTheme.colors.secondaryLabel else IosTheme.colors.label)
+                    Text("▾", style = IosTheme.type.caption, color = IosTheme.colors.secondaryLabel)
+                }
+                DropdownMenu(expanded = menuExpanded, onDismissRequest = { menuExpanded = false },
+                    modifier = Modifier.background(IosTheme.colors.card)) {
+                    CommentOrder.entries.forEach { option ->
+                        DropdownMenuItem(
+                            text = { Text(option.title, color = if (option == order) IosTheme.colors.accent else IosTheme.colors.label) },
+                            trailingIcon = { if (option == order) Text("✓", color = IosTheme.colors.accent) },
+                            onClick = { menuExpanded = false; onSelect(option) },
+                        )
+                    }
+                }
             }
         }
+        if (progress != null) Text(progress, style = IosTheme.type.caption,
+            color = IosTheme.colors.secondaryLabel, modifier = Modifier.padding(start = 16.dp, end = 16.dp, bottom = 8.dp))
         IosDivider()
-    }
-}
-
-@Composable
-private fun OrderSegment(label: String, selected: Boolean, enabled: Boolean, onClick: () -> Unit) {
-    Box(
-        Modifier
-            .clip(RoundedCornerShape(6.dp))
-            .background(if (selected) IosTheme.colors.card else Color.Transparent)
-            .clickable(enabled = enabled && !selected, onClick = onClick)
-            .padding(horizontal = 12.dp, vertical = 4.dp),
-    ) {
-        Text(
-            text = label,
-            style = IosTheme.type.footnote,
-            fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Normal,
-            color = if (selected) IosTheme.colors.label else IosTheme.colors.secondaryLabel,
-        )
     }
 }
 
