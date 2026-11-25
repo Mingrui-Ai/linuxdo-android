@@ -259,6 +259,7 @@ import org.linuxdo.android.ui.format.RelativeTime
 import org.linuxdo.android.ui.html.CookedBlock
 import org.linuxdo.android.ui.html.CookedParser
 import org.linuxdo.android.ui.html.InlineText
+import org.linuxdo.android.ui.html.boostInlineText
 import org.linuxdo.android.ui.html.isDownloadableAttachmentUrl
 import org.linuxdo.android.ui.html.isImageLinkUrl
 import org.linuxdo.android.net.IMAGE_AUTO_RETRY_LIMIT
@@ -4569,7 +4570,7 @@ private fun PostActions(
       FlowRow(horizontalArrangement = Arrangement.spacedBy(5.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
         post.boosts.take(visibleBoosts).forEach { boost ->
             key(boost.id) {
-                val content = remember(boost.cooked) { CookedParser.parseCached(boost.cooked) }
+                val content = remember(boost.cooked, emojiUrls) { boostInlineText(boost.cooked, emojiUrls) }
                 Row(Modifier.widthIn(max = 260.dp).clip(RoundedCornerShape(50))
                     .background(chipBg)
                     .combinedClickable(
@@ -4588,7 +4589,7 @@ private fun PostActions(
                         cornerRadius = 3.dp,
                     )
                     Box(Modifier.padding(start = 4.dp, end = 3.dp)) {
-                        RichParagraph(content.filterIsInstance<CookedBlock.Paragraph>().flatMap { it.runs }, compact = true)
+                        RichParagraph(content, compact = true)
                     }
                 }
             }
@@ -4600,6 +4601,7 @@ private fun PostActions(
     boostActionTarget?.let { boost ->
         BoostActionSheet(
             boost = boost,
+            emojiUrls = emojiUrls,
             onDismiss = { boostActionTarget = null },
             onOpenAuthor = { username ->
                 boostActionTarget = null
@@ -4682,6 +4684,7 @@ private fun PostActions(
 @Composable
 private fun BoostActionSheet(
     boost: Boost,
+    emojiUrls: Map<String, String>,
     onDismiss: () -> Unit,
     onOpenAuthor: (String) -> Unit,
     onCopy: (String) -> Unit,
@@ -4689,6 +4692,7 @@ private fun BoostActionSheet(
     onDelete: () -> Unit,
 ) {
     val author = boost.user
+    val content = remember(boost.cooked, emojiUrls) { boostInlineText(boost.cooked, emojiUrls) }
     val cookedText = remember(boost.cooked) {
         val doc = Jsoup.parse(boost.cooked)
         doc.select("img").forEach { img ->
@@ -4764,12 +4768,12 @@ private fun BoostActionSheet(
                     onOpenAuthor(cleanUsername)
                 },
             )
-            Text(
-                cookedText.ifBlank { "（无文本内容）" },
-                style = IosTheme.type.body.copy(fontSize = 17.sp, lineHeight = 25.sp),
-                color = IosTheme.colors.label,
-                modifier = Modifier.fillMaxWidth(),
-            )
+            Box(Modifier.fillMaxWidth()) {
+                RichParagraph(
+                    content.ifEmpty { listOf(InlineText(cookedText.ifBlank { "（无文本内容）" })) },
+                    style = IosTheme.type.body.copy(fontSize = 17.sp, lineHeight = 25.sp),
+                )
+            }
             IosDivider(startIndent = 0.dp)
             author?.username?.let { username ->
                 BoostActionCard(
@@ -8149,7 +8153,12 @@ private fun PollCard(poll: CookedBlock.Poll, postId: Long?) {
 }
 
 @Composable
-private fun RichParagraph(runs: List<InlineText>, compact: Boolean = false, subReply: Boolean = false) {
+private fun RichParagraph(
+    runs: List<InlineText>,
+    compact: Boolean = false,
+    subReply: Boolean = false,
+    style: TextStyle? = null,
+) {
     val colors = IosTheme.colors
     val context = LocalContext.current
     val openTopic = LocalOpenTopic.current
@@ -8245,7 +8254,7 @@ private fun RichParagraph(runs: List<InlineText>, compact: Boolean = false, subR
             else -> DecryptableSelection {
                 Text(
                     annotated,
-                    style = IosTheme.type.body.copy(fontSize = 15.5.sp, lineHeight = 22.sp),
+                    style = style ?: IosTheme.type.body.copy(fontSize = 15.5.sp, lineHeight = 22.sp),
                     inlineContent = inline,
                 )
             }
