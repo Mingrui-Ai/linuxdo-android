@@ -20,7 +20,10 @@ android {
 
     buildTypes {
         debug {
+            applicationIdSuffix = ".debug"
             versionNameSuffix = "-debug"
+            isDebuggable = !providers.gradleProperty("linuxDoPerformanceBuild")
+                .map(String::toBoolean).getOrElse(false)
         }
         release {
             isMinifyEnabled = false
@@ -50,10 +53,11 @@ android {
 }
 
 dependencies {
-    val composeBom = platform("androidx.compose:compose-bom:2024.12.01")
+    val composeBom = platform("androidx.compose:compose-bom:2026.02.01")
     implementation(composeBom)
     implementation("androidx.compose.ui:ui")
     implementation("androidx.compose.material3:material3")
+    implementation("androidx.compose.material:material-icons-core")
     implementation("androidx.compose.foundation:foundation")
 
     implementation("androidx.activity:activity-compose:1.9.3")
@@ -83,6 +87,8 @@ dependencies {
     implementation("io.coil-kt:coil-gif:2.7.0")
     // 解析 Discourse 的 cooked HTML 为块模型;纯 Java,无传递依赖。
     implementation("org.jsoup:jsoup:1.18.1")
+    // 本地简介预览，解析标准 Markdown 后复用原生正文渲染。
+    implementation("org.commonmark:commonmark:0.32.0")
     // 后台定期任务(低频只读静默探测未读通知)
     implementation("androidx.work:work-runtime-ktx:2.9.1")
     // WebView 代理导流:ProxyController 只存在于该库,framework 的 WebView 没有公开代理 API。

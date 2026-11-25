@@ -191,6 +191,7 @@ internal object NoExcerptModeMigration {
  * 涉及 CookieManager 的方法请在主线程调用。
  */
 class SessionStore(context: Context) : org.linuxdo.android.net.DohConfigProvider {
+    private val appContext = context.applicationContext
     private val prefs: SharedPreferences = createPrefs(context)
     /** 当前活跃账号的备份凭据回退提供者（由容器注入，在加密库或 WebView 意外丢失 _t 时兜底恢复）。 */
     var accountCookieFallback: ((expectedUserId: Long) -> Map<String, String>?)? = null
@@ -1356,6 +1357,13 @@ class SessionStore(context: Context) : org.linuxdo.android.net.DohConfigProvider
 
     fun currentUserId(): Long = plainPrefs.getLong(KEY_CURRENT_USER_ID, 0L)
 
+    fun hasChatNotificationBaseline(): Boolean = plainPrefs.getBoolean("chat_baseline_${currentUserId()}", false)
+    fun chatLastSeenMessageId(channelId: Long): Long = plainPrefs.getLong("chat_seen_${currentUserId()}_$channelId", 0L)
+    fun saveChatLastSeenMessageId(channelId: Long, messageId: Long) {
+        plainPrefs.edit().putLong("chat_seen_${currentUserId()}_$channelId", maxOf(messageId, chatLastSeenMessageId(channelId))).apply()
+    }
+    fun markChatNotificationBaseline() { plainPrefs.edit().putBoolean("chat_baseline_${currentUserId()}", true).apply() }
+
     fun saveCurrentUserId(id: Long) {
         if (!prefs.edit().putLong(KEY_COOKIE_OWNER, id).commit() ||
             !plainPrefs.edit().putLong(KEY_CURRENT_USER_ID, id).commit()) throw EncryptedStorageUnavailableException()
@@ -1463,6 +1471,28 @@ class SessionStore(context: Context) : org.linuxdo.android.net.DohConfigProvider
 
     // ── DoH 偏好读写 ─────────────────────────────────────────────────────────────
 
+    /** 首次升级按旧版有效路径迁移；之后仅由设置页改变，账号切换不影响此偏好。 */
+    override fun getNetworkMode(): org.linuxdo.android.net.NetworkMode = synchronized(NETWORK_MODE_LOCK) {
+        org.linuxdo.android.net.NetworkMode.fromPreference(plainPrefs.getString(KEY_NETWORK_MODE, null))
+            ?: run {
+                val cm = appContext.getSystemService(android.net.ConnectivityManager::class.java)
+                val isVpn = runCatching {
+                    cm?.activeNetwork?.let { cm.getNetworkCapabilities(it) }
+                        ?.hasTransport(android.net.NetworkCapabilities.TRANSPORT_VPN) == true
+                }.getOrDefault(false)
+                val isProxy = runCatching { cm?.defaultProxy != null }.getOrDefault(false)
+                org.linuxdo.android.net.NetworkMode.fromLegacy(
+                    isVpn, isProxy, plainPrefs.getBoolean(KEY_DOH_FORCE_OVER_PROXY, false),
+                ).also { mode -> plainPrefs.edit().putString(KEY_NETWORK_MODE, mode.preferenceValue).apply() }
+            }
+    }
+
+    fun setNetworkMode(mode: org.linuxdo.android.net.NetworkMode) {
+        synchronized(NETWORK_MODE_LOCK) {
+            plainPrefs.edit().putString(KEY_NETWORK_MODE, mode.preferenceValue).apply()
+        }
+    }
+
     /** 是否开启 DoH（默认开启，支持免代理直连） */
     override fun isDohEnabled(): Boolean = plainPrefs.getBoolean(KEY_DOH_ENABLED, true)
 
@@ -1501,17 +1531,10 @@ class SessionStore(context: Context) : org.linuxdo.android.net.DohConfigProvider
     }
 
     /** 是否开启智能定时低延迟优选与自动切换（默认开启） */
-    fun isDohAutoOptimizeEnabled(): Boolean = plainPrefs.getBoolean(KEY_DOH_AUTO_OPTIMIZE, true)
+    override fun isDohAutoOptimizeEnabled(): Boolean = plainPrefs.getBoolean(KEY_DOH_AUTO_OPTIMIZE, true)
 
     fun setDohAutoOptimizeEnabled(enabled: Boolean) {
         plainPrefs.edit().putBoolean(KEY_DOH_AUTO_OPTIMIZE, enabled).apply()
-    }
-
-    /** 是否在开启系统代理/VPN 时强制保持 DoH + ECH 直连（防止直连分流规则导致阻断，默认关闭由系统让渡） */
-    override fun isDohForceOverProxyEnabled(): Boolean = plainPrefs.getBoolean(KEY_DOH_FORCE_OVER_PROXY, false)
-
-    fun setDohForceOverProxyEnabled(enabled: Boolean) {
-        plainPrefs.edit().putBoolean(KEY_DOH_FORCE_OVER_PROXY, enabled).apply()
     }
 
     /** 首页信息流显示模式：强制全量收敛为无正文模式（图文模式代码保留后续再优化） */
@@ -1652,7 +1675,9 @@ class SessionStore(context: Context) : org.linuxdo.android.net.DohConfigProvider
         const val KEY_DOH_AUTO_OPTIMIZE = "doh_auto_optimize"
         const val KEY_DOH_SERVERS_JSON = "doh_servers_json"
         const val KEY_DOH_CUSTOM_SERVERS_JSON = "doh_custom_servers_json"
-        const val KEY_DOH_FORCE_OVER_PROXY = "doh_force_over_proxy"
+        private val NETWORK_MODE_LOCK = Any()
+        private const val KEY_NETWORK_MODE = "network_mode"
+        private const val KEY_DOH_FORCE_OVER_PROXY = "doh_force_over_proxy" // 仅供旧版偏好迁移
         const val KEY_FEED_GRAPHIC_MODE = "feed_graphic_mode"
         const val KEY_FEED_DISPLAY_MODE = "feed_display_mode"
         const val KEY_SKIN_PRESET = "skin_preset"

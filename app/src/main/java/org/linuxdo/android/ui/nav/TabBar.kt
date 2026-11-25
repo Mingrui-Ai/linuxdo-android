@@ -2,6 +2,7 @@ package org.linuxdo.android.ui.nav
 
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.selection.selectable
 import androidx.compose.foundation.shape.CircleShape
@@ -27,17 +28,28 @@ import org.linuxdo.android.ui.design.IosTheme
 
 enum class MainTab(val label: String, val root: Route) {
     Latest("首页", Route.TopicList),
-    Categories("分类", Route.CategoryList),
-    Search("发现", Route.Search),
     Messages("消息", Route.Notifications),
-    Profile("我的", Route.Profile),
+    // 仅供旧版保存状态反序列化；不再创建导航栈或绘制底栏入口。
+    @Deprecated("个人中心已迁移至首页侧栏")
+    Profile("我的", Route.Profile);
+
+    companion object {
+        val primaryTabs = listOf(Latest, Messages)
+    }
+}
+
+// 发帖是操作按钮，不加入主页面的返回栈或横滑顺序。
+private enum class BottomBarItem(val label: String, val tab: MainTab? = null) {
+    Home(MainTab.Latest.label, MainTab.Latest),
+    CreateTopic("发帖"),
+    Messages(MainTab.Messages.label, MainTab.Messages),
 }
 
 @Composable
 fun TabBar(
     selected: MainTab,
-    homeFeedLabel: String = "首页",
-    categoriesTabLabel: String = "分类",
+    modifier: Modifier = Modifier,
+    onCreateTopic: () -> Unit,
     unreadCount: Int = 0,
     onSelect: (MainTab) -> Unit,
 ) {
@@ -50,7 +62,7 @@ fun TabBar(
     val barBackground = IosTheme.colors.card.copy(alpha = if (isDark) 0.82f else 0.85f)
 
     Column(
-        Modifier
+        modifier
             .fillMaxWidth()
             .background(barBackground)
     ) {
@@ -61,19 +73,20 @@ fun TabBar(
                 .background(IosTheme.colors.separator.copy(alpha = 0.32f))
         )
         Row(Modifier.heightIn(min = 52.dp).height(IntrinsicSize.Min)) {
-            MainTab.entries.forEach { tab ->
+            BottomBarItem.entries.forEach { item ->
+                val tab = item.tab
                 val isSelected = tab == selected
                 val color = if (isSelected) activeTint else inactiveTint
-                val label = if (tab == MainTab.Latest) homeFeedLabel else if (tab == MainTab.Categories) categoriesTabLabel else tab.label
+                val label = item.label
                 Column(
                     Modifier
                         .weight(1f)
                         .fillMaxHeight()
-                        .selectable(
+                        .then(if (tab != null) Modifier.selectable(
                             selected = isSelected,
                             role = Role.Tab,
-                            onClick = { onSelect(tab) }
-                        )
+                            onClick = { onSelect(tab) },
+                        ) else Modifier.clickable(role = Role.Button, onClick = onCreateTopic))
                         .padding(vertical = 4.dp),
                     horizontalAlignment = Alignment.CenterHorizontally,
                     verticalArrangement = Arrangement.Center
@@ -81,8 +94,8 @@ fun TabBar(
                     Box(contentAlignment = Alignment.TopEnd) {
                         Canvas(Modifier.size(24.dp)) {
                             val stroke = if (isSelected) 2.2.dp.toPx() else 1.6.dp.toPx()
-                            when (tab) {
-                                MainTab.Latest -> {
+                            when (item) {
+                                BottomBarItem.Home -> {
                                     // 微博式小房子图标：激活态实心，未激活态细线条
                                     val roofPath = Path().apply {
                                         moveTo(size.width * 0.5f, size.height * 0.12f)
@@ -114,50 +127,22 @@ fun TabBar(
                                         drawLine(color, Offset(size.width * 0.62f, size.height * 0.60f), Offset(size.width * 0.62f, size.height * 0.88f), stroke, StrokeCap.Round)
                                     }
                                 }
-                                MainTab.Categories -> {
-                                    if (categoriesTabLabel == "标签") {
-                                        val tagPath = Path().apply {
-                                            moveTo(size.width * 0.18f, size.height * 0.22f)
-                                            lineTo(size.width * 0.58f, size.height * 0.22f)
-                                            lineTo(size.width * 0.88f, size.height * 0.52f)
-                                            lineTo(size.width * 0.58f, size.height * 0.82f)
-                                            lineTo(size.width * 0.18f, size.height * 0.82f)
-                                            close()
-                                        }
-                                        if (isSelected) {
-                                            drawPath(tagPath, color)
-                                            val contrastColor = if (isDark) Color(0xFF1C1C1E) else Color(0xFFFFFFFF)
-                                            drawCircle(contrastColor, size.width * 0.08f, Offset(size.width * 0.36f, size.height * 0.52f))
-                                        } else {
-                                            drawPath(tagPath, color, style = Stroke(stroke, cap = StrokeCap.Round, join = StrokeJoin.Round))
-                                            drawCircle(color, size.width * 0.07f, Offset(size.width * 0.36f, size.height * 0.52f), style = Stroke(stroke))
-                                        }
-                                    } else {
-                                        repeat(4) { index ->
-                                            val x = size.width * (0.10f + index % 2 * 0.50f)
-                                            val y = size.height * (0.10f + index / 2 * 0.50f)
-                                            val rectSize = Size(size.width * 0.30f, size.height * 0.30f)
-                                            if (isSelected) {
-                                                drawRect(color, Offset(x, y), rectSize)
-                                            } else {
-                                                drawRect(color, Offset(x, y), rectSize, style = Stroke(stroke))
-                                            }
-                                        }
+                                BottomBarItem.CreateTopic -> {
+                                    val pen = Path().apply {
+                                        moveTo(size.width * 0.17f, size.height * 0.83f)
+                                        lineTo(size.width * 0.35f, size.height * 0.79f)
+                                        lineTo(size.width * 0.81f, size.height * 0.33f)
+                                        lineTo(size.width * 0.67f, size.height * 0.19f)
+                                        lineTo(size.width * 0.21f, size.height * 0.65f)
+                                        close()
                                     }
+                                    drawPath(pen, color, style = Stroke(stroke, cap = StrokeCap.Round, join = StrokeJoin.Round))
+                                    drawLine(color, Offset(size.width * 0.56f, size.height * 0.29f),
+                                        Offset(size.width * 0.71f, size.height * 0.44f), stroke, StrokeCap.Round)
+                                    drawLine(color, Offset(size.width * 0.52f, size.height * 0.83f),
+                                        Offset(size.width * 0.83f, size.height * 0.83f), stroke, StrokeCap.Round)
                                 }
-                                MainTab.Search -> {
-                                    val radius = size.width * 0.28f
-                                    val center = Offset(size.width * 0.40f, size.height * 0.40f)
-                                    drawCircle(color, radius, center, style = Stroke(if (isSelected) stroke * 1.25f else stroke))
-                                    drawLine(
-                                        color,
-                                        Offset(size.width * 0.61f, size.height * 0.61f),
-                                        Offset(size.width * 0.89f, size.height * 0.89f),
-                                        if (isSelected) stroke * 1.35f else stroke,
-                                        StrokeCap.Round
-                                    )
-                                }
-                                MainTab.Messages -> {
+                                BottomBarItem.Messages -> {
                                     val envLeft = size.width * 0.08f
                                     val envRight = size.width * 0.92f
                                     val envTop = size.height * 0.22f
@@ -180,34 +165,6 @@ fun TabBar(
                                         drawPath(envPath, color, style = Stroke(width = stroke, cap = StrokeCap.Round))
                                         drawLine(color, Offset(envLeft, envTop), Offset(size.width / 2, envMidY), stroke, StrokeCap.Round)
                                         drawLine(color, Offset(envRight, envTop), Offset(size.width / 2, envMidY), stroke, StrokeCap.Round)
-                                    }
-                                }
-                                MainTab.Profile -> {
-                                    val headCenter = Offset(size.width / 2, size.height * 0.28f)
-                                    val headRadius = size.width * 0.20f
-                                    if (isSelected) {
-                                        drawCircle(color, headRadius, headCenter)
-                                        val bodyPath = Path().apply {
-                                            moveTo(size.width * 0.12f, size.height * 0.88f)
-                                            cubicTo(
-                                                size.width * 0.12f, size.height * 0.56f,
-                                                size.width * 0.88f, size.height * 0.56f,
-                                                size.width * 0.88f, size.height * 0.88f
-                                            )
-                                            close()
-                                        }
-                                        drawPath(bodyPath, color)
-                                    } else {
-                                        drawCircle(color, headRadius, headCenter, style = Stroke(stroke))
-                                        drawArc(
-                                            color,
-                                            180f,
-                                            180f,
-                                            false,
-                                            Offset(size.width * 0.12f, size.height * 0.54f),
-                                            Size(size.width * 0.76f, size.height * 0.68f),
-                                            style = Stroke(stroke)
-                                        )
                                     }
                                 }
                             }

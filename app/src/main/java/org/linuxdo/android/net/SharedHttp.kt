@@ -12,6 +12,7 @@ import okhttp3.OkHttpClient
 import okhttp3.Response
 import okhttp3.Cookie
 import java.io.IOException
+import java.net.Proxy
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.runBlocking
 import org.linuxdo.android.Config
@@ -59,6 +60,9 @@ fun buildSharedHttpClient(
         builder.addInterceptor(DohFailoverInterceptor(failoverCoordinator))
     }
 
+    // 内置方式即使原生传输初始化失败，也不偷偷借用系统 HTTP 代理。
+    if (routeMode != NetworkRouteMode.SYSTEM) builder.proxy(Proxy.NO_PROXY)
+
     if (dohTransport != null) {
         // 原生 ECH + TLS 传输配置：注入 DNS、SocketFactory、SSLSocketFactory (Rustls ECH)
         dohTransport.configure(builder)
@@ -71,6 +75,8 @@ fun buildSharedHttpClient(
         }
     } else if (dns != null) {
         builder.dns(dns)
+    } else if (routeMode == NetworkRouteMode.DIRECT && anycastPool != null) {
+        builder.dns(AnycastDns(anycastPool, fallback = Dns.SYSTEM))
     }
 
     return builder
@@ -88,7 +94,8 @@ fun buildSharedHttpClient(
                 transportLabel = when {
                     dohTransport != null -> if (!store.isDohEnabled() || routeMode == NetworkRouteMode.DIRECT) "Anycast直连" else "DoH解析"
                     dns != null -> "DoH-DNS"
-                    else -> "系统网络"
+                    routeMode == NetworkRouteMode.SYSTEM -> "跟随系统"
+                    else -> "内置网络(平台TLS)"
                 },
             ),
         )
@@ -108,12 +115,15 @@ internal fun buildActiveMediaDownloadClient(base: OkHttpClient): OkHttpClient =
 
 /**
  * 显式附件/媒体下载专用系统通道客户端：当原生 Rust DoH/Anycast 通道在读取 CDN 大响应体中途断流时，
- * 用全新 [OkHttpClient.Builder] 切换到平台默认 Socket/TLS、系统 DNS、系统代理与独立连接池重试，
+ * 用全新 [OkHttpClient.Builder] 切换到平台默认 Socket/TLS、系统 DNS 与独立连接池重试，
+ * 代理策略继承主通道，不能因下载重试擅自切换用户选择的出口。
  * 保留同源会话/Cookie 拦截器语义并剔除原生 DoH 与 failover 拦截器。
  */
 internal fun buildSystemMediaDownloadClient(base: OkHttpClient): OkHttpClient =
     OkHttpClient.Builder()
         .dns(Dns.SYSTEM)
+        .proxy(base.proxy)
+        .proxySelector(base.proxySelector)
         .connectionPool(ConnectionPool(4, 1, TimeUnit.MINUTES))
         .cookieJar(base.cookieJar)
         .authenticator(base.authenticator)
@@ -133,15 +143,8 @@ internal fun buildSystemMediaDownloadClient(base: OkHttpClient): OkHttpClient =
         .build()
 
 /**
- * 结合设置开关以及是否开启 VPN/代理综合判断，解析出当前应走哪个 HTTP 客户端。
- *
- * 判定矩阵：
- * 1. 优先复用 [AppContainer] 的当前活跃客户端（若实例存在）；
- *    - 进程存活时，协调器已持续监听 VPN 状态、用户开关与代次自动故障转移，享有活跃连接池和 ECH 会话复用；
- * 2. 兜底与静态独立唤醒路径：
- *    - 用户开关未开启 DoH (`!sessionStore.isDohEnabled()`) -> 走普通系统网络；
- *    - 检测到 VPN 或系统代理开启 (`networkMonitor.detect().shouldPauseDoh`) -> 自动暂停 DoH，走系统代理网络；
- *    - 开启 DoH 且处于无代理直连网络 -> 必须走原生 DoH + ECH TLS 传输通道（构建失败则降级纯 DNS）。
+ * 优先复用应用当前客户端；后台独立唤醒也遵循持久化的联网方式。
+ * 内置方式下，DoH 开关只控制解析方式，关闭后仍使用 Anycast 与内置传输。
  */
 fun resolveActiveHttpClient(
     context: Context,
@@ -154,14 +157,10 @@ fun resolveActiveHttpClient(
     }
 
     val userAgent = org.linuxdo.android.AppContainer.resolveUserAgent(context, sessionStore)
-    val isDohSwitchOn = sessionStore.isDohEnabled()
-    val forceOverProxy = sessionStore.isDohForceOverProxyEnabled()
-    val yieldToSystem = NetworkStateMonitor(context).detect().shouldYieldToSystem(forceOverProxy)
+    val builtIn = sessionStore.getNetworkMode() == NetworkMode.BUILT_IN
+    val shouldUseDoh = builtIn && sessionStore.isDohEnabled()
 
-    // 综合判断：设置开启且未让渡系统网络时才走 DoH + ECH；系统 HTTP 代理下总是让渡，保持三条链路同一出口
-    val shouldUseDoh = isDohSwitchOn && !yieldToSystem
-
-    val transport = if (shouldUseDoh) {
+    val transport = if (builtIn) {
         buildActiveDohTransport(sessionStore)
     } else {
         null
@@ -178,6 +177,8 @@ fun resolveActiveHttpClient(
         userAgent = userAgent,
         dns = dns,
         dohTransport = transport,
+        anycastPool = if (builtIn) AnycastPool() else null,
+        routeMode = if (builtIn) NetworkRouteMode.DIRECT else NetworkRouteMode.SYSTEM,
     )
 }
 
@@ -193,6 +194,7 @@ fun resolveActiveHttpClient(
  */
 fun buildBootstrapClient(): OkHttpClient =
     OkHttpClient.Builder()
+        .proxy(Proxy.NO_PROXY)
         .connectTimeout(5, TimeUnit.SECONDS)
         .readTimeout(5, TimeUnit.SECONDS)
         .build()

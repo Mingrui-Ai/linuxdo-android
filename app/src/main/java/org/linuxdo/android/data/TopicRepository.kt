@@ -531,7 +531,7 @@ class TopicRepository(
         try { visit(json.parseToJsonElement(request("/emojis.json"))) }
         catch (error: CancellationException) { throw error }
         catch (error: Exception) { diagnostics.log("表情索引加载失败: ${error.message}") }
-        return result.toMap().also { emojiCache = it }
+        return result.toMap().also { if (it.isNotEmpty()) emojiCache = it }
     }
 
     suspend fun fetchFeed(
@@ -543,7 +543,6 @@ class TopicRepository(
         ascending: Boolean? = null,
         beforeDispatch: (() -> Unit)? = null,
     ): TopicPage {
-        val excludeRead = feed == HomeFeedType.Unread
         val query = buildList {
             add("page=$page")
             if (!order.isNullOrBlank()) add("order=$order")
@@ -555,13 +554,16 @@ class TopicRepository(
             toPage(
                 response = json.decodeFromString(body),
                 awaitCategories = awaitCategories,
-                excludeReadUnread = excludeRead,
             )
         }
         return if (feed == HomeFeedType.Latest) result.copy(
             items = result.items.filterNot { it.notificationLevel == TopicNotificationLevel.Muted },
         ) else result
     }
+
+    /** 与网页 /my/activity/read 共用的账号已读列表，按服务端最近访问顺序分页。 */
+    suspend fun fetchReadHistory(page: Int = 0): TopicPage =
+        toPage(json.decodeFromString(request("/read.json?page=$page", present = false)), awaitCategories = false)
 
     suspend fun fetchLatest(page: Int, awaitCategories: Boolean = true, present: Boolean = true): TopicPage =
         fetchFeed(HomeFeedType.Latest, page, awaitCategories, present = present)
@@ -1427,8 +1429,15 @@ class TopicRepository(
 
     /** MessageBus 的 Dont-Chunk 长轮询；不占用整个后台 GET 闸门等待服务端消息。 */
     suspend fun pollTopicMessages(topicId: Long, clientId: String, cursor: Long, sequence: Long): List<TopicBusMessage> =
-        topicPollGate.withLock {
-            val generation = sessionStore?.sessionGeneration ?: return@withLock emptyList()
+        topicPollGate.withLock { pollMessageBus(clientId, mapOf("/topic/$topicId" to cursor), sequence, "/t/$topicId") }
+
+    // 聊天和话题各自保持一个长连接，不能让聊天等待话题的 70 秒长轮询释放锁。
+    private val chatPollGate = Mutex()
+    suspend fun pollChatMessages(clientId: String, cursors: Map<String, Long>, sequence: Long): List<TopicBusMessage> =
+        chatPollGate.withLock { pollMessageBus(clientId, cursors, sequence, "/chat") }
+
+    private suspend fun pollMessageBus(clientId: String, cursors: Map<String, Long>, sequence: Long, referer: String): List<TopicBusMessage> {
+            val generation = sessionStore?.sessionGeneration ?: return emptyList()
             val path = "/message-bus/$clientId/poll"
             val config = getPollingConfiguration(generation)
             var pollRound = currentRateLimitRound()
@@ -1466,13 +1475,13 @@ class TopicRepository(
                 .header("Discourse-Background", "true")
                 .header("X-SILENCE-LOGGER", "true")
                 .header("Origin", Config.BASE_URL)
-                .header("Referer", "${Config.BASE_URL}/t/$topicId")
+                .header("Referer", "${Config.BASE_URL}$referer")
                 .tag(ActiveSessionRequest::class.java, ActiveSessionRequest(generation, sendCookies = config.sendCookies))
                 .apply {
                     config.sharedSessionKey?.let { header("X-Shared-Session-Key", it) }
                     sessionStore.userAgentOrNull()?.let { header("User-Agent", it) }
                 }
-                .post(FormBody.Builder().add("/topic/$topicId", cursor.toString())
+                .post(FormBody.Builder().apply { cursors.forEach { (channel, cursor) -> add(channel, cursor.toString()) } }
                     .add("__seq", sequence.toString()).build())
                 .build()
             val result = suspendCancellableCoroutine<TransportResult> { continuation ->
@@ -1510,7 +1519,7 @@ class TopicRepository(
                 pollingConfig = null
                 nextPollingConfigAttemptAt = SystemClock.elapsedRealtime() + 120_000L
             }
-            when {
+            return when {
                 result.status == 429 -> {
                     if (result.challenged) enterSilentPrefetchBackoff(NeedsInteractiveVerification("话题订阅被挑战拦截"))
                     throw enterRateLimitCooldown(
@@ -1551,7 +1560,8 @@ class TopicRepository(
 
     suspend fun toggleReaction(postId: Long, reaction: String): Post {
         require(reaction.matches(Regex("[a-zA-Z0-9_+:-]+")))
-        return json.decodeFromString(mutate("/discourse-reactions/posts/$postId/custom-reactions/${encode(reaction)}/toggle.json", "PUT"))
+        val path = "/discourse-reactions/posts/$postId/custom-reactions/${encode(reaction)}/toggle.json"
+        return json.decodeFromString(mutate(path, "PUT", reactionToggle = true))
     }
 
     suspend fun createBoost(postId: Long, raw: String): Boost {
@@ -1604,6 +1614,26 @@ class TopicRepository(
 
     fun clearUserCardCache() {
         userCardCache.clear()
+    }
+
+    /** Native profile editor shares the same pacing, CSRF and session checks as all other writes. */
+    internal suspend fun profileEditorRead(path: String, userId: Long, generation: Long): JsonObject {
+        checkWriteSession(userId, generation)
+        // The editor compares writes against this response. Never reuse a browser/CDN response
+        // for a previous visit to the same profile URL, including the pre-save conflict check.
+        val readPath = if (path.startsWith("/u/") && path.endsWith(".json"))
+            "$path?_=${java.util.UUID.randomUUID()}" else path
+        return json.parseToJsonElement(request(readPath, beforeDispatch = { checkWriteSession(userId, generation) }))
+            .jsonObject.also { checkWriteSession(userId, generation) }
+    }
+
+    internal suspend fun profileEditorWrite(path: String, payload: JsonObject, userId: Long, generation: Long): JsonObject {
+        checkWriteSession(userId, generation)
+        val response = json.parseToJsonElement(mutate(path, "PUT", payload.toString(),
+            beforeAttempt = { checkWriteSession(userId, generation) })).jsonObject
+        checkWriteSession(userId, generation)
+        require(response["success"]?.jsonPrimitive?.booleanOrNull != false) { "资料保存未成功，请重试" }
+        return response
     }
 
     /**
@@ -1699,6 +1729,18 @@ class TopicRepository(
             return existingCached
         }
         val root = objectRequest("/u/${encode(username)}/card.json", burst = true)
+        return cacheUserCardResponse(username, root)
+    }
+
+    /** 详细主页直接读取完整资料；card.json 不包含个人主页背景。 */
+    suspend fun fetchUserProfile(username: String): UserCardData {
+        val root = objectRequest("/u/${encode(username)}.json", burst = true)
+        return cacheUserCardResponse(username, root)
+    }
+
+    private fun cacheUserCardResponse(username: String, root: JsonObject): UserCardData {
+        val key = username.lowercase().trim().removePrefix("@")
+        val existingCached = userCardCache[key]
         val user = root["user"] as? JsonObject ?: root
         val card = json.decodeFromJsonElement<UserCardData>(user)
         saveCachedGamificationScore(card.username.ifBlank { username }, card.gamificationScore)
@@ -1718,6 +1760,9 @@ class TopicRepository(
         // 若之前已有缓存的统计数据，保留之，防止刷新时指标闪烁归零
         val resolved = card.copy(
             animatedAvatar = candidateAnim,
+            // 轻量卡片未返回此字段时保留完整主页缓存；明确返回 null 则表示已移除。
+            profileBackgroundUploadUrl = if ("profile_background_upload_url" in user)
+                card.profileBackgroundUploadUrl else existingCached?.profileBackgroundUploadUrl,
             following = isFollowedInJson,
             topicCount = if (card.topicCount > 0) card.topicCount else (existingCached?.topicCount ?: 0),
             postCount = if (card.postCount > 0) card.postCount else (existingCached?.postCount ?: 0),
@@ -1872,6 +1917,9 @@ class TopicRepository(
         saveCachedFollowing(username, list)
         return list
     }
+
+    suspend fun fetchProfileNetwork(username: String, followers: Boolean): List<FollowUser> =
+        fetchFollowList(username, if (followers) "followers" else "following")
 
     private suspend fun fetchFollowList(username: String, listName: String, present: Boolean = true): List<FollowUser> {
         val result = json.parseToJsonElement(request("/u/${encode(username)}/follow/$listName", present = present)) as? JsonArray
@@ -2080,8 +2128,8 @@ class TopicRepository(
         }
     }
 
-    suspend fun fetchChatChannels(): List<ChatChannelSummary> {
-        val root = objectRequest("/chat/api/me/channels")
+    suspend fun fetchChatChannels(silent: Boolean = false): List<ChatChannelSummary> {
+        val root = objectRequest("/chat/api/me/channels", present = !silent, retryAllowed = !silent)
         val tracking = ((root["tracking"] as? JsonObject)?.get("channel_tracking") as? JsonObject)
             ?: JsonObject(emptyMap())
         return (root.objects("public_channels") + root.objects("direct_message_channels"))
@@ -2101,6 +2149,7 @@ class TopicRepository(
                             createdAt = message.text("created_at").ifBlank { null },
                             user = user?.let { rawUser ->
                                 ChatUserSummary(
+                                    id = rawUser.number("id") ?: 0L,
                                     username = rawUser.text("username"),
                                     name = rawUser.text("name").ifBlank { null },
                                     avatarTemplate = rawUser.text("avatar_template").ifBlank { null },
@@ -2114,6 +2163,7 @@ class TopicRepository(
                     val username = rawUser.text("username")
                     if (username.isBlank()) null
                     else ChatUserSummary(
+                        id = rawUser.number("id") ?: 0L,
                         username = username,
                         name = rawUser.text("name").ifBlank { null },
                         avatarTemplate = rawUser.text("avatar_template").ifBlank { null },
@@ -2174,6 +2224,13 @@ class TopicRepository(
         )
     }
 
+    suspend fun setChatChannelMuted(channelId: Long, muted: Boolean) {
+        require(channelId > 0)
+        val settings = JsonObject(mapOf("muted" to JsonPrimitive(muted)))
+        val body = JsonObject(mapOf("notifications_settings" to settings))
+        mutate("/chat/api/channels/$channelId/notifications-settings/me", "PUT", body.toString())
+    }
+
     suspend fun markChatChannelRead(channelId: Long, messageId: Long?) {
         val query = messageId?.let { "?message_id=$it" }.orEmpty()
         mutate("/chat/api/channels/$channelId/read$query", "PUT")
@@ -2183,8 +2240,8 @@ class TopicRepository(
         channelId: Long,
         message: String,
         uploadIds: List<Long> = emptyList(),
-    ) {
-        require(message.isNotBlank())
+    ): ChatMessageSummary? {
+        require(message.isNotBlank() || uploadIds.isNotEmpty())
         val fields = mutableMapOf<String, JsonElement>(
             "message" to JsonPrimitive(message.trim())
         )
@@ -2192,7 +2249,14 @@ class TopicRepository(
             fields["upload_ids"] = JsonArray(uploadIds.map { JsonPrimitive(it) })
         }
         val body = JsonObject(fields).toString()
-        mutate("/chat/$channelId", "POST", body)
+        val response = mutate("/chat/$channelId", "POST", body)
+        // 发送已成功时，响应结构差异只回退到刷新，不能当作发送失败诱发重复发送。
+        return runCatching {
+            val result = json.parseToJsonElement(response).jsonObject
+            (result["chat_message"] as? JsonObject)?.let {
+                json.decodeFromJsonElement<ChatMessageSummary>(it).copy(channelId = channelId)
+            }
+        }.getOrNull()
     }
 
     suspend fun createOrGetDirectMessageChannel(targetUsername: String): ChatChannelSummary {
@@ -2349,8 +2413,14 @@ class TopicRepository(
      * GET /drafts.json
      */
     suspend fun fetchDrafts(burst: Boolean = false): List<DraftItem> {
-        val root = objectRequest("/drafts.json?offset=0&limit=50", burst = burst)
-        val draftObjs = root.objects("drafts")
+        val draftObjs = mutableListOf<JsonObject>()
+        var offset = 0
+        do {
+            val page = objectRequest("/drafts.json?offset=$offset&limit=50", burst = burst && offset == 0).objects("drafts")
+            draftObjs.addAll(page)
+            offset += page.size
+        } while (page.size == 50)
+
         val known = categoryCache ?: categories()
         return draftObjs.mapNotNull { obj ->
             val draftKey = obj.text("draft_key").takeIf { it.isNotBlank() } ?: return@mapNotNull null
@@ -2362,6 +2432,7 @@ class TopicRepository(
 
             val raw = dataObj?.text("reply").orEmpty()
             val topicId = obj.number("topic_id") ?: dataObj?.number("topic_id")
+                ?: draftKey.removePrefix("topic_").toLongOrNull()
             val action = dataObj?.text("action")?.takeIf { it.isNotBlank() }
                 ?: if (topicId != null && topicId > 0L) "reply" else "createTopic"
             val title = dataObj?.text("title")?.takeIf { it.isNotBlank() }
@@ -2374,7 +2445,7 @@ class TopicRepository(
                     ?: (elem as? JsonObject)?.text("name")?.takeIf { it.isNotBlank() }
                     ?: (elem as? JsonObject)?.text("id")?.takeIf { it.isNotBlank() }
             }
-            val replyToPostNumber = dataObj?.text("postId")?.toIntOrNull()?.takeIf { it > 0 }
+            val replyToPostNumber = dataObj?.text("reply_to_post_number")?.toIntOrNull()?.takeIf { it > 0 }
                 ?: obj.text("post_number").toIntOrNull()?.takeIf { it > 0 }
             val postId = dataObj?.number("postId")
             val excerptSource = obj.text("excerpt").ifBlank { raw }
@@ -2408,68 +2479,6 @@ class TopicRepository(
     }
 
     /**
-     * 保存草稿至 Discourse 服务端（POST /drafts.json）。
-     * 若遇到 409 Conflict（跨端编辑导致 sequence 过期），自动拉取最新 sequence 重试一次。
-     */
-    suspend fun saveDraft(
-        draftKey: String = "new_topic",
-        sequence: Long = 0L,
-        title: String = "",
-        raw: String,
-        categoryId: Int? = null,
-        tags: List<String> = emptyList(),
-        action: String = "createTopic",
-        topicId: Long? = null,
-        replyToPostNumber: Int? = null,
-    ): Long {
-        val cleanTags = tags.map { it.trim() }.filter { it.isNotEmpty() }.distinct()
-        val dataMap = mutableMapOf<String, JsonElement>(
-            "reply" to JsonPrimitive(raw),
-            "action" to JsonPrimitive(action),
-            "title" to JsonPrimitive(title.trim()),
-            "categoryId" to (categoryId?.takeIf { it > 0 }?.let { JsonPrimitive(it) } ?: JsonNull),
-            "tags" to JsonArray(cleanTags.map { JsonPrimitive(it) }),
-            "archetypeId" to JsonPrimitive("regular"),
-            "metaData" to JsonNull,
-            "composerTime" to JsonPrimitive(1500),
-            "typingTime" to JsonPrimitive(1200),
-        )
-        if (topicId != null && topicId > 0L) {
-            dataMap["topic_id"] = JsonPrimitive(topicId)
-        }
-        if (replyToPostNumber != null && replyToPostNumber > 0) {
-            dataMap["postId"] = JsonPrimitive(replyToPostNumber)
-        }
-        val dataString = JsonObject(dataMap).toString()
-
-        suspend fun doSave(seq: Long): Long {
-            val payload = JsonObject(
-                mapOf(
-                    "draft_key" to JsonPrimitive(draftKey),
-                    "sequence" to JsonPrimitive(seq),
-                    "data" to JsonPrimitive(dataString),
-                ),
-            ).toString()
-            val responseText = mutate("/drafts.json", "POST", payload)
-            val root = runCatching { json.parseToJsonElement(responseText).jsonObject }.getOrNull()
-            return root?.text("draft_sequence")?.toLongOrNull() ?: (seq + 1L)
-        }
-
-        return try {
-            doSave(sequence)
-        } catch (e: HttpStatusException) {
-            if (e.status == 409) {
-                val latestSeq = runCatching {
-                    fetchDrafts(burst = true).firstOrNull { it.draftKey == draftKey }?.sequence
-                }.getOrNull() ?: 0L
-                doSave(latestSeq)
-            } else {
-                throw e
-            }
-        }
-    }
-
-    /**
      * 删除服务端草稿（DELETE /drafts/{draft_key}.json）。
      */
     suspend fun deleteDraft(draftKey: String, sequence: Long = 0L) {
@@ -2487,18 +2496,25 @@ class TopicRepository(
                 payload,
             )
         }
-        try {
-            doDelete(sequence)
-        } catch (e: HttpStatusException) {
-            if (e.status == 409) {
-                val latestSeq = runCatching {
-                    fetchDrafts(burst = true).firstOrNull { it.draftKey == draftKey }?.sequence
-                }.getOrNull() ?: return
-                doDelete(latestSeq)
-            } else {
-                throw e
-            }
-        }
+        val current = fetchDraft(draftKey)
+        check(current.sequence == sequence) { "草稿已在其他设备更新，请刷新后再删除" }
+        doDelete(sequence)
+        check(fetchDraft(draftKey).content == null) { "草稿已在其他设备更新，已保留最新版本，请刷新" }
+    }
+
+    suspend fun fetchDraft(key: String): RemoteDraft {
+        val response = objectRequest("/drafts/${encode(key)}.json?_=${java.util.UUID.randomUUID()}")
+        val data = (response["draft"] as? JsonPrimitive)?.contentOrNull
+        val content = data?.takeIf { it.isNotBlank() }?.let { decodeSyncedDraft(key, it) }
+        return RemoteDraft(response.number("draft_sequence") ?: 0L, content, data)
+    }
+
+    /** 保留网页草稿的扩展字段，用原 sequence 提交，409 绝不自动覆盖。 */
+    suspend fun saveSyncedDraft(key: String, sequence: Long, content: SyncedDraftContent, remoteData: String?): Long {
+        val body = JsonObject(mapOf("draft_key" to JsonPrimitive(key), "sequence" to JsonPrimitive(sequence),
+            "data" to JsonPrimitive(encodeSyncedDraft(content, remoteData)))).toString()
+        val result = json.parseToJsonElement(mutate("/drafts.json", "POST", body)).jsonObject
+        return result.number("draft_sequence") ?: error("草稿保存结果未确认，请稍后重试")
     }
 
     /** 编辑楼层。PUT /posts/{id}.json 返回的 post 被包在 `{"post":{...}}` 里,要解一层。 */
@@ -2604,7 +2620,10 @@ class TopicRepository(
      * (形如 `upload://xxx.png`),再把 Markdown 短码拼进 raw。
      * `synchronous=true` 让服务端同步处理完再返回,省掉轮询。
      */
-    suspend fun uploadFile(fileName: String, mimeType: String, bytes: ByteArray): UploadedFile {
+    suspend fun uploadFile(fileName: String, mimeType: String, bytes: ByteArray, uploadType: String = "composer",
+        beforeAttempt: () -> Unit = {}): UploadedFile {
+        require(uploadType in setOf("composer", "avatar", "profile_background", "card_background"))
+        beforeAttempt()
         ensureRequestAllowed()
         val expectedUserId = sessionStore?.currentUserId()
         val expectedGeneration = sessionStore?.sessionGeneration
@@ -2614,6 +2633,7 @@ class TopicRepository(
         var rateLimitRetried = false
         var authRestored = false
         while (true) {
+            beforeAttempt()
             checkWriteSession(expectedUserId, expectedGeneration)
             val csrf = obtainCsrf(forceRefresh = csrfRefreshed)
             var roundSnapshot = currentRateLimitRound()
@@ -2625,11 +2645,16 @@ class TopicRepository(
                 var status = -1
                 try {
                     checkWriteSession(expectedUserId, expectedGeneration)
+                    beforeAttempt()
                     roundSnapshot = ticket.round
                     val transport = transportProvider()
                     transport.upload(
                         "/uploads.json", csrf, fileName, mimeType, bytes,
-                        mapOf("type" to "composer", "synchronous" to "true"),
+                        buildMap {
+                            put("type", uploadType)
+                            put("synchronous", "true")
+                            if (uploadType == "avatar") put("user_id", expectedUserId.toString())
+                        },
                     ).also { status = it.status }
                 } finally {
                     lastPostRequestAt = SystemClock.elapsedRealtime()
@@ -2836,6 +2861,7 @@ class TopicRepository(
         body: String? = null,
         contentType: String = Transport.JSON_CONTENT_TYPE,
         beforeAttempt: () -> Unit = {},
+        reactionToggle: Boolean = false,
     ): String {
         ensureRequestAllowed()
         val expectedUserId = sessionStore?.currentUserId()
@@ -2906,6 +2932,15 @@ class TopicRepository(
                             receivedAtElapsedMs = receivedAt,
                         )
                     }
+                    // Discourse 的点赞额度属于帖子回应。全站请求限流和 Cloudflare 响应继续走原有冷却。
+                    if (reactionToggle && !result.challenged &&
+                        result.cfMitigated?.contains("challenge", ignoreCase = true) != true
+                    ) {
+                        val error = parseErrorBody(result.body)
+                        if ((error?.get("error_type") as? JsonPrimitive)?.contentOrNull == "rate_limit") {
+                            throw ReactionRateLimitException(error.serverErrorMessage() ?: "回应次数已达上限，请稍后重试")
+                        }
+                    }
                     val cooldownEx = enterRateLimitCooldown(
                         path = path,
                         retryAfterSeconds = result.retryAfterSeconds,
@@ -2973,17 +3008,22 @@ class TopicRepository(
                 if (result.status == 403) {
                     notify403OrChallenged("mutate $path 403")
                 }
-                val serverMessage = runCatching {
-                    (json.parseToJsonElement(result.body).jsonObject["errors"] as? JsonArray)
-                        ?.mapNotNull { (it as? JsonPrimitive)?.contentOrNull }?.joinToString("\n")?.take(400)
-                }.getOrNull()
                 val message = if (result.status >= 500) "结果未确认，请刷新楼层后检查提交状态"
-                    else serverMessage?.takeIf { it.isNotBlank() } ?: "操作未提交，请稍后重试"
+                    else parseErrorBody(result.body).serverErrorMessage() ?: "操作未提交，请稍后重试"
                 throw HttpStatusException(result.status, message)
             }
             return result.body
         }
     }
+
+    private class ReactionRateLimitException(message: String) : Exception(message)
+
+    private fun parseErrorBody(body: String): JsonObject? =
+        runCatching { json.parseToJsonElement(body) as? JsonObject }.getOrNull()
+
+    private fun JsonObject?.serverErrorMessage(): String? =
+        (this?.get("errors") as? JsonArray)?.mapNotNull { (it as? JsonPrimitive)?.contentOrNull }
+            ?.joinToString("\n")?.take(400)?.takeIf { it.isNotBlank() }
 
     private fun checkWriteSession(userId: Long?, generation: Long?) {
         val store = sessionStore ?: return
@@ -3445,13 +3485,13 @@ class TopicRepository(
     private suspend fun doFetchUserBadges(username: String): List<UserBadgeItem> {
         val key = username.lowercase().trim().removePrefix("@")
         val userPath = URLEncoder.encode(username, "UTF-8")
-        val userBadgesRaw = runCatching {
-            objectRequest("/user-badges/$userPath.json?grouped=true", present = false, retryAllowed = false)
-        }.getOrNull()
+        // 请求失败必须保留已有预览，不能把“未取得数据”缓存为“0 枚已获得”。
+        val userBadgesRaw = objectRequest("/user-badges/$userPath.json?grouped=true", present = false, retryAllowed = false)
+        check(userBadgesRaw["user_badges"] is JsonArray) { "徽章响应缺少用户记录" }
 
         val allBadgesRaw = getAllBadgesRaw()
 
-        val userBadgesList = userBadgesRaw?.objects("user_badges").orEmpty()
+        val userBadgesList = userBadgesRaw.objects("user_badges")
         val earnedMap = mutableMapOf<Long, Pair<String?, Int>>() // badgeId -> (grantedAt, count)
         userBadgesList.forEach { ub ->
             val bId = ub.number("badge_id") ?: return@forEach
@@ -3461,7 +3501,7 @@ class TopicRepository(
         }
 
         val badgeDefMap = mutableMapOf<Long, JsonObject>()
-        userBadgesRaw?.objects("badges")?.forEach { b ->
+        userBadgesRaw.objects("badges").forEach { b ->
             val id = b.number("id") ?: return@forEach
             badgeDefMap[id] = b
         }
@@ -3630,11 +3670,12 @@ class TopicRepository(
             is JsonObject -> jsonEl.objects("reactions").ifEmpty { jsonEl.objects("posts") }
             else -> emptyList()
         }
+        val reactionEmojis = if (reactionList.isNotEmpty()) emojiUrls() else emptyMap()
         val items = reactionList.mapNotNull { item ->
             val id = item.number("id") ?: return@mapNotNull null
             val post = item["post"] as? JsonObject
             val reaction = item["reaction"] as? JsonObject
-            val reactionValue = reaction?.text("reaction_value")?.ifBlank { reaction?.text("id") } ?: "heart"
+            val reactionValue = reaction?.text("reaction_value").orEmpty().trim().trim(':').ifBlank { "heart" }
             val topicId = post?.number("topic_id") ?: 0L
             val postNumber = post?.number("post_number")?.toInt() ?: 1
             val title = post?.text("topic_title")?.ifBlank { "回应动态" } ?: "回应动态"
@@ -3645,12 +3686,15 @@ class TopicRepository(
                 postNumber = postNumber,
                 title = title,
                 categoryId = null,
-                categoryName = "回应 :$reactionValue:",
-                categoryColor = "E11D48",
+                categoryName = "回应",
+                categoryColor = null,
                 createdAt = item.text("created_at").ifBlank { null },
                 commentExcerpt = excerpt,
                 username = username,
                 avatarUrl = null,
+                reactionName = reactionValue,
+                reactionUrl = reactionEmojis[reactionValue]
+                    ?: "${Config.BASE_URL}/images/emoji/twemoji/$reactionValue.png?v=15",
             )
         }.distinctBy { it.id }
         val minId = reactionList.mapNotNull { it.number("id") }.minOrNull()
@@ -4216,13 +4260,54 @@ class TopicRepository(
      * GET https://cdk.linux.do/api/v1/oauth/user-info,依赖 CDK 自己的会话 Cookie,
      * 未授权时返回 401,由调用方走 [authorizeCdk] 后重试。
      */
-    suspend fun fetchCdkScore(): Int {
+    suspend fun fetchCdkScore(username: String): Int {
         val raw = request("https://cdk.linux.do/api/v1/oauth/user-info", present = false)
-        val root = json.parseToJsonElement(raw).jsonObject
-        val data = root["data"] as? JsonObject ?: throw IllegalStateException("CDK 响应缺少 data 字段")
-        val primitive = data["score"] as? JsonPrimitive ?: throw IllegalStateException("CDK 响应缺少 score 字段")
-        return primitive.intOrNull ?: primitive.contentOrNull?.toIntOrNull()
-            ?: throw IllegalStateException("CDK score 格式不正确")
+        return parseCdkScore(raw, username)
+    }
+
+    /** 网页接续 Connect 授权，不让通过验证的网页再切回原生网络重走 authorize。 */
+    internal suspend fun beginCdkAuthorization(username: String): CdkAuthorization = withContext(Dispatchers.IO) {
+        val store = sessionStore ?: error("请先登录")
+        val userId = store.currentUserId()
+        val generation = store.sessionGeneration
+        check(userId > 0 && username.isNotBlank()) { "请先登录" }
+        checkSiteSession(userId, generation)
+        val client = httpClientProvider?.invoke()?.newBuilder()?.followRedirects(false)?.followSslRedirects(false)?.build()
+            ?: error("网络尚未就绪")
+        val response = executeLdcOAuthRequest(client, Request.Builder()
+            .url("https://cdk.linux.do/api/v1/oauth/login")
+            .header("Accept", "application/json")
+            .header("X-Requested-With", "XMLHttpRequest").build(),
+            "CDK OAuth login", "cdk.linux.do", userId, generation)
+        if (response.status !in 200..299) throw HttpStatusException(response.status, "无法取得社区分授权入口")
+        val authUrl = (json.parseToJsonElement(response.body).jsonObject["data"] as? JsonPrimitive)?.contentOrNull
+            ?: error("社区分授权入口无效")
+        checkSiteSession(userId, generation)
+        CdkAuthorization(authUrl, username, userId, generation)
+    }
+
+    internal suspend fun completeCdkAuthorization(attempt: CdkAuthorization, callback: String): Int = withContext(Dispatchers.IO) {
+        checkSiteSession(attempt.userId, attempt.generation)
+        val (code, state) = attempt.claimCallback(callback)
+        val client = httpClientProvider?.invoke()?.newBuilder()?.followRedirects(false)?.followSslRedirects(false)?.build()
+            ?: error("网络尚未就绪")
+        val body = org.json.JSONObject().put("code", code).put("state", state).toString()
+        val response = executeLdcOAuthRequest(client, Request.Builder()
+            .url("https://cdk.linux.do/api/v1/oauth/callback")
+            .header("Accept", "application/json")
+            .header("X-Requested-With", "XMLHttpRequest")
+            .post(body.toRequestBody("application/json; charset=utf-8".toMediaType())).build(),
+            "CDK OAuth callback", "cdk.linux.do", attempt.userId, attempt.generation)
+        if (response.status !in 200..299) throw HttpStatusException(response.status, "社区分授权未完成，请重新授权")
+        checkSiteSession(attempt.userId, attempt.generation)
+        // SharedHttp 已在返回响应前把 CDK 会话写入共享 CookieManager。
+        val score = readAfterShortCooldown {
+            checkSiteSession(attempt.userId, attempt.generation)
+            fetchCdkScore(attempt.username)
+        }
+        checkSiteSession(attempt.userId, attempt.generation)
+        diagnostics.log("CDK 网页授权完成，社区分读取成功")
+        score
     }
 
     /**
@@ -5053,16 +5138,12 @@ class TopicRepository(
     private suspend fun toPage(
         response: TopicListResponse,
         awaitCategories: Boolean = true,
-        excludeReadUnread: Boolean = false,
     ): TopicPage {
         val known = if (awaitCategories) categories() else categoryCache.orEmpty()
         val usersById = response.users.associateBy { it.id }
         response.users.forEach { u -> AvatarCache.record(u.username, u.animatedAvatar) }
         // 开启同步只合并成功回执；关闭同步才用本地浏览记录覆盖未读状态。
-        val filteredTopics = response.topicList.topics.distinctBy { it.id }.filterNot { topic ->
-            excludeReadUnread && reading?.isUnreadExcluded(topic.id, topic.postsCount, topic.highestPostNumber) == true
-        }
-        val items = filteredTopics.map { topic ->
+        val items = response.topicList.topics.distinctBy { it.id }.map { topic ->
             // 对齐 fluxdo：优先取首个 Original Poster（兼容 user_id 映射顶层 users 表与 poster.user 内嵌对象两种形状），
             // 缺失时再按其余 poster 或 lastPosterUsername 匹配，确保人员图标绝不因序列化形状差异而漏取。
             val author = topic.posters.firstNotNullOfOrNull { p ->
@@ -6396,7 +6477,8 @@ class NativeMailRepository(
         ensureOwner()
         val store = container.sessionStore
         val network = container.networkMonitor.detect()
-        val useDoh = store.isDohEnabled() && !network.shouldYieldToSystem(store.isDohForceOverProxyEnabled())
+        val followSystem = store.getNetworkMode() == org.linuxdo.android.net.NetworkMode.SYSTEM
+        val useDoh = !followSystem && store.isDohEnabled()
         val dns = if (useDoh) {
             org.linuxdo.android.net.AdaptiveDohDns(
                 servers = org.linuxdo.android.net.loadDohServers(store),
@@ -6411,8 +6493,8 @@ class NativeMailRepository(
                 autoFailover = store.isDohAutoFailoverEnabled(),
             ).apply { primaryServerId = store.getDohServerUrl() ?: org.linuxdo.android.net.DohPresets.DEFAULT.id }
         } else okhttp3.Dns.SYSTEM
-        val route = if (network.isProxy) "系统代理" else if (useDoh) "DoH解析+邮件TLS" else "系统网络+邮件TLS"
-        val proxy = if (network.isProxy) java.net.ProxySelector.getDefault()
+        val route = if (followSystem) "跟随系统+邮件TLS" else if (useDoh) "内置DoH+邮件TLS" else "内置网络+邮件TLS"
+        val proxy = if (followSystem && network.isProxy) java.net.ProxySelector.getDefault()
             ?.select(URI("https://$HOST:$port"))?.firstOrNull() ?: throw IOException("系统代理无法提供邮件连接") else null
         NetDiagnostics.log("邮箱连接准备 route=$route server=$HOST port=$port")
         return object : javax.net.SocketFactory() {

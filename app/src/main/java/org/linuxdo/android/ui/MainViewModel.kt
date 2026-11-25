@@ -28,6 +28,7 @@ import java.io.ByteArrayOutputStream
 import java.io.File
 import java.util.Collections
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
@@ -82,6 +83,7 @@ import org.linuxdo.android.data.AvatarCache
 import org.linuxdo.android.data.isAnimatedAvatarPath
 import org.linuxdo.android.data.ChatChannelSummary
 import org.linuxdo.android.data.ChatMessageSummary
+import org.linuxdo.android.data.mergeChatMessages
 import org.linuxdo.android.data.TrustReport
 import org.linuxdo.android.data.LdcUserInfo
 import org.linuxdo.android.data.FollowUser
@@ -101,6 +103,9 @@ import org.linuxdo.android.data.TopicListItem
 import org.linuxdo.android.data.UserRepliesUiState
 import org.linuxdo.android.data.UserReplyItem
 import org.linuxdo.android.data.DraftItem
+import org.linuxdo.android.data.SyncedDraftContent
+import org.linuxdo.android.data.LocalSyncedDraft
+import org.linuxdo.android.data.RemoteDraft
 import org.linuxdo.android.data.AttachedMedia
 import org.linuxdo.android.data.SearchOrder
 import org.linuxdo.android.data.ProfileSection
@@ -119,6 +124,8 @@ import org.linuxdo.android.data.AutoRefreshInterval
 import org.linuxdo.android.data.NotificationPollInterval
 import org.linuxdo.android.data.NotificationScope
 import org.linuxdo.android.net.HttpStatusException
+import org.linuxdo.android.data.resolveTopicFloor
+import org.linuxdo.android.data.resolveLoadedTopicFloor
 import org.linuxdo.android.net.LoginRejectedException
 import org.linuxdo.android.net.NeedsInteractiveVerification
 import org.linuxdo.android.net.NetworkPath
@@ -470,9 +477,13 @@ sealed interface ComposerTarget {
     ) : ComposerTarget
 }
 
+data class DraftConflictUi(val local: LocalSyncedDraft, val remote: RemoteDraft)
+
 data class ComposerUiState(
     val target: ComposerTarget? = null,
     val draft: String = "",
+    val syncStatus: String? = null,
+    val remoteRevision: Long = 0,
     /** 编辑要先取回原文,这期间输入框不可编辑。 */
     val loadingDraft: Boolean = false,
     val submitting: Boolean = false,
@@ -487,6 +498,9 @@ data class ComposerUiState(
 
 data class TopicCreatorUiState(
     val open: Boolean = false,
+    val loadingDraft: Boolean = false,
+    val syncStatus: String? = null,
+    val remoteRevision: Long = 0,
     val draftKey: String = "new_topic",
     val sequence: Long = 0L,
     val action: String = "createTopic",
@@ -519,11 +533,11 @@ data class TopicCreatorUiState(
         get() = (title.trim().isNotEmpty() || raw.trim().isNotEmpty() || attachments.isNotEmpty()) && currentSnapshot != savedSnapshot
 
     val canSubmit: Boolean
-        get() = !submitting && !uploading && !savingDraft &&
+        get() = !loadingDraft && !submitting && !uploading && !savingDraft &&
             (raw.trim().isNotEmpty() || attachments.isNotEmpty()) && (isReplyDraft || title.trim().isNotEmpty())
 
     val canSaveDraft: Boolean
-        get() = !submitting && !uploading && !savingDraft &&
+        get() = !loadingDraft && !submitting && !uploading && !savingDraft &&
             (raw.trim().isNotEmpty() || title.trim().isNotEmpty() || attachments.isNotEmpty())
 }
 
@@ -546,6 +560,9 @@ data class HistoryUiState(
     val entries: List<org.linuxdo.android.data.ReadingHistoryEntry> = emptyList(),
     val query: String = "",
     val loading: Boolean = false,
+    val hasMore: Boolean = true,
+    val page: Int = -1,
+    val error: String? = null,
 )
 
 data class UserCardUiState(
@@ -590,6 +607,9 @@ data class CdkScoreUiState(
     val username: String = "",
     val score: Int? = null,
     val cachedAt: Long = 0L,
+    val loading: Boolean = false,
+    val error: String? = null,
+    val needsAuthorization: Boolean = false,
 )
 
 data class ChatUiState(
@@ -600,7 +620,9 @@ data class ChatUiState(
     val loadingChannels: Boolean = false,
     val loadingChannelId: Long? = null,
     val sendingChannelId: Long? = null,
+    val updatingMuteChannelIds: Set<Long> = emptySet(),
     val error: String? = null,
+    val channelsError: String? = null,
 )
 
 data class SearchUiState(
@@ -988,14 +1010,15 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
      * 通知各分类的数据。`_profile` 的键是 ProfileSection,四个分类挤同一个槽位,
      * 所以额外按分类留一份,切标签才能命中缓存直接显示。
      */
-    private val notificationCache = mutableMapOf<NotificationFilter, ProfileUiState>()
+    private val notificationCache = MutableStateFlow<Map<NotificationFilter, ProfileUiState>>(emptyMap())
+    val notificationPages = notificationCache.asStateFlow()
     private val _composer = MutableStateFlow(ComposerUiState())
     val composer = _composer.asStateFlow()
     private val _topicCreator = MutableStateFlow(TopicCreatorUiState())
     val topicCreator = _topicCreator.asStateFlow()
     private val _drafts = MutableStateFlow(DraftsUiState())
     val drafts = _drafts.asStateFlow()
-    private val _history = MutableStateFlow(HistoryUiState(entries = container.historyStore.entries()))
+    private val _history = MutableStateFlow(HistoryUiState(entries = container.historyStore.syncedEntries()))
     val history: StateFlow<HistoryUiState> = _history.asStateFlow()
     private val _userCard = MutableStateFlow(UserCardUiState())
     val userCard: StateFlow<UserCardUiState> = _userCard.asStateFlow()
@@ -1013,6 +1036,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     val cdkScore: StateFlow<CdkScoreUiState> = _cdkScore.asStateFlow()
     private var cdkScoreJob: Job? = null
     private var cdkScoreBackoffUntil: Long = 0L
+    private var cdkAuthorizationOpen = false
     private val connectManualRefreshTimestamps = mutableListOf<Long>()
     private var connectSilentBackoffUntil: Long = 0L
     private var ldcBackoffUntil: Long = 0L
@@ -1245,6 +1269,15 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     }
     private val _chat = MutableStateFlow(ChatUiState())
     val chat: StateFlow<ChatUiState> = _chat.asStateFlow()
+    private val chatSyncedMessageIds = mutableMapOf<Long, Long>()
+    private val _pendingChatChannel = MutableStateFlow<Long?>(null)
+    val pendingChatChannel = _pendingChatChannel.asStateFlow()
+    fun openChatNotification(channelId: Long) { _pendingChatChannel.value = channelId }
+    fun clearChatNotification() { _pendingChatChannel.value = null }
+    fun setChatForeground(active: Boolean) = container.chatRealtime.setForeground(active)
+    fun setVisibleChatChannel(channelId: Long?) { container.chatRealtime.visibleChannelId = channelId }
+    fun markChatMessagesVisible(channelId: Long, messageId: Long) = container.chatRealtime.markRead(channelId, messageId)
+    fun markAllChatRead() = container.chatRealtime.markAllRead()
     private val _treeView = MutableStateFlow(container.preferences.getBoolean("tree_view", true))
     val treeView = _treeView.asStateFlow()
     private val _showUnreadDot = MutableStateFlow(container.preferences.getBoolean("show_post_unread_dot", true))
@@ -1267,16 +1300,6 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         TopicUnreadDotPosition.fromId(container.preferences.getString("topic_unread_dot_position", "avatar"))
     )
     val topicUnreadDotPosition = _topicUnreadDotPosition.asStateFlow()
-    private val _isBarsVisible = MutableStateFlow(true)
-    val isBarsVisible: StateFlow<Boolean> = _isBarsVisible.asStateFlow()
-    val isBottomBarVisible: StateFlow<Boolean> get() = _isBarsVisible.asStateFlow()
-
-    fun setBarsVisible(visible: Boolean) {
-        if (_isBarsVisible.value != visible) {
-            _isBarsVisible.value = visible
-        }
-    }
-    fun setBottomBarVisible(visible: Boolean) = setBarsVisible(visible)
     private val _syncReadProgress = MutableStateFlow(container.reading.syncReadProgress)
     val syncReadProgress = _syncReadProgress.asStateFlow()
     data class NotificationTarget(val topicId: Long, val postNumber: Int?)
@@ -1331,7 +1354,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 }
             }
         }
-        notificationCache.values.forEach { cached ->
+        notificationCache.value.values.forEach { cached ->
             cached.content.entries.forEach { entry ->
                 if (entry.topicId == topicId && entry.unread) {
                     entry.id.toLongOrNull()?.let { id ->
@@ -1426,16 +1449,29 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         container.dohCoordinator.setAutoOptimizeEnabled(enabled)
     }
 
-    private val _dohForceOverProxy = MutableStateFlow(store.isDohForceOverProxyEnabled())
-    val dohForceOverProxy = _dohForceOverProxy.asStateFlow()
+    val networkMode = container.networkMode
+    val networkEnvironment = container.networkMonitor.state
+    val activeNetworkRoute = container.dohCoordinator.routeMode
+    private val _networkModeSwitching = MutableStateFlow(false)
+    val networkModeSwitching = _networkModeSwitching.asStateFlow()
+    private val _networkModeError = MutableStateFlow<String?>(null)
+    val networkModeError = _networkModeError.asStateFlow()
 
-    fun setDohForceOverProxy(enabled: Boolean) {
-        store.setDohForceOverProxyEnabled(enabled)
-        _dohForceOverProxy.value = enabled
-        container.dohCoordinator.refresh()
-        container.updateWebViewProxyState()
-        org.linuxdo.android.net.gecko.GeckoManager.refreshNetworkSettings(getApplication())
-        container.dohCoordinator.triggerSmartRouteEvaluation()
+    fun setNetworkMode(mode: org.linuxdo.android.net.NetworkMode) {
+        if (_networkModeSwitching.value || mode == networkMode.value) return
+        _networkModeSwitching.value = true
+        _networkModeError.value = null
+        viewModelScope.launch {
+            try {
+                container.setNetworkMode(mode)
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (error: Exception) {
+                _networkModeError.value = "切换未完成，请重试：${error.message ?: "网络设置同步失败"}"
+            } finally {
+                _networkModeSwitching.value = false
+            }
+        }
     }
 
     // ── 智能双轨调度状态 ─────────────────────────────────────────────────────────────
@@ -1571,9 +1607,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     fun testDohServer(server: org.linuxdo.android.net.DohServer) {
         viewModelScope.launch(Dispatchers.IO) {
-            val netState = container.networkMonitor.detect()
-            if (netState.shouldYieldToSystem(store.isDohForceOverProxyEnabled())) {
-                val reason = if (netState.isProxy) "系统代理已开启，直连已暂停" else "VPN 已开启，直连已暂停"
+            if (store.getNetworkMode() == org.linuxdo.android.net.NetworkMode.SYSTEM) {
+                val reason = "跟随系统模式不使用内置节点"
                 _dohLatencies.update { it + (server.id to -1L) }
                 _dohSummaries.update { it + (server.id to reason) }
                 return@launch
@@ -1591,9 +1626,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         viewModelScope.launch(Dispatchers.IO) {
             _isTestingAllDoh.value = true
             try {
-                val netState = container.networkMonitor.detect()
-                if (netState.shouldYieldToSystem(store.isDohForceOverProxyEnabled())) {
-                    val reason = if (netState.isProxy) "系统代理已开启，直连已暂停" else "VPN 已开启，直连已暂停"
+                if (store.getNetworkMode() == org.linuxdo.android.net.NetworkMode.SYSTEM) {
+                    val reason = "跟随系统模式不使用内置节点"
                     val mapLatency = _dohServers.value.associate { it.id to -1L }
                     val mapSummary = _dohServers.value.associate { it.id to reason }
                     _dohLatencies.update { it + mapLatency }
@@ -1741,7 +1775,6 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     }
     private val readTrackers = mutableMapOf<Long, TopicReadTracker>()
     private val readReportJobs = mutableMapOf<Long, Job>()
-    private val readSendJobs = mutableMapOf<Long, Job>()
     /** 当前处于前台可见、活跃状态的话题集合（被验证页遮挡、切后台或被下层路由盖住时不在其中）。 */
     private val activeTopicIds = Collections.synchronizedSet(mutableSetOf<Long>())
     /** 各话题在当前屏幕上当前可见的楼层号。 */
@@ -1753,6 +1786,10 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             beginReadTracking(topicId)
             startTopicLiveUpdates(topicId)
         } else {
+            if (_syncReadProgress.value && !store.sessionChanging && !_accounts.value.switching) {
+                readTrackers[topicId]?.let { queueReadBatch(topicId, it) }
+                drainReadOutbox()
+            }
             activeTopicIds.remove(topicId)
             topicLiveAtEnd.remove(topicId)
             topicLiveScrolling.remove(topicId)
@@ -1762,7 +1799,6 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 topicLiveId = null
             }
             readReportJobs.remove(topicId)?.cancel()
-            readSendJobs.remove(topicId)?.cancel()
             readTrackers.remove(topicId)?.setActive(false, SystemClock.elapsedRealtime())
         }
     }
@@ -3364,12 +3400,12 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         _syncReadProgress.value = enabled
         container.reading.setSyncReadProgress(enabled)
         if (!enabled) {
+            readOutboxJob?.cancel()
+            readOutbox.clear(store.currentUserId())
             _readSyncVerifyBanner.value = false
             readSyncVerificationProbePath = null
             readReportJobs.values.forEach { it.cancel() }
             readReportJobs.clear()
-            readSendJobs.values.forEach { it.cancel() }
-            readSendJobs.clear()
             readTrackers.clear()
         } else {
             activeTopicIds.toList().forEach(::beginReadTracking)
@@ -3431,12 +3467,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     /**
-     * 仅关闭同步时本地记下"这帖看过了"，同步模式由成功回执推进已读状态。
-     * 连同当前总楼层数保存，就地把普通列表里的未读蓝点摘掉,
-     * 并将该帖从首页「未读」列表中就地移除。
-     *
-     * 纯净模式下服务端压根不知道我们读过,所以不能等 unseen 从服务端变化 ——
-     * 只有本地这份持久化集合能保证下拉刷新、切分类、重启后蓝点与已读帖都不再反弹。
+     * 仅关闭同步时将浏览记录保存在本地，清除列表中的未读蓝点。
+     * 同步模式由成功回执推进已读状态；本地记录可在刷新、切分类及重启后恢复。
      */
     private fun markTopicSeen(topicId: Long, postsCount: Int = knownPostsCount(topicId)) {
         if (_syncReadProgress.value) return
@@ -3449,21 +3481,9 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             }
             return if (patched != list.items) list.copy(items = patched) else list
         }
-        fun removeReadFromUnread(list: TopicListUiState): TopicListUiState {
-            val filtered = list.items.filterNot { it.topic.id == topicId }
-            return if (filtered.size != list.items.size) list.copy(items = filtered) else list
-        }
-        _feedStates.update { states ->
-            states.mapValues { (feed, list) ->
-                if (feed == HomeFeedType.Unread) removeReadFromUnread(list) else clearUnseen(list)
-            }
-        }
+        _feedStates.update { states -> states.mapValues { (_, list) -> clearUnseen(list) } }
         _state.update { state ->
-            val updatedLatest = if (state.homeFeed == HomeFeedType.Unread) {
-                removeReadFromUnread(state.latest)
-            } else {
-                clearUnseen(state.latest)
-            }
+            val updatedLatest = clearUnseen(state.latest)
             if (updatedLatest != state.latest) state.copy(latest = updatedLatest) else state
         }
         if (!changed) return
@@ -3485,62 +3505,108 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
      * 新未读楼层有效停留后提前合批，相邻成功批次至少间隔 3 秒；
      * 已读楼层保持 35 秒心跳，上报成功才消点。
      */
+    private val readOutbox by lazy { org.linuxdo.android.data.ReadSyncOutbox(getApplication()) }
+    private var readOutboxJob: Job? = null
+    private var accountSyncJob: Job? = null
+
+    private fun queueReadBatch(topicId: Long, tracker: TopicReadTracker) {
+        val batch = tracker.takeBatch(SystemClock.elapsedRealtime(), READ_REPORT_POST_CAP) ?: return
+        try {
+            readOutbox.enqueue(store.currentUserId(), topicId, batch)
+        } catch (error: Exception) {
+            tracker.restoreBatch(batch)
+            diagnostics.log("阅读记录暂未写入：${error.javaClass.simpleName}")
+        }
+    }
+
+    private fun drainReadOutbox() {
+        if (!_syncReadProgress.value || readOutboxJob?.isActive == true || store.currentUserId() <= 0 ||
+            store.sessionChanging || _accounts.value.switching) return
+        val userId = store.currentUserId()
+        val generation = accountScopeGeneration
+        val session = store.sessionGeneration
+        fun sameAccount() = userId == store.currentUserId() && generation == accountScopeGeneration &&
+            session == store.sessionGeneration && !store.sessionChanging && _syncReadProgress.value
+        readOutboxJob = viewModelScope.launch {
+            try {
+                for (pending in readOutbox.entries(userId).take(20)) {
+                    if (!sameAccount() || repository.readTimingsCooldownRemainingMs() > 0) break
+                    val success = repository.recordTopicTimings(pending.topicId, pending.topicTimeMs, pending.postTimesMs, ::sameAccount)
+                    if (!sameAccount()) break
+                    if (!success) { delay(3_000L); continue }
+                    readOutbox.acknowledge(userId, pending.id)
+                    confirmTopicRead(userId, pending.topicId, pending.postTimesMs.keys)
+                    delay(3_000L)
+                }
+            } catch (error: CancellationException) { throw error }
+            catch (error: Exception) { diagnostics.log("阅读记录等待重试：${error.javaClass.simpleName}") }
+        }
+    }
+
+    /** 前台周期校准跨端数据；离开前台只结算实际阅读，不累计后台时间。 */
+    fun setAccountSyncForeground(active: Boolean) {
+        accountSyncJob?.cancel()
+        if (!active) {
+            readTrackers.forEach { (id, tracker) -> queueReadBatch(id, tracker) }
+            drainReadOutbox()
+            return
+        }
+        accountSyncJob = viewModelScope.launch {
+            delay(1_000L)
+            while (isActive) {
+                if (store.currentUserId() > 0 && !store.sessionChanging && !_accounts.value.switching &&
+                    !repository.isRateLimitCoolingDown()) {
+                    drainReadOutbox()
+                    loadHistory(refresh = true, silent = true)
+                    refreshActiveReadState()
+                    syncPendingDrafts()
+                    if (_drafts.value.loaded) loadDrafts(refresh = true, silent = true)
+                    activeDraftKeys().forEach { scheduleDraftSync(it, immediate = true) }
+                }
+                delay(30_000L)
+            }
+        }
+    }
+
+    private fun refreshActiveReadState() {
+        val userId = store.currentUserId()
+        val generation = accountScopeGeneration
+        activeTopicIds.toList().forEach { topicId ->
+            if (topicId in topicLiveScrolling || pageJobs["read-state:$topicId"]?.isActive == true) return@forEach
+            val detail = _details.value[topicId] ?: return@forEach
+            val visible = currentVisiblePostsByTopic[topicId].orEmpty().toSet()
+            val ids = detail.posts.filter { it.postNumber in visible }.map { it.id }
+            if (ids.isEmpty()) return@forEach
+            pageJobs["read-state:$topicId"] = viewModelScope.launch {
+                try {
+                    val fresh = repository.fetchPosts(topicId, ids, present = false)
+                    if (generation != accountScopeGeneration || userId != store.currentUserId()) return@launch
+                    val read = fresh.filter { it.read || it.yours }.map { it.postNumber }.toSet()
+                    if (read.isNotEmpty()) confirmTopicRead(userId, topicId, read)
+                } catch (error: CancellationException) { throw error }
+                catch (_: Exception) { /* 失败保留旧状态，下轮重试。 */ }
+            }
+        }
+    }
+
     private fun beginReadTracking(topicId: Long) {
         if (!_syncReadProgress.value || !isTopicActive(topicId) || readReportJobs[topicId]?.isActive == true) return
-        val now = SystemClock.elapsedRealtime()
-        val accountId = store.currentUserId()
-        val accountGeneration = accountScopeGeneration
-        val sessionGeneration = store.sessionGeneration
         val tracker = TopicReadTracker().apply {
-            setVisible(currentVisiblePostsByTopic[topicId].orEmpty(), now)
-            setActive(true, now)
+            setVisible(currentVisiblePostsByTopic[topicId].orEmpty(), SystemClock.elapsedRealtime())
+            setActive(true, SystemClock.elapsedRealtime())
         }
         readTrackers[topicId] = tracker
         readReportJobs[topicId] = viewModelScope.launch {
-            val schedule = ReadReportSchedule(now, Config.READ_REPORT_HEARTBEAT_MS)
+            val schedule = ReadReportSchedule(SystemClock.elapsedRealtime(), Config.READ_REPORT_HEARTBEAT_MS)
             while (isActive && isTopicActive(topicId) && readTrackers[topicId] === tracker) {
                 delay(tracker.nextCheckDelayMs(alreadyReadPostsForTracker(topicId)))
-                if (!isTopicActive(topicId) || readTrackers[topicId] !== tracker) break
-                val tickAt = SystemClock.elapsedRealtime()
-                if (repository.readTimingsCooldownRemainingMs() > 0L || tracker.isIdle(tickAt)) {
-                    tracker.discardPending(tickAt)
-                    continue
-                }
-                tracker.tick(tickAt)
-                if (readSendJobs[topicId]?.isActive == true) continue
-                // 滑动中及停滑后 2.5s 内只累计停留时间，不发 CSRF + timings，避免与分页/头像请求叠进同一速率窗口。
-                if (topicId in topicLiveScrolling ||
-                    tickAt - (topicScrollSettledAt[topicId] ?: 0L) < READ_REPORT_SCROLL_SETTLE_MS) continue
-                val rush = tracker.hasRush(alreadyReadPostsForTracker(topicId))
-                if (!schedule.canSend(tickAt, rush)) continue
-                val batch = tracker.takeBatch(tickAt, READ_REPORT_POST_CAP) ?: continue
-                readSendJobs[topicId] = viewModelScope.launch {
-                    var success = false
-                    var cancelled = false
-                    try {
-                        success = sendTimings(topicId, batch, tracker)
-                        if (success && accountGeneration == accountScopeGeneration && sessionGeneration == store.sessionGeneration &&
-                            accountId == store.currentUserId()) {
-                            confirmTopicRead(accountId, topicId, batch.postTimesMs.keys)
-                        }
-                    } catch (error: CancellationException) {
-                        cancelled = true
-                        throw error
-                    } catch (error: Exception) {
-                        diagnostics.log("阅读进度暂未同步: ${error.javaClass.simpleName}")
-                    } finally {
-                        if (readTrackers[topicId] === tracker && isTopicActive(topicId)) {
-                            val completedAt = SystemClock.elapsedRealtime()
-                            val cooldown = repository.readTimingsCooldownRemainingMs()
-                            schedule.completed(completedAt, success, cooldown)
-                            if (!success) {
-                                if (cooldown > 0L || cancelled) tracker.discardPending(completedAt) else tracker.restoreBatch(batch)
-                            }
-                            diagnostics.log("阅读上报${if (success) "确认" else "未确认"}: 话题 $topicId, ${batch.postTimesMs.size} 层, " +
-                                "${if (rush) "新未读合批" else "心跳"}, 请求等待 ${completedAt - tickAt}ms")
-                        }
-                        if (readSendJobs[topicId] === coroutineContext[Job]) readSendJobs.remove(topicId)
-                    }
+                tracker.tick(SystemClock.elapsedRealtime())
+                val now = SystemClock.elapsedRealtime()
+                if (topicId in topicLiveScrolling || now - (topicScrollSettledAt[topicId] ?: 0L) < READ_REPORT_SCROLL_SETTLE_MS) continue
+                if (schedule.canSend(now, tracker.hasRush(alreadyReadPostsForTracker(topicId)))) {
+                    queueReadBatch(topicId, tracker)
+                    drainReadOutbox()
+                    schedule.completed(now, success = true)
                 }
             }
         }
@@ -3558,18 +3624,9 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         }
         mapTopicLists { list -> list.copy(items = updateItems(list.items),
             pendingPage = list.pendingPage?.let { it.copy(items = updateItems(it.items)) }) }
-        fun keepUnread(items: List<TopicListItem>) = items.filterNot { item ->
-            item.topic.id == topicId && container.reading.isUnreadExcluded(topicId, item.topic.postsCount, item.topic.highestPostNumber)
-        }
-        fun updateUnread(list: TopicListUiState) = list.copy(items = keepUnread(list.items),
-            pendingPage = list.pendingPage?.let { it.copy(items = keepUnread(it.items)) })
-        _feedStates.update { feeds ->
-            feeds[HomeFeedType.Unread]?.let { feeds + (HomeFeedType.Unread to updateUnread(it)) } ?: feeds
-        }
-        _state.update { if (it.homeFeed == HomeFeedType.Unread) it.copy(latest = updateUnread(it.latest)) else it }
     }
 
-    /** 离帖只保存本地位置；未发送的时间随失活丢弃，不在后台补报。 */
+    /** 离帖结算真实停留并持久化；失败等待同账号下一次同步。 */
     fun leaveTopic(topicId: Long) {
         setTopicActive(topicId, false)
         val lastSeenPost = highestVisiblePostByTopic.remove(topicId) ?: 0
@@ -3592,14 +3649,6 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         currentVisiblePostsByTopic.remove(topicId)
     }
 
-    private suspend fun sendTimings(
-        topicId: Long,
-        batch: ReadTimingBatch,
-        tracker: TopicReadTracker,
-    ): Boolean = repository.recordTopicTimings(topicId, batch.topicTimeMs, batch.postTimesMs) {
-        _syncReadProgress.value && isTopicActive(topicId) && readTrackers[topicId] === tracker
-    }
-
     private fun recordHistory(
         topicId: Long,
         title: String,
@@ -3620,16 +3669,46 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             categoryColor = categoryColor,
             totalReplies = totalReplies,
         )
-        _history.update { it.copy(entries = container.historyStore.entries()) }
+        _history.update { it.copy(entries = container.historyStore.syncedEntries()) }
+    }
+
+    fun loadHistory(refresh: Boolean = true, silent: Boolean = false) {
+        val userId = store.currentUserId()
+        if (userId <= 0 || store.sessionChanging || _accounts.value.switching || _history.value.loading) return
+        if (!refresh && !_history.value.hasMore) return
+        val generation = accountScopeGeneration
+        val page = if (refresh) 0 else _history.value.page + 1
+        _history.update { it.copy(loading = true, error = null) }
+        pageJobs["history-sync"] = viewModelScope.launch {
+            try {
+                val result = repository.fetchReadHistory(page)
+                if (generation != accountScopeGeneration || userId != store.currentUserId()) return@launch
+                val entries = result.items.map { item -> org.linuxdo.android.data.ReadingHistoryEntry(
+                    topicId = item.topic.id, title = item.topic.title, lastSeenAt = 0L,
+                    lastSeenPostNumber = item.topic.lastReadPostNumber ?: 0,
+                    authorUsername = item.authorUsername, avatarTemplate = item.avatarUrl,
+                    categoryName = item.category?.name, categoryColor = item.category?.color,
+                    totalReplies = item.topic.totalReplies,
+                ) }
+                val merged = container.historyStore.mergeRemote(userId, entries, reset = refresh, preserveOlder = silent)
+                result.items.forEach { item -> item.topic.lastReadPostNumber?.let { container.reading.recordLastSeenPost(item.topic.id, it) } }
+                val byId = result.items.associate { it.topic.id to it.topic }
+                mapTopicLists { list -> list.copy(items = list.items.map { item ->
+                    byId[item.topic.id]?.let { remote -> item.copy(topic = item.topic.copy(
+                        unseen = remote.unseen, lastReadPostNumber = maxOf(item.topic.lastReadPostNumber ?: 0, remote.lastReadPostNumber ?: 0))) } ?: item
+                }) }
+                _history.update { it.copy(entries = merged, loading = false,
+                    hasMore = if (silent && it.page > 0) it.hasMore else result.hasMore,
+                    page = if (silent) maxOf(it.page, page) else page) }
+            } catch (error: CancellationException) { throw error }
+            catch (error: Exception) {
+                if (generation == accountScopeGeneration) _history.update { it.copy(loading = false, error = "同步失败，已保留手机记录，请稍后重试") }
+            }
+        }
     }
 
     fun setHistoryQuery(query: String) {
         _history.update { it.copy(query = query) }
-    }
-
-    fun clearHistory() {
-        container.historyStore.clear()
-        _history.update { it.copy(entries = emptyList()) }
     }
 
     fun openUserCard(username: String) {
@@ -3694,17 +3773,6 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
         pageJobs["userCard"] = viewModelScope.launch {
             try {
-                if (followedUsernames.value.isEmpty() && currentAccount != null) {
-                    launch {
-                        val fresh = runCatching { repository.fetchFollowing(currentAccount) }.getOrNull()
-                        if (fresh != null) {
-                            followedUsernames.value = fresh.map { it.username.lowercase() }.toSet()
-                            if (target.lowercase() in followedUsernames.value) {
-                                _userCard.update { it.copy(following = true) }
-                            }
-                        }
-                    }
-                }
                 val user = repository.fetchUserCard(target, forceRefresh = cached != null)
                 val effectiveUser = user.copy(
                     avatarTemplate = user.avatarTemplate ?: staticAvatarUrl ?: primaryAvatarUrl,
@@ -3712,42 +3780,13 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 )
                 val curFollowed = isFollowed || target.lowercase() in followedUsernames.value || effectiveUser.following
                 val curBlocked = isBlocked || target.lowercase() in blockedUsernames.value
-                val hasMetrics = effectiveUser.topicCount > 0 || effectiveUser.postCount > 0 || effectiveUser.likesReceived > 0
                 _userCard.value = UserCardUiState(
                     user = effectiveUser,
                     following = curFollowed,
                     isBlocked = curBlocked,
                     isSelf = isSelf,
-                    loading = !hasMetrics,
+                    loading = false,
                 )
-
-                // 快速并发拉取真实统计数据 (话题、帖子、获赞、徽章、动图头像)
-                val stats = runCatching { repository.fetchUserCardStats(target) }.getOrNull()
-                if (stats != null) {
-                    val cur = _userCard.value.user
-                    if (cur != null && cur.username.equals(target, ignoreCase = true)) {
-                        val finalFollowed = curFollowed || (stats.isFollowed == true)
-                        if (stats.isFollowed == true) {
-                            followedUsernames.value += target.lowercase()
-                        }
-                        val updated = cur.copy(
-                            topicCount = stats.topicCount,
-                            postCount = stats.postCount,
-                            likesReceived = stats.likesReceived,
-                            badges = if (stats.badges.isNotEmpty()) stats.badges else cur.badges,
-                            animatedAvatar = stats.animatedAvatar ?: cur.animatedAvatar,
-                            following = finalFollowed,
-                        )
-                        _userCard.value = _userCard.value.copy(
-                            user = updated,
-                            following = finalFollowed,
-                            loading = false,
-                        )
-                        repository.saveCachedUserCard(updated)
-                    }
-                } else {
-                    _userCard.update { it.copy(loading = false) }
-                }
 
                 if (effectiveUser.animatedAvatar.isNullOrBlank()) {
                     val enriched = runCatching { repository.enrichUserCardAvatar(target, effectiveUser) }.getOrNull()
@@ -3809,33 +3848,19 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
-    fun toggleFollowUser() {
-        val current = _userCard.value
-        val user = current.user ?: return
-        if (current.followUpdating || (!user.canFollow && !current.following) || user.id == store.currentUserId()) return
-        val previous = current.following
-        val nextFollow = !previous
-        _userCard.update { it.copy(following = nextFollow, followUpdating = true, error = null) }
-        val targetLower = user.username.lowercase()
-        if (nextFollow) {
-            followedUsernames.update { it + targetLower }
-        } else {
-            followedUsernames.update { it - targetLower }
-        }
-        pageJobs["follow:${user.username}"] = viewModelScope.launch {
-            try {
-                repository.setFollow(user.username, nextFollow)
-                _userCard.update { it.copy(followUpdating = false) }
-            } catch (error: CancellationException) {
-                throw error
-            } catch (error: Exception) {
-                if (nextFollow) {
-                    followedUsernames.update { it - targetLower }
-                } else {
-                    followedUsernames.update { it + targetLower }
-                }
-                _userCard.update { it.copy(following = previous, followUpdating = false, error = error.message ?: "关注操作失败") }
-            }
+    /** 详细主页调用；成功后才更新关注状态，不再依赖是否打开了头像弹窗。 */
+    suspend fun setProfileFollowing(user: org.linuxdo.android.data.UserCardData, following: Boolean) {
+        val username = _state.value.username ?: error("请先登录")
+        val checkSession = connectSessionCheck(username)
+        checkSession()
+        check(!user.username.equals(username, ignoreCase = true) && (user.canFollow || !following)) { "无法关注此用户" }
+        repository.setFollow(user.username, following)
+        checkSession()
+        val target = user.username.lowercase()
+        followedUsernames.update { if (following) it + target else it - target }
+        repository.saveCachedUserCard((repository.getCachedUserCard(user.username) ?: user).copy(following = following))
+        if (_userCard.value.user?.username.equals(user.username, ignoreCase = true)) {
+            _userCard.update { it.copy(following = following, user = it.user?.copy(following = following)) }
         }
     }
 
@@ -3918,22 +3943,17 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
-    fun toggleBlacklistForUserCard() {
-        val current = _userCard.value
-        val user = current.user ?: return
-        val target = user.username
-        if (current.following) {
+    fun toggleProfileBlacklist(user: org.linuxdo.android.data.UserCardData, following: Boolean) {
+        if (user.username.equals(_state.value.username, ignoreCase = true)) return
+        val target = user.username.lowercase()
+        if (following || target in followedUsernames.value) {
+            android.widget.Toast.makeText(getApplication(), "已关注用户不能拉黑，请先取消关注", android.widget.Toast.LENGTH_SHORT).show()
             return
         }
-        if (current.isBlocked) {
-            removeFromBlacklist(target)
+        if (target in blockedUsernames.value) {
+            removeFromBlacklist(user.username)
         } else {
-            addToBlacklist(
-                username = target,
-                name = user.cleanDisplayName,
-                avatarTemplate = user.avatarTemplate,
-                trustLevel = user.trustLevel,
-            )
+            addToBlacklist(user.username, user.cleanDisplayName, user.avatarTemplate, user.trustLevel)
         }
     }
 
@@ -3961,17 +3981,32 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun loadChatChannels(refresh: Boolean = false) {
-        if (_chat.value.loadingChannels) return
         if (!refresh && _chat.value.channels.isNotEmpty()) return
-        _chat.update { it.copy(loadingChannels = true, error = null) }
-        pageJobs["chatChannels"] = viewModelScope.launch {
+        container.chatRealtime.refresh()
+    }
+
+    fun setChatChannelMuted(channelId: Long, muted: Boolean) {
+        val state = _chat.value
+        val channel = state.channels.firstOrNull { it.id == channelId } ?: return
+        val membership = channel.membership ?: return
+        if (channel.isDirectMessage || membership.muted == muted || channelId in state.updatingMuteChannelIds) return
+
+        val generation = accountScopeGeneration
+        _chat.update { it.copy(updatingMuteChannelIds = it.updatingMuteChannelIds + channelId) }
+        pageJobs["chatMute:$channelId"] = viewModelScope.launch {
             try {
-                val channels = repository.fetchChatChannels()
-                _chat.update { it.copy(channels = channels, loadingChannels = false, error = null) }
+                container.chatRealtime.setChannelMuted(channelId, muted)
             } catch (error: CancellationException) {
                 throw error
             } catch (error: Exception) {
-                _chat.update { it.copy(loadingChannels = false, error = error.message ?: "Chat 频道加载失败") }
+                if (generation == accountScopeGeneration) {
+                    Toast.makeText(getApplication(), error.message ?: "消息免打扰设置失败", Toast.LENGTH_LONG).show()
+                    handlePageFailure(error) { setChatChannelMuted(channelId, muted) }
+                }
+            } finally {
+                if (generation == accountScopeGeneration) {
+                    _chat.update { it.copy(updatingMuteChannelIds = it.updatingMuteChannelIds - channelId) }
+                }
             }
         }
     }
@@ -3979,25 +4014,40 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     fun loadChatRoom(channelId: Long, refresh: Boolean = false) {
         val jobKey = "chatRoom:$channelId"
         if (pageJobs[jobKey]?.isActive == true) return
+        val generation = accountScopeGeneration
         pageJobs[jobKey] = viewModelScope.launch {
             if (!refresh) _chat.update { it.copy(loadingChannelId = channelId, error = null) }
             try {
-                val page = repository.fetchChatMessages(channelId, fromLastRead = !refresh)
-                val messages = page.messages
-                val oldMaxId = _chat.value.messagesByChannel[channelId].orEmpty().maxOfOrNull { it.id } ?: 0L
-                val newMaxId = messages.maxOfOrNull { it.id } ?: 0L
-                if (newMaxId > oldMaxId) repository.markChatChannelRead(channelId, newMaxId)
+                // 首次进入取最新窗口；重连从已加载末尾逐页补齐，不能只取最后 50 条造成缺口。
+                val existing = _chat.value.messagesByChannel[channelId].orEmpty()
+                val anchor = chatSyncedMessageIds[channelId]
+                val page = repository.fetchChatMessages(channelId, fromLastRead = false,
+                    direction = if (anchor != null) "future" else null, targetMessageId = anchor)
+                if (generation != accountScopeGeneration) return@launch
+                var messages = page.messages
+                var more = page.canLoadMoreFuture
+                var last = messages.maxOfOrNull { it.id } ?: anchor
+                while (more && last != null) {
+                    val next = repository.fetchChatMessages(channelId, fromLastRead = false, direction = "future", targetMessageId = last)
+                    if (generation != accountScopeGeneration) return@launch
+                    val nextLast = next.messages.maxOfOrNull { it.id }
+                    if (nextLast == null || nextLast <= last) break
+                    messages = mergeChatMessages(messages, next.messages)
+                    last = nextLast
+                    more = next.canLoadMoreFuture
+                }
+                messages.maxOfOrNull { it.id }?.let { chatSyncedMessageIds[channelId] = it }
                 _chat.update { current ->
-                    val merged = if (refresh) {
-                        (current.messagesByChannel[channelId].orEmpty() + messages)
-                            .distinctBy { it.id }
-                            .sortedBy { it.id }
-                    } else messages.sortedBy { it.id }
+                    val currentMessages = current.messagesByChannel[channelId].orEmpty()
+                    val before = existing.associateBy { it.id }
+                    val changedWhileLoading = currentMessages.filter { before[it.id] != it }
+                    val merged = mergeChatMessages(mergeChatMessages(currentMessages, messages), changedWhileLoading)
                     current.copy(
                         loadingChannelId = null,
                         error = null,
                         messagesByChannel = current.messagesByChannel + (channelId to merged),
-                        canLoadMorePastByChannel = current.canLoadMorePastByChannel + (channelId to page.canLoadMorePast),
+                        canLoadMorePastByChannel = if (anchor == null) current.canLoadMorePastByChannel + (channelId to page.canLoadMorePast)
+                            else current.canLoadMorePastByChannel,
                     )
                 }
             } catch (error: CancellationException) {
@@ -4042,14 +4092,20 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
-    fun sendChatMessage(channelId: Long, raw: String, uploadIds: List<Long> = emptyList()) {
+    fun sendChatMessage(channelId: Long, raw: String, uploadIds: List<Long> = emptyList(), onSent: () -> Unit = {}) {
         val message = raw.trim()
-        if (message.isBlank() || _chat.value.sendingChannelId != null) return
+        if ((message.isBlank() && uploadIds.isEmpty()) || _chat.value.sendingChannelId != null) return
+        val generation = accountScopeGeneration
         pageJobs["chatSend"] = viewModelScope.launch {
             _chat.update { it.copy(sendingChannelId = channelId, error = null) }
             try {
-                repository.sendChatMessage(channelId, message, uploadIds)
+                val sent = repository.sendChatMessage(channelId, message, uploadIds)
+                if (generation != accountScopeGeneration) return@launch
+                if (sent != null) _chat.update { current -> current.copy(messagesByChannel = current.messagesByChannel +
+                    (channelId to mergeChatMessages(current.messagesByChannel[channelId].orEmpty(), listOf(sent)))) }
+                onSent()
                 loadChatRoom(channelId, refresh = true)
+                loadChatChannels(refresh = true)
             } catch (error: CancellationException) {
                 throw error
             } catch (error: Exception) {
@@ -4219,11 +4275,12 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
      * 加载社区分(CDK score)，展示在「我的」头部。
      *
      * 只读缓存不发请求；缓存过期(6 小时)才静默联网，且受三道保护：
-     * 1. 本地没有缓存时，启动 10 分钟内交给后台预热([fromWarmup])错峰取，前台不抢；
+     * 1. 本地没有缓存时，自动加载交给后台预热([fromWarmup])错峰取；主动打开侧栏/点击获取可按需加载；
      * 2. 短冷却到期后仅补取一次，真正授权/挑战失败才长期退避；
      * 3. 仅 CDK 返回 401(无会话)才做一次 OAuth 握手，握手结果是 Cookie，平时不重复握手。
      */
-    fun loadCdkScore(fromWarmup: Boolean = false) {
+    fun loadCdkScore(fromWarmup: Boolean = false, userInitiated: Boolean = false) {
+        if (cdkAuthorizationOpen) return
         val username = _state.value.username ?: return
         val checkSession = connectSessionCheck(username)
         val now = System.currentTimeMillis()
@@ -4239,12 +4296,18 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             }
         }
         if (current.score != null && now - current.cachedAt < Config.CDK_SCORE_CACHE_TTL_MS) return
-        if (now < cdkScoreBackoffUntil) return
-        if (current.score == null && !fromWarmup && connectFirstFetchLockRemainingMs(hasCache = false) > 0L) return
+        if (now < cdkScoreBackoffUntil) {
+            if (userInitiated) _cdkScore.update { it.copy(error = if (it.needsAuthorization) {
+                "请点击“验证并获取”完成社区分授权"
+            } else "社区分服务暂缓访问，请约 ${((cdkScoreBackoffUntil - now + 59_999L) / 60_000L)} 分钟后重试") }
+            return
+        }
+        if (current.score == null && !fromWarmup && !userInitiated && connectFirstFetchLockRemainingMs(hasCache = false) > 0L) return
         if (cdkScoreJob?.isActive == true) return
         cdkScoreJob = viewModelScope.launch {
+            _cdkScore.update { it.copy(loading = true, error = null) }
             try {
-                val score = readSiteWithAuthorization(checkSession, { repository.fetchCdkScore() }, { repository.authorizeCdk() })
+                val score = readSiteWithAuthorization(checkSession, { repository.fetchCdkScore(username) }, { repository.authorizeCdk() })
                 checkSession()
                 cdkScoreBackoffUntil = 0L
                 repository.saveCachedCdkScore(username, score)
@@ -4255,9 +4318,38 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 checkSession()
                 val pause = siteFailureDelayMs(e)
                 cdkScoreBackoffUntil = System.currentTimeMillis() + pause
+                val needsAuthorization = e is NeedsInteractiveVerification || (e is HttpStatusException && e.status in setOf(401, 403))
+                _cdkScore.update { it.copy(loading = false, needsAuthorization = needsAuthorization, error = when (e) {
+                    is RateLimitException -> "社区分服务繁忙，请稍后重试"
+                    is NeedsInteractiveVerification -> "请点击“验证并获取”完成安全验证和授权"
+                    is HttpStatusException -> if (e.status == 401 || e.status == 403) "请点击“验证并获取”完成社区分授权" else "社区分服务暂时不可用，请稍后重试"
+                    else -> "社区分暂时加载失败，请稍后重试"
+                }) }
                 diagnostics.log("获取 CDK 社区分暂缓(${(pause + 999L) / 1_000L}s): ${e.message}")
+            } finally {
+                if (runCatching { checkSession() }.isSuccess) _cdkScore.update { it.copy(loading = false) }
             }
         }
+    }
+
+    fun setCdkAuthorizationOpen(open: Boolean) {
+        cdkAuthorizationOpen = open
+        if (open) {
+            cdkScoreJob?.cancel()
+            cdkScoreJob = null
+            _cdkScore.update { it.copy(loading = false) }
+        }
+    }
+
+    /** 只有完整授权后读到当前账号的真实分数才解除等待；单纯关闭网页不触发原生重授权。 */
+    fun onCdkAuthorized(username: String, generation: Long, score: Int) {
+        if (store.sessionChanging || generation != store.sessionGeneration ||
+            !_state.value.username.equals(username, ignoreCase = true)) return
+        cdkScoreJob?.cancel()
+        cdkScoreJob = null
+        cdkScoreBackoffUntil = 0L
+        repository.saveCachedCdkScore(username, score)
+        _cdkScore.value = CdkScoreUiState(username, score, System.currentTimeMillis())
     }
 
     private var ldcGamificationRefreshJob: Job? = null
@@ -4415,13 +4507,12 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         if (previous.loading) return
         if (!refresh && !more && previous.loaded && isCacheUsable(section, filter, previous)) return
         if (more && !previous.content.hasMore) return
-        val cursor = if (more) previous.content.nextCursor else 0
         pageJobs["profile:$section"] = viewModelScope.launch {
             _profile.update { it + (section to previous.copy(loading = true, error = null)) }
             try {
                 val fresh = fetchProfilePage(username, section, filter, previous, more)
                 _profile.update { it + (section to fresh) }
-                if (section == ProfileSection.Notifications) notificationCache[filter] = fresh
+                if (section == ProfileSection.Notifications) notificationCache.update { it + (filter to fresh) }
                 if (section == ProfileSection.Summary && !more) {
                     prewarmCurrentUserAvatar(username)
                     loadUserBadges(username, refresh = refresh)
@@ -4432,7 +4523,9 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 _profile.update { it + (section to previous.copy(error = error.message ?: "加载失败")) }
                 handlePageFailure(error) { loadProfile(section, refresh = true) }
             } finally {
-                _profile.update { states -> states[section]?.let { states + (section to it.copy(loading = false)) } ?: states }
+                if (section != ProfileSection.Notifications || (isActive && _notificationFilter.value == filter)) {
+                    _profile.update { states -> states[section]?.let { states + (section to it.copy(loading = false)) } ?: states }
+                }
             }
         }
     }
@@ -4551,8 +4644,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         pageJobs["profile:${ProfileSection.Notifications}"]?.cancel()
         _notificationFilter.value = filter
 
-        val cached = notificationCache[filter]
-        val allCached = notificationCache[NotificationFilter.All]
+        val cached = notificationCache.value[filter]
+        val allCached = notificationCache.value[NotificationFilter.All]
 
         // 1. 若该分类已有新鲜缓存，且“全部”未产生更新的数据，直接秒显
         val isCachedFresh = cached != null && isCacheUsable(ProfileSection.Notifications, filter, cached)
@@ -4576,7 +4669,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 loadedAt = allCached.loadedAt,
                 unreadAtLoad = unreadBaseline(ProfileSection.Notifications, filter),
             )
-            notificationCache[filter] = derivedState
+            notificationCache.update { it + (filter to derivedState) }
             _profile.update { it + (ProfileSection.Notifications to derivedState.copy(loading = false, error = null)) }
 
             // 若本地派生出的条目足够丰富 (>= 15 条) 或全部通知已无更多，无需发起网络请求
@@ -4588,11 +4681,9 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             return
         }
 
-        // 3. 冷启动无 All 缓存场景，保留现有旧数据静默加载，绝不清空抹白
-        if (cached != null) {
-            _profile.update { it + (ProfileSection.Notifications to cached.copy(loading = true, error = null)) }
-        }
-        loadProfile(ProfileSection.Notifications)
+        // 冷启动时先绑定目标分类，避免把上一页的列表或加载标记带进来。
+        _profile.update { it + (ProfileSection.Notifications to (cached ?: ProfileUiState()).copy(loading = false)) }
+        loadProfile(ProfileSection.Notifications, refresh = true)
     }
 
     fun setTopicListScrollBusy(source: Any, isBusy: Boolean) {
@@ -4661,7 +4752,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         if (current.loading || current.refreshing || current.reactingPosts.isNotEmpty()) return
         if (pageJobs["topic:$id"]?.isActive == true) return
         val generation = accountScopeGeneration
-        pageJobs["topic:$id"] = viewModelScope.launch {
+        pageJobs["topic:$id"] = viewModelScope.launch(start = CoroutineStart.LAZY) {
             if (!silent) {
                 _details.update { states ->
                     states[id]?.let { states + (id to it.copy(refreshing = true, error = null)) } ?: states
@@ -4729,13 +4820,16 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                     handlePageFailure(error) { refreshTopic(id, silent = false, includeLatestPosts = includeLatestPosts) }
                 }
             } finally {
-                _details.update { states ->
-                    states[id]?.let { states + (id to it.copy(refreshing = false)) } ?: states
+                if (pageJobs["topic:$id"] === coroutineContext[Job]) {
+                    _details.update { states ->
+                        states[id]?.let { states + (id to it.copy(refreshing = false)) } ?: states
+                    }
+                    pageJobs.remove("topic:$id")
+                    topicLiveSessions[id]?.updates?.trySend(Unit)
                 }
-                if (pageJobs["topic:$id"] === coroutineContext[Job]) pageJobs.remove("topic:$id")
-                topicLiveSessions[id]?.updates?.trySend(Unit)
             }
         }
+        pageJobs["topic:$id"]?.start()
     }
 
     fun loadTopic(
@@ -4814,7 +4908,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         if (more && current.remaining.isEmpty()) return
         if (previous && current.previousIds.isEmpty()) return
         pageJobs["topic:$id"]?.cancel()
-        pageJobs["topic:$id"] = viewModelScope.launch {
+        // 先登记任务再启动，立即失败时 finally 也能识别当前请求并收尾。
+        pageJobs["topic:$id"] = viewModelScope.launch(start = CoroutineStart.LAZY) {
             _details.update { it + (id to current.copy(loading = true, error = null)) }
             try {
                 if (more || previous) {
@@ -4831,7 +4926,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                         val latest = mergeRealtimePosts(original, posts.filter { post -> post.id in original.realtimePostIds })
                         it + (id to latest.copy(
                             posts = (latest.posts + posts).distinctBy { post -> post.id }.sortedBy { post -> post.postNumber },
-                            consumedIds = latest.consumedIds + posts.map { post -> post.id } + if (previous) requested else emptyList(),
+                            // 成功请求但没有返回的 ID 已删除或不可见，两个方向都标记为已处理，避免原地重试。
+                            consumedIds = latest.consumedIds + posts.map { post -> post.id } + requested,
                             windowStartId = if (previous) requested.first() else current.windowStartId,
                             error = null, failedLoad = DetailLoad.Topic,
                         ))
@@ -4856,17 +4952,25 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                             effectiveTargetPostNumber = posts.maxOfOrNull { it.postNumber }
                         }
                     }
-                    val missing = requestPostNumber != null && posts.none { it.postNumber == requestPostNumber }
+                    // /t/{id}/{floor} 返回的是目标附近的有效窗口。目标被删除不代表加载失败。
+                    // 只从这次服务器返回的窗口解析，不能把额外保留的旧主帖当成跳转结果。
+                    val resolvedTarget = effectiveTargetPostNumber?.let { resolveTopicFloor(topic.postStream.posts, it) }
+                    if (resolvedTarget != null && requestPostNumber != null) {
+                        effectiveTargetPostNumber = resolvedTarget.postNumber
+                    }
                     val newLocateVersion = if (effectiveTargetPostNumber != null) (current.locateVersion + 1) else current.locateVersion
                     _details.update {
                         it + (id to DetailUiState(topic, posts, posts.map { post -> post.id }.toSet(), category,
-                            error = if (missing) "目标楼层 #$requestPostNumber 已删除或不可访问" else null,
+                            error = if (requestPostNumber != null && resolvedTarget == null) "当前没有可访问的楼层，请稍后重试" else null,
                             emojiUrls = emojis, windowStartId = topic.postStream.posts.minByOrNull { it.postNumber }?.id,
                             locateVersion = newLocateVersion,
-                            locatePostNumber = if (isNotificationJump) effectiveTargetPostNumber else effectivePostNumber,
+                            locatePostNumber = if (isNotificationJump || effectivePostNumber != null) effectiveTargetPostNumber else null,
                             confirmedReadPostNumbers = container.reading.confirmedPostNumbers(id),
                             filterUserId = restoredPosition?.filterUserId,
                             descending = restoredPosition?.descending ?: false))
+                    }
+                    if (requestPostNumber != null && resolvedTarget != null && resolvedTarget.postNumber != requestPostNumber) {
+                        setNoticeMessage(id, "第 $requestPostNumber 楼不可用，已定位到第 ${resolvedTarget.postNumber} 楼")
                     }
                     val scopeGeneration = accountScopeGeneration
                     viewModelScope.launch {
@@ -4908,7 +5012,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             } catch (error: RateLimitException) {
                 if (current.topic != null) {
                     diagnostics.log("话题 $id 刷新遭遇限流: ${error.message}，保持展示本地缓存")
-                    _details.update { it + (id to current.copy(loading = false, error = null)) }
+                    _details.update { it + (id to current.copy(loading = false,
+                        error = if (targetPostNumber != null) error.message else null)) }
                 } else {
                     _details.update { it + (id to current.copy(error = error.message, failedLoad = DetailLoad.Topic)) }
                 }
@@ -4926,11 +5031,15 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                     )
                 }
             } finally {
-                _details.update { states -> states[id]?.let { states + (id to it.copy(loading = false)) } ?: states }
-                if (pageJobs["topic:$id"] === coroutineContext[Job]) pageJobs.remove("topic:$id")
-                topicLiveSessions[id]?.updates?.trySend(Unit)
+                // 被新选楼请求取消的旧任务不能清掉新任务的 loading 状态。
+                if (pageJobs["topic:$id"] === coroutineContext[Job]) {
+                    _details.update { states -> states[id]?.let { states + (id to it.copy(loading = false)) } ?: states }
+                    pageJobs.remove("topic:$id")
+                    topicLiveSessions[id]?.updates?.trySend(Unit)
+                }
             }
         }
+        pageJobs["topic:$id"]?.start()
     }
 
     /**
@@ -4957,7 +5066,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             return
         }
         pageJobs["topic:$topicId"]?.cancel()
-        pageJobs["topic:$topicId"] = viewModelScope.launch {
+        pageJobs["topic:$topicId"] = viewModelScope.launch(start = CoroutineStart.LAZY) {
             _details.update { it + (topicId to current.copy(loading = true, error = null, descending = true)) }
             try {
                 val fetched = repository.fetchPosts(topicId, tailMissing)
@@ -4990,9 +5099,13 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 }
                 handlePageFailure(error) { toggleCommentOrder(topicId) }
             } finally {
-                _details.update { states -> states[topicId]?.let { states + (topicId to it.copy(loading = false)) } ?: states }
+                if (pageJobs["topic:$topicId"] === coroutineContext[Job]) {
+                    _details.update { states -> states[topicId]?.let { states + (topicId to it.copy(loading = false)) } ?: states }
+                    pageJobs.remove("topic:$topicId")
+                }
             }
         }
+        pageJobs["topic:$topicId"]?.start()
     }
 
     fun react(topicId: Long, postId: Long, reaction: String) {
@@ -5117,7 +5230,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                         loadedAt = settledAt,
                         unreadAtLoad = summary.unreadByFilter[NotificationFilter.All] ?: 0,
                     )
-                    notificationCache[NotificationFilter.All] = cachedPage
+                    notificationCache.update { it + (NotificationFilter.All to cachedPage) }
                 }
                 _state.update { it.copy(
                     unreadCount = summary.count,
@@ -5167,7 +5280,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         val target = (listOf(current) + NotificationFilter.entries).distinct()
             .filter { it == current || it in unread }
             .firstOrNull { filter ->
-                val cached = notificationCache[filter]
+                val cached = notificationCache.value[filter]
                 cached == null || !isCacheUsable(ProfileSection.Notifications, filter, cached)
             } ?: return
 
@@ -5183,7 +5296,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             }
             try {
                 val fresh = fetchProfilePage(username, ProfileSection.Notifications, target, ProfileUiState(), more = false)
-                notificationCache[target] = fresh
+                notificationCache.update { it + (target to fresh) }
                 if (_notificationFilter.value == target) {
                     _profile.update { it + (ProfileSection.Notifications to fresh) }
                 }
@@ -5194,7 +5307,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 // 用户还没点进来,预取失败不该弹错误;真点进去时会正常重试并展示错误。
                 diagnostics.log("预取通知失败: ${error.javaClass.simpleName}")
             } finally {
-                if (showing) {
+                if (showing && isActive && _notificationFilter.value == target) {
                     _profile.update { states ->
                         states[ProfileSection.Notifications]?.let {
                             states + (ProfileSection.Notifications to it.copy(loading = false))
@@ -5215,7 +5328,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 panels + (ProfileSection.Notifications to notices.copy(content = markAllReadInPage(notices.content)))
             } ?: panels
         }
-        notificationCache.replaceAll { _, cached -> cached.copy(content = markAllReadInPage(cached.content)) }
+        notificationCache.update { pages -> pages.mapValues { (_, cached) -> cached.copy(content = markAllReadInPage(cached.content)) } }
         _state.update { state ->
             state.copy(
                 unreadCount = 0,
@@ -5250,7 +5363,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         // 两趟请求(各自还有 1 秒节流 + 往返)才更新,用户点进去再退回来会看到它还亮着。
         val type = knownType ?: _profile.value[ProfileSection.Notifications]?.content?.entries
             ?.firstOrNull { it.id == id.toString() }?.notificationType
-            ?: notificationCache.values.firstNotNullOfOrNull { page ->
+            ?: notificationCache.value.values.firstNotNullOfOrNull { page ->
                 page.content.entries.firstOrNull { it.id == id.toString() }?.notificationType
             }
         markReadLocally(id, type)
@@ -5284,7 +5397,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             } ?: panels
         }
         // 按分类的缓存也要跟着改,否则切出去再切回来这条又变回未读。
-        notificationCache.replaceAll { _, cached -> cached.copy(content = markRead(cached.content)) }
+        notificationCache.update { pages -> pages.mapValues { (_, cached) -> cached.copy(content = markRead(cached.content)) } }
         if (type == null) {
             _state.update { state ->
                 state.copy(unreadCount = (state.unreadCount - 1).coerceAtLeast(0))
@@ -5386,11 +5499,14 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     /** 打开编辑器。编辑已有楼层时顺带把原文取回来填进输入框。 */
     fun openComposer(target: ComposerTarget) {
-        if (_composer.value.submitting) return
+        if (_composer.value.submitting || store.sessionChanging || _accounts.value.switching) return
+        persistComposerDraft()
         val needsDraft = target is ComposerTarget.Edit
         var storageError: String? = null
         val localDraft = try {
-            if (needsDraft) null else localDraftKey(target)?.let { key -> container.draftStore.get(store.currentUserId(), key) }
+            accountDraftStore.get(store.currentUserId(), composerDraftKey(target))?.content?.raw
+                ?: if (needsDraft || accountDraftStore.legacyImported(store.currentUserId(), composerDraftKey(target))) null
+                else localDraftKey(target)?.let { key -> container.draftStore.get(store.currentUserId(), key) }
         } catch (error: org.linuxdo.android.data.EncryptedStorageUnavailableException) {
             storageError = "已有草稿暂时无法读取，请稍后重试，原稿已保留"
             null
@@ -5402,11 +5518,18 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         if (storageError == null && target is ComposerTarget.ReplyTo && target.quote != null) {
             updateDraft(draft)
         }
-        if (target !is ComposerTarget.Edit) return
+        if (target !is ComposerTarget.Edit) {
+            // 旧版本地回复只作为待合并内容，不能覆盖已有网页草稿。
+            if (draft.isNotBlank() && (target.quoteOrNull() != null || accountDraftStore.get(store.currentUserId(), composerDraftKey(target)) == null)) persistComposerDraft()
+            _composer.update { it.copy(loadingDraft = true) }
+            restoreSyncedDraft(composerDraftKey(target))
+            return
+        }
         pageJobs["draft:${target.postId}"] = viewModelScope.launch {
             try {
                 val raw = repository.fetchPostRaw(target.postId)
-                _composer.update { if (it.target == target) it.copy(draft = raw, loadingDraft = false) else it }
+                _composer.update { if (it.target == target) it.copy(draft = raw, loadingDraft = true) else it }
+                restoreSyncedDraft(composerDraftKey(target))
             } catch (error: CancellationException) {
                 throw error
             } catch (error: Exception) {
@@ -5420,8 +5543,10 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     fun updateDraft(text: String) {
         val current = _composer.value
+        if (current.loadingDraft || current.submitting) return
         val target = current.target
         _composer.update { if (it.open) it.copy(draft = text, error = null) else it }
+        persistComposerDraft()
         if (target != null) {
             try {
                 localDraftKey(target)?.let { key -> container.draftStore.put(store.currentUserId(), key, text) }
@@ -5443,6 +5568,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun closeComposer() {
+        persistComposerDraft()
+        _composer.value.target?.let { scheduleDraftSync(composerDraftKey(it), immediate = true) }
         pageJobs["composer"]?.cancel()
         pageJobs.remove("upload")?.cancel()
         _composer.value = ComposerUiState()
@@ -5463,12 +5590,14 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
      */
     fun attachToComposer(uri: Uri) {
         val current = _composer.value
-        if (!current.open || current.uploading || current.submitting) return
+        val generation = accountScopeGeneration
+        if (!current.open || current.loadingDraft || current.uploading || current.submitting) return
         pageJobs["upload"] = viewModelScope.launch {
             _composer.update { it.copy(uploading = true, error = null) }
             try {
                 val picked = withContext(Dispatchers.IO) { readPickedFile(uri) }
                 val uploaded = repository.uploadFile(picked.name, picked.mimeType, picked.bytes)
+                if (generation != accountScopeGeneration) return@launch
                 val isImg = uploaded.width > 0 || UploadLimits.isCompressibleImage(picked.name) ||
                     picked.mimeType.startsWith("image/")
                 val media = AttachedMedia(
@@ -5478,10 +5607,11 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                     isImage = isImg,
                 )
                 _composer.update {
-                    if (!it.open) it.copy(uploading = false) else {
+                    if (!it.open || !(it.target == current.target)) it else {
                         it.copy(attachments = it.attachments + media, uploading = false)
                     }
                 }
+                persistComposerDraft()
             } catch (error: CancellationException) {
                 throw error
             } catch (error: Exception) {
@@ -5493,6 +5623,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     fun removeComposerAttachment(id: String) {
         _composer.update { it.copy(attachments = it.attachments.filterNot { a -> a.id == id }) }
+        persistComposerDraft()
     }
 
     private data class PickedFile(val name: String, val mimeType: String, val bytes: ByteArray)
@@ -5567,25 +5698,28 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         val current = _composer.value
         val target = current.target ?: return
         if (!current.canSubmit) return
+        persistComposerDraft()
+        val content = composerDraftContent(current) ?: return
         val raw = assembleRaw(current.draft, current.attachments)
+        val key = composerDraftKey(target)
         pageJobs["composer"] = viewModelScope.launch {
             _composer.update { it.copy(submitting = true, error = null) }
             try {
-                kotlinx.coroutines.withTimeout(20_000L) {
+                kotlinx.coroutines.withTimeout(60_000L) {
                     when (target) {
                         is ComposerTarget.NewReply -> {
-                            when (val result = repository.createPost(target.topicId, raw)) {
+                            when (val result = submitWithDraftSnapshot(key, content) { publishKey -> repository.createPost(target.topicId, raw, draftKey = publishKey) }) {
                                 is PostResult.Success -> applyCreatedPost(target.topicId, result.post)
                                 is PostResult.Enqueued -> setNoticeMessage(target.topicId, "您的回复已提交，正等待管理员审核后显示")
                             }
                         }
                         is ComposerTarget.ReplyTo -> {
-                            when (val result = repository.createPost(target.topicId, raw, target.postNumber)) {
+                            when (val result = submitWithDraftSnapshot(key, content) { publishKey -> repository.createPost(target.topicId, raw, target.postNumber, draftKey = publishKey) }) {
                                 is PostResult.Success -> applyCreatedPost(target.topicId, result.post)
                                 is PostResult.Enqueued -> setNoticeMessage(target.topicId, "您的回复已提交，正等待管理员审核后显示")
                             }
                         }
-                        is ComposerTarget.Edit -> applyEditedPost(target.topicId, repository.updatePost(target.postId, raw))
+                        is ComposerTarget.Edit -> applyEditedPost(target.topicId, submitWithDraftSnapshot(key, content) { repository.updatePost(target.postId, raw) })
                     }
                 }
                 try {
@@ -5606,17 +5740,309 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
+    private fun isDraftSubmitting(key: String): Boolean =
+        (_composer.value.submitting && _composer.value.target?.let(::composerDraftKey) == key) ||
+            (_topicCreator.value.submitting && _topicCreator.value.draftKey == key)
+
+    /** 发送当前内容无需先备份到网页；锁只用于等待已发出的保存完成，避免旧草稿复活。 */
+    private suspend fun <T> submitWithDraftSnapshot(key: String, content: SyncedDraftContent, submit: suspend (String) -> T): T {
+        val userId = store.currentUserId()
+        val generation = accountScopeGeneration
+        return draftSyncLocks.getOrPut(key) { kotlinx.coroutines.sync.Mutex() }.withLock {
+            check(userId > 0 && userId == store.currentUserId() && generation == accountScopeGeneration &&
+                !store.sessionChanging && !_accounts.value.switching) { "账号已切换" }
+            val local = accountDraftStore.get(userId, key)
+            check(local == null || local.content == content) { "内容已有更新，请检查后再发送" }
+            // Discourse 会推进 draft_key 的序号，即使不传也会采用 topic/new_topic 默认键。
+            // 独立键避免发送时删除尚未确认的网页版本；共享草稿随后按内容与序号清理。
+            val publishKey = "android_" + java.util.UUID.randomUUID().toString().replace("-", "")
+            val result = submit(publishKey)
+            // 提交成功后不能因清理失败要求用户重发。
+            if (userId == store.currentUserId() && generation == accountScopeGeneration) {
+                draftSyncJobs.remove(key)?.cancel()
+                dismissedDraftConflicts.remove(key)
+                _draftConflict.update { if (it?.local?.key == key) null else it }
+                try {
+                    if (accountDraftStore.get(userId, key)?.content == content) {
+                        accountDraftStore.remove(userId, key)
+                        _drafts.update { it.copy(items = it.items.filterNot { item -> item.draftKey == key }) }
+                    }
+                    // 清理独立执行；失败不会重放发送，也不覆盖网页上的新修改。
+                    viewModelScope.launch {
+                        draftSyncLocks.getOrPut(key) { kotlinx.coroutines.sync.Mutex() }.withLock {
+                            try {
+                                if (userId != store.currentUserId() || generation != accountScopeGeneration || store.sessionChanging) return@withLock
+                                val after = repository.fetchDraft(key)
+                                if (userId != store.currentUserId() || generation != accountScopeGeneration || store.sessionChanging) return@withLock
+                                val unchangedBase = local != null && !local.conflict && local.base != null &&
+                                    after.sequence == local.sequence && after.content == local.base
+                                if (accountDraftStore.get(userId, key) == null && after.content != null &&
+                                    (after.content == content || unchangedBase)) repository.deleteDraft(key, after.sequence)
+                            } catch (error: CancellationException) { throw error }
+                            catch (_: Exception) { diagnostics.log("内容已发送，网页草稿清理等待刷新") }
+                        }
+                    }
+                } catch (error: CancellationException) { throw error }
+                catch (_: Exception) { diagnostics.log("内容已发送，草稿清理等待刷新") }
+            }
+            result
+        }
+    }
+
+    private val accountDraftStore by lazy { org.linuxdo.android.data.AccountDraftStore(getApplication()) }
+    private val draftSyncJobs = mutableMapOf<String, Job>()
+    private val dismissedDraftConflicts = mutableSetOf<String>()
+    private val draftSyncLocks = mutableMapOf<String, kotlinx.coroutines.sync.Mutex>()
+    private val _draftConflict = MutableStateFlow<DraftConflictUi?>(null)
+    val draftConflict = _draftConflict.asStateFlow()
+
+    private fun ComposerTarget.quoteOrNull(): String? = (this as? ComposerTarget.ReplyTo)?.quote
+
+    private fun composerDraftKey(target: ComposerTarget): String = "topic_${target.topicId}"
+
+    private fun composerDraftContent(current: ComposerUiState): SyncedDraftContent? {
+        val target = current.target ?: return null
+        val saved = accountDraftStore.get(store.currentUserId(), composerDraftKey(target))?.content
+        return (saved ?: SyncedDraftContent()).copy(raw = assembleRaw(current.draft, current.attachments), topicId = target.topicId,
+            action = if (target is ComposerTarget.Edit) saved?.action?.takeIf { it.startsWith("edit") } ?: "edit" else "reply",
+            postId = (target as? ComposerTarget.Edit)?.postId,
+            replyToPostNumber = (target as? ComposerTarget.ReplyTo)?.postNumber)
+    }
+
+    private fun creatorDraftContent(current: TopicCreatorUiState) =
+        (accountDraftStore.get(store.currentUserId(), current.draftKey)?.content ?: SyncedDraftContent()).copy(
+        raw = assembleRaw(current.raw, current.attachments), title = current.title,
+        categoryId = current.categoryId, tags = current.tags, action = current.action,
+        topicId = current.replyTopicId, replyToPostNumber = current.replyToPostNumber)
+
+    private fun activeDraftKeys(): Set<String> = buildSet {
+        _composer.value.target?.let { add(composerDraftKey(it)) }
+        if (_topicCreator.value.open) add(_topicCreator.value.draftKey)
+    }
+
+    private fun persistDraft(key: String, content: SyncedDraftContent) {
+        val userId = store.currentUserId()
+        if (userId <= 0 || store.sessionChanging || _accounts.value.switching) return
+        try {
+            val previous = accountDraftStore.get(userId, key)
+            if (previous == null && content.empty) return
+            if (previous?.content == content) return
+            accountDraftStore.put(userId, (previous ?: LocalSyncedDraft(key, content)).copy(
+                content = content, dirty = true, updatedAt = System.currentTimeMillis()))
+            setDraftSyncStatus(key, "已保存到手机，等待同步")
+            scheduleDraftSync(key)
+        } catch (error: Exception) { setDraftSyncStatus(key, "手机保存失败，请保持编辑器打开") }
+    }
+
+    private fun persistComposerDraft() {
+        val current = _composer.value
+        if (current.loadingDraft || current.submitting) return
+        val content = composerDraftContent(current) ?: return
+        persistDraft(composerDraftKey(current.target!!), content)
+    }
+
+    private fun persistCreatorDraft() {
+        val current = _topicCreator.value
+        if (!current.open || current.loadingDraft || current.submitting) return
+        persistDraft(current.draftKey, creatorDraftContent(current))
+    }
+
+    private fun setDraftSyncStatus(key: String, status: String) {
+        _composer.update { if (it.target?.let(::composerDraftKey) == key) it.copy(syncStatus = status) else it }
+        _topicCreator.update { if (it.open && it.draftKey == key) it.copy(syncStatus = status) else it }
+    }
+
+    private fun isDraftUploading(key: String): Boolean =
+        (_composer.value.uploading && _composer.value.target?.let(::composerDraftKey) == key) ||
+            (_topicCreator.value.uploading && _topicCreator.value.draftKey == key)
+
+    private fun scheduleDraftSync(key: String, immediate: Boolean = false) {
+        if (store.currentUserId() <= 0 || store.sessionChanging || _accounts.value.switching ||
+            isDraftSubmitting(key) || key in _drafts.value.deletingKeys) return
+        // 已发出的请求不随输入取消；它完成后再合并期间的新编辑。
+        if (draftSyncJobs[key]?.isActive == true) return
+        val userId = store.currentUserId()
+        val generation = accountScopeGeneration
+        draftSyncJobs[key] = viewModelScope.launch {
+            if (!immediate) delay(1_500L)
+            if (!isDraftSubmitting(key)) syncDraftNow(key, userId, generation)
+            if (generation == accountScopeGeneration) {
+                draftSyncJobs.remove(key)
+                val local = runCatching { accountDraftStore.get(userId, key) }.getOrNull()
+                if (local?.dirty == true && !local.conflict && activeDraftKeys().contains(key)) {
+                    delay(15_000L)
+                    if (generation == accountScopeGeneration) scheduleDraftSync(key, immediate = true)
+                }
+            }
+        }
+    }
+
+    private suspend fun syncDraftNow(key: String, userId: Long = store.currentUserId(), generation: Long = accountScopeGeneration): Boolean {
+        val lock = draftSyncLocks.getOrPut(key) { kotlinx.coroutines.sync.Mutex() }
+        return lock.withLock {
+            fun valid() = userId > 0 && userId == store.currentUserId() && generation == accountScopeGeneration &&
+                !store.sessionChanging && !_accounts.value.switching
+            if (!valid() || isDraftUploading(key) || isDraftSubmitting(key)) return@withLock false
+            try {
+                if (key !in activeDraftKeys() && accountDraftStore.get(userId, key) == null) return@withLock true
+                // 草稿读取只是后台备份检查，慢请求不能长时间占住发送共用的锁。
+                val remote = kotlinx.coroutines.withTimeoutOrNull(4_000L) { repository.fetchDraft(key) }
+                    ?: error("草稿读取超时，稍后重试")
+                if (!valid() || isDraftUploading(key) || isDraftSubmitting(key)) return@withLock false
+                val local = accountDraftStore.get(userId, key)
+                val merge = org.linuxdo.android.data.draftMergeAction(local, remote)
+                when (merge) {
+                    org.linuxdo.android.data.DraftMergeAction.UseRemote -> {
+                        if (remote.content == null) {
+                            accountDraftStore.remove(userId, key)
+                            if (local != null) applyDraftContent(key, local.content.copy(raw = "", title = ""), remote.sequence)
+                        } else {
+                            accountDraftStore.put(userId, LocalSyncedDraft(key, remote.content, remote.content, remote.sequence, remote.data))
+                            applyDraftContent(key, remote.content, remote.sequence)
+                        }
+                    }
+                    org.linuxdo.android.data.DraftMergeAction.Unchanged -> {
+                        accountDraftStore.put(userId, local!!.copy(base = remote.content, sequence = remote.sequence,
+                            remoteData = remote.data, dirty = false, conflict = false))
+                    }
+                    org.linuxdo.android.data.DraftMergeAction.Conflict -> {
+                        accountDraftStore.put(userId, local!!.copy(dirty = true, conflict = true))
+                        setDraftSyncStatus(key, "两端草稿不同，可直接发送手机内容")
+                        if (key in activeDraftKeys() && key !in dismissedDraftConflicts && _draftConflict.value == null) _draftConflict.value = DraftConflictUi(local, remote)
+                        return@withLock false
+                    }
+                    org.linuxdo.android.data.DraftMergeAction.SaveLocal -> {
+                        val snapshot = local!!
+                        val sequence = if (snapshot.content.empty) {
+                            repository.deleteDraft(key, remote.sequence)
+                            repository.fetchDraft(key).sequence
+                        } else repository.saveSyncedDraft(key, remote.sequence, snapshot.content, remote.data)
+                        if (!valid()) return@withLock false
+                        val newest = accountDraftStore.get(userId, key) ?: return@withLock false
+                        accountDraftStore.put(userId, newest.copy(base = snapshot.content.takeUnless { it.empty },
+                            sequence = sequence, remoteData = remote.data, dirty = newest.content != snapshot.content, conflict = false))
+                        _topicCreator.update { if (it.open && it.draftKey == key) it.copy(sequence = sequence,
+                            savedSnapshot = if (creatorDraftContent(it) == snapshot.content) it.currentSnapshot else it.savedSnapshot) else it }
+                    }
+                }
+                if (valid()) setDraftSyncStatus(key,
+                    if (accountDraftStore.get(userId, key)?.dirty == true) "已保存到手机，等待同步" else "已与网页同步")
+                true
+            } catch (error: CancellationException) { throw error }
+            catch (error: Exception) {
+                if (valid()) {
+                    if (error is HttpStatusException && error.status == 409) {
+                        accountDraftStore.get(userId, key)?.let { accountDraftStore.put(userId, it.copy(conflict = true)) }
+                        setDraftSyncStatus(key, "网页草稿已有更新，可直接发送手机内容")
+                    } else setDraftSyncStatus(key, "手机草稿已保留，同步稍后重试，不影响发送")
+                }
+                false
+            } finally {
+                if (valid()) {
+                    _composer.update { if (it.target?.let(::composerDraftKey) == key) it.copy(loadingDraft = false) else it }
+                    _topicCreator.update { if (it.open && it.draftKey == key) it.copy(loadingDraft = false) else it }
+                }
+            }
+        }
+    }
+
+    private fun applyDraftContent(key: String, content: SyncedDraftContent, sequence: Long) {
+        _composer.update { current ->
+            if (current.target?.let(::composerDraftKey) != key || current.submitting || current.uploading) current else {
+                val target = when {
+                    content.action.startsWith("edit") && content.postId != null -> ComposerTarget.Edit(content.topicId ?: current.target.topicId, content.postId, 1)
+                    content.replyToPostNumber != null -> ComposerTarget.ReplyTo(content.topicId ?: current.target.topicId, content.replyToPostNumber, "")
+                    else -> ComposerTarget.NewReply(content.topicId ?: current.target.topicId)
+                }
+                if (composerDraftContent(current) == content) current else
+                    current.copy(target = target, draft = content.raw, attachments = emptyList(), remoteRevision = current.remoteRevision + 1)
+            }
+        }
+        _topicCreator.update { current ->
+            if (!current.open || current.draftKey != key || current.submitting || current.uploading) current else {
+                if (creatorDraftContent(current) == content) return@update current.copy(sequence = sequence)
+                val updated = current.copy(title = content.title, raw = content.raw, categoryId = content.categoryId,
+                    tags = content.tags, action = content.action, replyTopicId = content.topicId,
+                    replyToPostNumber = content.replyToPostNumber, attachments = emptyList(), sequence = sequence,
+                    remoteRevision = current.remoteRevision + 1)
+                updated.copy(savedSnapshot = updated.currentSnapshot)
+            }
+        }
+    }
+
+    private fun restoreSyncedDraft(key: String) {
+        dismissedDraftConflicts.remove(key)
+        val userId = store.currentUserId()
+        if (userId <= 0) return
+        try {
+            accountDraftStore.get(userId, key)?.let { applyDraftContent(key, it.content, it.sequence ?: 0L) }
+            accountDraftStore.markLegacyImported(userId, key)
+            // 本机内容已恢复即可编辑；后台读取晚到时仍按基线合并，不覆盖期间的新输入。
+            _composer.update { if (it.target?.let(::composerDraftKey) == key) it.copy(loadingDraft = false) else it }
+            _topicCreator.update { if (it.open && it.draftKey == key) it.copy(loadingDraft = false) else it }
+            scheduleDraftSync(key, immediate = true)
+        } catch (error: Exception) {
+            setDraftSyncStatus(key, "手机草稿暂不可读取，请稍后重试")
+            _composer.update { if (it.target?.let(::composerDraftKey) == key) it.copy(loadingDraft = false) else it }
+            _topicCreator.update { if (it.open && it.draftKey == key) it.copy(loadingDraft = false) else it }
+        }
+    }
+
+    private fun syncPendingDrafts() {
+        try { accountDraftStore.entries(store.currentUserId()).filter { it.dirty && !it.conflict }.forEach { scheduleDraftSync(it.key, true) } }
+        catch (error: Exception) { diagnostics.log("待同步草稿暂不可读取") }
+    }
+
+    fun resolveDraftConflict(usePhone: Boolean) {
+        val conflict = _draftConflict.value ?: return
+        val key = conflict.local.key
+        val userId = store.currentUserId()
+        val current = accountDraftStore.get(userId, key) ?: return
+        if (usePhone) {
+            accountDraftStore.put(userId, current.copy(base = conflict.remote.content, sequence = conflict.remote.sequence,
+                remoteData = conflict.remote.data, dirty = true, conflict = false))
+        } else {
+            val content = conflict.remote.content ?: current.content.copy(raw = "", title = "")
+            accountDraftStore.put(userId, LocalSyncedDraft(key, content, conflict.remote.content, conflict.remote.sequence, conflict.remote.data))
+            applyDraftContent(key, content, conflict.remote.sequence)
+        }
+        _draftConflict.value = null
+        scheduleDraftSync(key, immediate = true)
+    }
+
+    fun dismissDraftConflict() {
+        _draftConflict.value?.let { dismissedDraftConflicts.add(it.local.key) }
+        _draftConflict.value = null
+    }
+
+    private fun localDraftItems(): List<DraftItem> = accountDraftStore.entries(store.currentUserId())
+        .filter { it.dirty && !it.content.empty }.map { draft ->
+            val c = draft.content
+            DraftItem(draftKey = draft.key, sequence = draft.sequence ?: 0, title = c.title,
+                raw = c.raw, excerpt = c.raw, categoryId = c.categoryId, tags = c.tags,
+                action = c.action, topicId = c.topicId, replyToPostNumber = c.replyToPostNumber, postId = c.postId,
+                archetype = c.archetype, localOnly = true,
+                syncStatus = if (draft.conflict) "两端草稿不同" else "待同步")
+        }
+
     fun loadDrafts(refresh: Boolean = false, silent: Boolean = false) {
         if (_state.value.username == null) return
+        syncPendingDrafts()
+        val generation = accountScopeGeneration
+        runCatching { localDraftItems() }.getOrNull()?.let { local ->
+            _drafts.update { it.copy(items = (local + it.items.filterNot { item -> item.localOnly }).distinctBy { item -> item.draftKey }) }
+        }
         val current = _drafts.value
-        if (current.loading) return
+        if (current.loading || pageJobs["drafts"]?.isActive == true) return
         if (!refresh && current.loaded) return
         pageJobs["drafts"] = viewModelScope.launch {
             if (!silent || !current.loaded) {
                 _drafts.update { it.copy(loading = true, error = null) }
             }
             try {
-                val list = repository.fetchDrafts()
+                val remote = repository.fetchDrafts()
+                if (generation != accountScopeGeneration) return@launch
+                val list = (localDraftItems() + remote).distinctBy { it.draftKey }
                 _drafts.update {
                     it.copy(
                         items = list,
@@ -5642,12 +6068,23 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun deleteDraft(draft: DraftItem) {
+        val userId = store.currentUserId()
+        val generation = accountScopeGeneration
         if (_state.value.username == null) return
+        if (draft.draftKey in activeDraftKeys()) {
+            _drafts.update { it.copy(error = "请先关闭正在编辑的草稿") }
+            return
+        }
         if (draft.draftKey in _drafts.value.deletingKeys) return
         pageJobs["deleteDraft:${draft.draftKey}"] = viewModelScope.launch {
             _drafts.update { it.copy(deletingKeys = it.deletingKeys + draft.draftKey, error = null) }
             try {
-                repository.deleteDraft(draft.draftKey, draft.sequence)
+                draftSyncLocks.getOrPut(draft.draftKey) { kotlinx.coroutines.sync.Mutex() }.withLock {
+                    if (generation != accountScopeGeneration) return@launch
+                    if (!draft.localOnly) repository.deleteDraft(draft.draftKey, draft.sequence)
+                    if (generation != accountScopeGeneration) return@launch
+                    accountDraftStore.remove(userId, draft.draftKey)
+                }
                 _drafts.update {
                     it.copy(
                         items = it.items.filterNot { item -> item.draftKey == draft.draftKey },
@@ -5713,16 +6150,34 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
-    fun openTopicCreator(initialCategoryId: Int? = null) {
-        if (_topicCreator.value.submitting || _topicCreator.value.savingDraft) return
+    fun openDrafts(onOpen: () -> Unit) {
+        if (_accounts.value.switching || store.sessionChanging) return
+        if (_state.value.username.isNullOrBlank()) {
+            Toast.makeText(getApplication(), "请先登录账号后发帖", Toast.LENGTH_SHORT).show()
+            addAccount()
+            return
+        }
+        onOpen()
+    }
+
+    fun openTopicCreator(initialCategoryId: Int? = null, newDraft: Boolean = false) {
+        if (_accounts.value.switching || store.sessionChanging) return
+        if (_topicCreator.value.open || _topicCreator.value.submitting || _topicCreator.value.savingDraft) return
+        if (_state.value.username.isNullOrBlank()) {
+            Toast.makeText(getApplication(), "请先登录账号后发帖", Toast.LENGTH_SHORT).show()
+            addAccount()
+            return
+        }
         if (!_categories.value.loaded && !_categories.value.loading) {
             loadCategories()
         }
         val validCategoryId = resolveCreatableCategoryId(initialCategoryId)
-        val existingNewTopicDraft = _drafts.value.items.firstOrNull { it.draftKey == "new_topic" }
+        // Discourse 支持 new_topic 前缀的独立草稿；新建不能覆盖旧稿，key 最长 40 字符。
+        val draftKey = if (newDraft) "new_topic_${java.util.UUID.randomUUID().toString().replace("-", "").take(24)}" else "new_topic"
+        val existingNewTopicDraft = _drafts.value.items.firstOrNull { it.draftKey == draftKey }
         val baseState = TopicCreatorUiState(
             open = true,
-            draftKey = "new_topic",
+            draftKey = draftKey,
             sequence = existingNewTopicDraft?.sequence ?: 0L,
             action = "createTopic",
             title = "",
@@ -5730,14 +6185,30 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             categoryId = validCategoryId,
             tags = emptyList(),
         )
-        _topicCreator.value = baseState.copy(savedSnapshot = baseState.currentSnapshot)
+        _topicCreator.value = baseState.copy(savedSnapshot = baseState.currentSnapshot, loadingDraft = true)
+        restoreSyncedDraft(draftKey)
         ensureTopicCreatorCategoryPermissions()
-        populateCreatorEmojisAndSequence("new_topic")
+        populateCreatorEmojis()
         loadTopicCreatorTags(validCategoryId)
+    }
+
+    private fun cacheSelectedDraft(draft: DraftItem): Boolean = try {
+        val userId = store.currentUserId()
+        if (userId > 0 && accountDraftStore.get(userId, draft.draftKey) == null) {
+            val content = SyncedDraftContent(raw = draft.raw, title = draft.title, categoryId = draft.categoryId,
+                tags = draft.tags, action = draft.action, topicId = draft.topicId,
+                replyToPostNumber = draft.replyToPostNumber, postId = draft.postId, archetype = draft.archetype)
+            accountDraftStore.put(userId, LocalSyncedDraft(draft.draftKey, content, content, draft.sequence))
+        }
+        true
+    } catch (_: Exception) {
+        _drafts.update { it.copy(error = "手机草稿暂不可读取，请稍后重试，原稿已保留") }
+        false
     }
 
     /** 如果是话题回复类草稿，直接打开该话题的回复栏并将草稿内容填入。 */
     fun openReplyWithDraft(draft: DraftItem) {
+        if (!cacheSelectedDraft(draft)) return
         val topicId = draft.topicId ?: return
         val target = if (draft.replyToPostNumber != null) {
             ComposerTarget.ReplyTo(topicId = topicId, postNumber = draft.replyToPostNumber, username = "")
@@ -5745,17 +6216,19 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             ComposerTarget.NewReply(topicId = topicId)
         }
         _composer.value = ComposerUiState(
-            target = target,
+            target = if (draft.action.startsWith("edit") && draft.postId != null) ComposerTarget.Edit(topicId, draft.postId, 1) else target,
             draft = draft.raw,
-            loadingDraft = false,
+            loadingDraft = true,
             submitting = false,
             uploading = false,
         )
+        restoreSyncedDraft(draft.draftKey)
     }
 
     /** 从草稿列表点击编辑，将草稿内容填入发布器。 */
     fun openDraftInCreator(draft: DraftItem) {
         if (_topicCreator.value.submitting || _topicCreator.value.savingDraft) return
+        if (!cacheSelectedDraft(draft)) return
         if (!_categories.value.loaded && !_categories.value.loading) {
             loadCategories()
         }
@@ -5774,26 +6247,17 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         )
         _topicCreator.value = baseState.copy(savedSnapshot = baseState.currentSnapshot)
         ensureTopicCreatorCategoryPermissions()
-        populateCreatorEmojisAndSequence(draft.draftKey)
+        _topicCreator.update { it.copy(loadingDraft = true) }
+        restoreSyncedDraft(draft.draftKey)
+        populateCreatorEmojis()
         loadTopicCreatorTags(validCategoryId)
     }
 
-    private fun populateCreatorEmojisAndSequence(targetDraftKey: String) {
+    private fun populateCreatorEmojis() {
         viewModelScope.launch {
             val emojis = runCatching { repository.emojiUrls() }.getOrDefault(emptyMap())
             if (emojis.isNotEmpty()) {
                 _topicCreator.update { if (it.open) it.copy(emojiUrls = emojis) else it }
-            }
-            if (!_drafts.value.loaded) {
-                runCatching { repository.fetchDrafts(burst = true) }.getOrNull()?.let { list ->
-                    _drafts.update { it.copy(items = list, loaded = true, loading = false, error = null) }
-                    val matched = list.firstOrNull { it.draftKey == targetDraftKey }
-                    if (matched != null) {
-                        _topicCreator.update {
-                            if (it.open && it.draftKey == targetDraftKey) it.copy(sequence = matched.sequence) else it
-                        }
-                    }
-                }
             }
         }
     }
@@ -5832,20 +6296,28 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun updateTopicCreatorTitle(title: String) {
+        if (_topicCreator.value.loadingDraft || _topicCreator.value.submitting) return
         _topicCreator.update { if (it.open) it.copy(title = title, error = null, notice = null) else it }
+        persistCreatorDraft()
     }
 
     fun updateTopicCreatorRaw(raw: String) {
+        if (_topicCreator.value.loadingDraft || _topicCreator.value.submitting) return
         _topicCreator.update { if (it.open) it.copy(raw = raw, error = null, notice = null) else it }
+        persistCreatorDraft()
     }
 
     fun updateTopicCreatorCategory(categoryId: Int?) {
+        if (_topicCreator.value.loadingDraft || _topicCreator.value.submitting) return
         _topicCreator.update { if (it.open) it.copy(categoryId = categoryId, error = null, notice = null) else it }
+        persistCreatorDraft()
         loadTopicCreatorTags(categoryId)
     }
 
     fun updateTopicCreatorTags(tags: List<String>) {
+        if (_topicCreator.value.loadingDraft || _topicCreator.value.submitting) return
         _topicCreator.update { if (it.open) it.copy(tags = tags.distinct(), error = null, notice = null) else it }
+        persistCreatorDraft()
     }
 
     fun clearTopicCreatorNotice() {
@@ -5855,17 +6327,22 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     fun closeTopicCreator() {
         val current = _topicCreator.value
         if (current.submitting || current.savingDraft) return
+        persistCreatorDraft()
+        scheduleDraftSync(current.draftKey, immediate = true)
         _topicCreator.value = TopicCreatorUiState()
+        loadDrafts(refresh = true, silent = true)
     }
 
     fun attachToTopicCreator(uri: Uri) {
         val current = _topicCreator.value
-        if (!current.open || current.uploading || current.submitting || current.savingDraft) return
+        val generation = accountScopeGeneration
+        if (!current.open || current.loadingDraft || current.uploading || current.submitting || current.savingDraft) return
         pageJobs["upload:creator"] = viewModelScope.launch {
             _topicCreator.update { it.copy(uploading = true, error = null, notice = null) }
             try {
                 val picked = withContext(Dispatchers.IO) { readPickedFile(uri) }
                 val uploaded = repository.uploadFile(picked.name, picked.mimeType, picked.bytes)
+                if (generation != accountScopeGeneration) return@launch
                 val isImg = uploaded.width > 0 || UploadLimits.isCompressibleImage(picked.name) ||
                     picked.mimeType.startsWith("image/")
                 val media = AttachedMedia(
@@ -5875,10 +6352,11 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                     isImage = isImg,
                 )
                 _topicCreator.update {
-                    if (!it.open) it.copy(uploading = false) else {
+                    if (!it.open || !(it.draftKey == current.draftKey)) it else {
                         it.copy(attachments = it.attachments + media, uploading = false)
                     }
                 }
+                persistCreatorDraft()
             } catch (error: CancellationException) {
                 throw error
             } catch (error: Exception) {
@@ -5890,46 +6368,24 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     fun removeTopicCreatorAttachment(id: String) {
         _topicCreator.update { it.copy(attachments = it.attachments.filterNot { a -> a.id == id }) }
+        persistCreatorDraft()
     }
 
     fun saveTopicDraft(closeAfterSave: Boolean = false) {
         val current = _topicCreator.value
         if (!current.open || !current.canSaveDraft) return
-        val rawToSave = assembleRaw(current.raw, current.attachments)
+        persistCreatorDraft()
+        val userId = store.currentUserId()
+        val generation = accountScopeGeneration
         pageJobs["saveDraft"] = viewModelScope.launch {
-            _topicCreator.update { it.copy(savingDraft = true, error = null, notice = null) }
-            try {
-                val newSeq = repository.saveDraft(
-                    draftKey = current.draftKey,
-                    sequence = current.sequence,
-                    title = current.title.trim(),
-                    raw = rawToSave,
-                    categoryId = current.categoryId,
-                    tags = current.tags,
-                    action = current.action,
-                    topicId = current.replyTopicId,
-                    replyToPostNumber = current.replyToPostNumber,
-                )
-                if (closeAfterSave) {
-                    _topicCreator.value = TopicCreatorUiState()
-                    Toast.makeText(getApplication(), "草稿已保存", Toast.LENGTH_SHORT).show()
-                } else {
-                    _topicCreator.update {
-                        val next = it.copy(
-                            sequence = newSeq,
-                            savingDraft = false,
-                            notice = "草稿已保存",
-                        )
-                        next.copy(savedSnapshot = next.currentSnapshot)
-                    }
-                }
-                loadDrafts(refresh = true, silent = true)
-            } catch (error: CancellationException) {
-                throw error
-            } catch (error: Exception) {
-                _topicCreator.update { it.copy(savingDraft = false, error = error.message ?: "保存草稿失败，请稍后重试") }
-                handlePageFailure(error) {}
+            _topicCreator.update { it.copy(savingDraft = true) }
+            val success = syncDraftNow(current.draftKey, userId, generation)
+            if (generation != accountScopeGeneration) return@launch
+            _topicCreator.update { it.copy(savingDraft = false) }
+            if (success && closeAfterSave && creatorDraftContent(_topicCreator.value) == creatorDraftContent(current)) {
+                _topicCreator.value = TopicCreatorUiState()
             }
+            loadDrafts(refresh = true, silent = true)
         }
     }
 
@@ -5940,18 +6396,24 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             _topicCreator.update { it.copy(error = "请先选择话题分类") }
             return
         }
+        persistCreatorDraft()
+        val content = creatorDraftContent(current)
+        if (content.archetype != "regular" || content.action !in setOf("createTopic", "reply")) {
+            _topicCreator.update { it.copy(error = "此类草稿请在网页继续编辑，手机已保留原稿") }
+            return
+        }
         val rawToSubmit = assembleRaw(current.raw, current.attachments)
         pageJobs["createTopic"] = viewModelScope.launch {
             _topicCreator.update { it.copy(submitting = true, error = null, notice = null) }
             try {
                 if (current.isReplyDraft) {
                     val targetTopicId = requireNotNull(current.replyTopicId)
-                    when (val result = repository.createPost(
+                    when (val result = submitWithDraftSnapshot(current.draftKey, content) { publishKey -> repository.createPost(
                         topicId = targetTopicId,
                         raw = rawToSubmit,
                         replyToPostNumber = current.replyToPostNumber,
-                        draftKey = current.draftKey,
-                    )) {
+                        draftKey = publishKey,
+                    ) }) {
                         is PostResult.Success -> {
                             applyCreatedPost(targetTopicId, result.post)
                             _drafts.update { state -> state.copy(items = state.items.filterNot { it.draftKey == current.draftKey }) }
@@ -5965,13 +6427,13 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                         }
                     }
                 } else {
-                    when (val result = repository.createTopic(
+                    when (val result = submitWithDraftSnapshot(current.draftKey, content) { publishKey -> repository.createTopic(
                         title = current.title,
                         raw = rawToSubmit,
                         categoryId = current.categoryId,
                         tags = current.tags,
-                        draftKey = current.draftKey,
-                    )) {
+                        draftKey = publishKey,
+                    ) }) {
                         is PostResult.Success -> {
                             val newTopicId = result.post.topicId ?: 0L
                             _drafts.update { state -> state.copy(items = state.items.filterNot { it.draftKey == current.draftKey }) }
@@ -6134,11 +6596,6 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 }
             }
         }
-    }
-
-    /** 列表批次只复用原生字段与本地缓存，不再额外搜索或拉取每条话题。 */
-    fun prefetchTopicExcerpts(topics: List<Topic>) {
-        ExcerptCache.loadBatchFromStore(topics.map { it.id })
     }
 
     private fun clearExcerptPrefetchState() {
@@ -6635,8 +7092,29 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     /** 快速跳转到指定楼层（抢占式单飞请求，自动取消旧在途任务，杜绝并发与 CF 风控）。 */
     fun jumpToFloor(topicId: Long, postNumber: Int) {
         val current = _details.value[topicId] ?: return
-        pageJobs["topic:$topicId"]?.cancel()
-        loadTopic(topicId, postNumber = postNumber)
+        pageJobs.remove("topic:$topicId")?.cancel()
+        val ready = current.copy(loading = false, refreshing = false, error = null)
+        val loadedTarget = resolveLoadedTopicFloor(ready.posts, ready.topic?.postStream?.stream.orEmpty(), postNumber)
+        if (loadedTarget != null) {
+            // 已加载楼层只更新定位，不重新进入话题、刷新缓存或发起网络请求。
+            _details.update { it + (topicId to ready.copy(
+                locatePostNumber = loadedTarget.postNumber,
+                locateVersion = ready.locateVersion + 1,
+            )) }
+            updateCachedTopicDetail(topicId, refreshTtl = false)
+            if (loadedTarget.postNumber != postNumber) {
+                setNoticeMessage(topicId, "第 $postNumber 楼不可用，已定位到第 ${loadedTarget.postNumber} 楼")
+            }
+            return
+        }
+        _details.update { it + (topicId to ready) }
+        updateCachedTopicDetail(topicId, refreshTtl = false)
+        loadTopic(topicId, postNumber = postNumber, restoredPosition = TopicReadingPosition(
+            postNumber = postNumber,
+            atTop = false,
+            filterUserId = ready.filterUserId,
+            descending = ready.descending,
+        ))
     }
 
     fun loadReplies(topicId: Long, postId: Long) {
@@ -6901,6 +7379,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                     beforeDispatch = ::checkBeforeDispatch,
                 )
                 ApiQuotaPool.INCOMING_PROBE.onSuccess()
+                scrollBusySignal.awaitIdle()
                 if (!canProbe() || probeGen != incomingProbeGeneration) return
                 updateListCounters(freshPage.items)
                 val latestCategoryState = _categoryTopics.value[categoryId] ?: return
@@ -6913,8 +7392,9 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 }
                 if (incoming.isNotEmpty()) {
                     val incomingIds = incoming.map { it.topic.id }.toSet()
-                    // 1. 先从本地持久库快速载入已有缓存
                     ExcerptCache.loadBatchFromStore(freshPage.items.map { it.topic.id })
+                    scrollBusySignal.awaitIdle()
+                    if (!canProbe() || probeGen != incomingProbeGeneration) return
                     _categoryTopics.update { current ->
                         val existing = current[categoryId] ?: return@update current
                         current + (categoryId to existing.copy(
@@ -6933,6 +7413,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                     beforeDispatch = ::checkBeforeDispatch,
                 )
                 ApiQuotaPool.INCOMING_PROBE.onSuccess()
+                scrollBusySignal.awaitIdle()
                 if (!canProbe() || probeGen != incomingProbeGeneration) return
                 updateListCounters(freshPage.items)
                 val latestFeedState = _feedStates.value[feed] ?: return
@@ -6945,8 +7426,9 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 }
                 if (incoming.isNotEmpty()) {
                     val incomingIds = incoming.map { it.topic.id }.toSet()
-                    // 1. 先从本地持久库快速载入已有缓存
                     ExcerptCache.loadBatchFromStore(freshPage.items.map { it.topic.id })
+                    scrollBusySignal.awaitIdle()
+                    if (!canProbe() || probeGen != incomingProbeGeneration) return
                     _feedStates.update { current ->
                         val existing = current[feed] ?: return@update current
                         current + (feed to existing.copy(
@@ -6987,7 +7469,6 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 }
                 return
             }
-            ExcerptCache.loadBatchFromStore(pending.items.map { it.topic.id })
             val newItems = (pending.items + current.items).distinctBy { it.topic.id }
             val refreshedIds = pending.items.map { it.topic.id }.toSet()
             val highlightJobKey = "incoming-highlight:category:$categoryId"
@@ -7020,7 +7501,6 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 }
                 return
             }
-            ExcerptCache.loadBatchFromStore(pending.items.map { it.topic.id })
             val newItems = (pending.items + current.items).distinctBy { it.topic.id }
             // 高亮表示本轮刷新覆盖的整批话题，不能复用仅用于提示计数的“新动态”子集。
             val refreshedIds = pending.items.map { it.topic.id }.toSet()
@@ -7239,21 +7719,28 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 val sortAscending = _topicSortAscending.value.takeIf { sortOrder != null }
                 val result = repository.fetchCategoryTopics(slug, id, page, order = sortOrder, ascending = sortAscending)
                 ExcerptCache.loadBatchFromStore(result.items.map { it.topic.id })
-                val items = if (more) (previous.items + result.items).distinctBy { it.topic.id } else result.items
                 // 对齐通知分页：防死循环检测页码推进，而非条目增加。高频重叠由页码单调递增穿透。
                 val hasMore = result.hasMore && result.items.isNotEmpty() && (!more || page > previous.page)
-                _categoryTopics.update { it + (id to TopicListUiState(
-                    items = items,
-                    page = page,
-                    hasMore = hasMore,
-                    initialLoading = false,
-                    pendingPage = if (page == 0) null else previous.pendingPage,
-                    incomingTopicIds = if (page == 0) emptySet() else previous.incomingTopicIds,
-                )) }
+                _categoryTopics.update { states ->
+                    val latest = states[id] ?: return@update states
+                    val items = if (more) (latest.items + result.items).distinctBy { it.topic.id } else result.items
+                    states + (id to TopicListUiState(
+                        items = items,
+                        page = page,
+                        hasMore = hasMore,
+                        initialLoading = false,
+                        pendingPage = if (more) latest.pendingPage else null,
+                        incomingTopicIds = if (more) latest.incomingTopicIds else emptySet(),
+                        highlightedTopicIds = if (more) latest.highlightedTopicIds else emptySet(),
+                    ))
+                }
             } catch (error: CancellationException) {
                 throw error
             } catch (error: Exception) {
-                _categoryTopics.update { it + (id to previous.copy(initialLoading = false, error = error.message ?: "加载失败")) }
+                _categoryTopics.update { states ->
+                    val latest = states[id] ?: return@update states
+                    states + (id to latest.copy(initialLoading = false, error = error.message ?: "加载失败"))
+                }
                 handlePageFailure(error) { loadCategory(id, slug, refresh = !more, more = more) }
             } finally {
                 _categoryTopics.update { states -> states[id]?.let {
@@ -7584,7 +8071,7 @@ fun openTopicSearch(topicId: Long, title: String) {
                 } }
                 if (generation == accountScopeGeneration && userId == store.currentUserId()) {
                     publishSavedTopics(saved)
-                    _history.update { it.copy(entries = container.historyStore.entries(userId)) }
+                    _history.update { it.copy(entries = container.historyStore.syncedEntries(userId)) }
                 }
             } catch (error: CancellationException) { throw error }
             catch (error: Exception) { diagnostics.log("话题信息本地同步失败: ${error.message}") }
@@ -7691,6 +8178,27 @@ fun openTopicSearch(topicId: Long, title: String) {
 
     init {
         val app = getApplication<Application>()
+        viewModelScope.launch {
+            container.chatRealtime.state.collect { live ->
+                if (live.generation == store.sessionGeneration) _chat.update {
+                    it.copy(channels = live.channels, loadingChannels = live.loading, channelsError = live.error)
+                }
+            }
+        }
+        viewModelScope.launch {
+            container.chatRealtime.events.collect { event ->
+                if (event.generation != store.sessionGeneration) return@collect
+                if (event.resync) {
+                    container.chatRealtime.visibleChannelId?.let { loadChatRoom(it, refresh = true) }
+                } else if (event.channelId in _chat.value.messagesByChannel || event.channelId == container.chatRealtime.visibleChannelId) {
+                    _chat.update { current ->
+                        val messages = mergeChatMessages(current.messagesByChannel[event.channelId].orEmpty(), listOfNotNull(event.message))
+                            .filterNot { it.id in event.deletedIds }
+                        current.copy(messagesByChannel = current.messagesByChannel + (event.channelId to messages))
+                    }
+                }
+            }
+        }
         ExcerptCache.initialize(TopicOpStore(app))
         repository.onAutoHealRequested = {
             selfHealNetwork(context = null, silent = true)
@@ -8446,6 +8954,7 @@ fun openTopicSearch(topicId: Long, title: String) {
 
     fun refreshAccounts() {
         if (_accounts.value.switching || store.sessionChanging) return
+        _seeSignatures.value = store.isSeeSignaturesEnabled()
         try {
             _state.value.username?.let { username ->
                 val userId = store.currentUserId()
@@ -8860,7 +9369,7 @@ fun openTopicSearch(topicId: Long, title: String) {
             _savedTopicsNotice.value = "暂存列表读取失败，请重新打开应用后重试"
             emptyList()
         })
-        _history.value = HistoryUiState(entries = container.historyStore.entries())
+        _history.value = HistoryUiState(entries = container.historyStore.syncedEntries())
         val blocked = repository.getBlockedUsers(userId)
         _blockedUsers.value = blocked
         blockedUsernames.value = blocked.map { it.username.lowercase() }.toSet()
@@ -8870,6 +9379,9 @@ fun openTopicSearch(topicId: Long, title: String) {
     }
 
     private fun clearAccountScopedState() {
+        container.chatRealtime.reset()
+        chatSyncedMessageIds.clear()
+        _pendingChatChannel.value = null
         signatureSyncJob?.cancel()
         signatureSyncJob = null
         _signatureSyncBusy.value = false
@@ -8878,6 +9390,11 @@ fun openTopicSearch(topicId: Long, title: String) {
         lastSignatureSyncAttemptElapsed = 0L
         org.linuxdo.android.ui.screen.SignatureMediaLoader.clearAccountScopedCache()
         accountScopeGeneration += 1
+        readOutboxJob?.cancel()
+        draftSyncJobs.values.forEach { it.cancel() }
+        draftSyncJobs.clear()
+        _draftConflict.value = null
+        dismissedDraftConflicts.clear()
         verificationAttempt++
         verificationProbePath = null
         readSyncVerificationProbePath = null
@@ -8924,8 +9441,6 @@ fun openTopicSearch(topicId: Long, title: String) {
         readReportJobs.values.forEach { it.cancel() }
         readReportJobs.clear()
         TopicRepository.clearTimingsCache()
-        readSendJobs.values.forEach { it.cancel() }
-        readSendJobs.clear()
         readTrackers.clear()
         activeTopicIds.clear()
         currentVisiblePostsByTopic.clear()
@@ -8942,7 +9457,7 @@ fun openTopicSearch(topicId: Long, title: String) {
         _profile.value = emptyMap()
         _userBadges.value = null
         _isUserBadgesLoading.value = false
-        notificationCache.clear()
+        notificationCache.value = emptyMap()
         _notificationFilter.value = NotificationFilter.All
         _pendingNotificationTarget.value = null
         synchronized(pendingNotificationRefreshTopics) {
@@ -8966,6 +9481,7 @@ fun openTopicSearch(topicId: Long, title: String) {
         cdkScoreJob?.cancel()
         cdkScoreJob = null
         cdkScoreBackoffUntil = 0L
+        cdkAuthorizationOpen = false
         _cdkScore.value = CdkScoreUiState()
         idleWarmupJob?.cancel()
         idleWarmupJob = null
@@ -9378,16 +9894,18 @@ fun openTopicSearch(topicId: Long, title: String) {
                     if (cat != item.category) item.copy(category = cat) else item
                 }
             } else result.items
-            val existing = _feedStates.value[feed]?.items ?: emptyList()
             ExcerptCache.loadBatchFromStore(freshItems.map { it.topic.id })
+            if (requestScopeGeneration != accountScopeGeneration) return
+            // 分页等待期间可能已经合并了提示条的新话题，使用当前状态。
+            val latest = _feedStates.value[feed] ?: loadingState
             val merged = if (page == 0) {
                 freshItems.distinctBy { it.topic.id }
             } else {
-                (existing + freshItems).distinctBy { it.topic.id }
+                (latest.items + freshItems).distinctBy { it.topic.id }
             }
             // 对齐通知分页：防死循环检测页码推进，而非条目增加。高频重叠由页码单调递增穿透。
             val hasMore = result.hasMore && result.items.isNotEmpty() && (page == 0 || page > current.page)
-            val newState = current.copy(
+            val newState = latest.copy(
                 items = merged,
                 page = page,
                 hasMore = hasMore,
@@ -9395,8 +9913,9 @@ fun openTopicSearch(topicId: Long, title: String) {
                 loadingMore = false,
                 initialLoading = false,
                 error = null,
-                pendingPage = if (page == 0) null else current.pendingPage,
-                incomingTopicIds = if (page == 0) emptySet() else current.incomingTopicIds,
+                pendingPage = if (page == 0) null else latest.pendingPage,
+                incomingTopicIds = if (page == 0) emptySet() else latest.incomingTopicIds,
+                highlightedTopicIds = if (page == 0) emptySet() else latest.highlightedTopicIds,
             )
             _feedStates.update { it + (feed to newState) }
             if (_state.value.homeFeed == feed) {
@@ -9421,7 +9940,7 @@ fun openTopicSearch(topicId: Long, title: String) {
             }
         } catch (error: HttpStatusException) {
             if (requestScopeGeneration != accountScopeGeneration) return
-            val msg = if (error.status == 403 && (_state.value.username == null || (feed == HomeFeedType.Unread || feed == HomeFeedType.Posted))) {
+            val msg = if (error.status == 403 && _state.value.username == null) {
                 "请先登录账号后查看${feed.label}"
             } else {
                 error.message ?: "加载失败 (HTTP ${error.status})"

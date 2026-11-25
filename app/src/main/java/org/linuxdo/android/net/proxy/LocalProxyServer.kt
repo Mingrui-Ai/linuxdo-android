@@ -124,7 +124,10 @@ class LocalProxyServer(
         /** 取消 WebView 代理挂载（让渡系统网络 / VPN） */
         fun clearWebViewProxyOverride(onCleared: (() -> Unit)? = null) {
             webViewProxyActive = false
-            if (!WebViewFeature.isFeatureSupported(WebViewFeature.PROXY_OVERRIDE)) return
+            if (!WebViewFeature.isFeatureSupported(WebViewFeature.PROXY_OVERRIDE)) {
+                onCleared?.invoke()
+                return
+            }
             ProxyController.getInstance().clearProxyOverride({ it.run() }) {
                 Log.i(TAG, "WebView ProxyController cleared")
                 onCleared?.invoke()

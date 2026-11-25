@@ -91,7 +91,7 @@ class UserApiKeyAuthService(
         diagnostics.log("生成 User API Key 授权参数: clientId=$clientId, nonce=$nonce")
 
         return Uri.parse("${Config.BASE_URL}/user-api-key/new").buildUpon()
-            .appendQueryParameter("application_name", "LINUX DO")
+            .appendQueryParameter("application_name", "LinuxDo 增强版")
             .appendQueryParameter("client_id", clientId)
             .appendQueryParameter("scopes", "one_time_password")
             .appendQueryParameter("public_key", pem)

@@ -104,6 +104,7 @@ import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.graphics.StrokeCap
@@ -245,8 +246,10 @@ import org.linuxdo.android.data.TreePost
 import org.linuxdo.android.data.DEFAULT_SUB_REPLY_LIMIT
 import org.linuxdo.android.data.threadRows
 import org.linuxdo.android.data.postAncestorIds
+import org.linuxdo.android.data.resolveTopicFloor
 import org.linuxdo.android.data.InternalTopicLink
 import org.linuxdo.android.data.parseInternalTopicUrl
+import org.linuxdo.android.data.parseInternalUserProfileUrl
 import org.linuxdo.android.ui.IosTextAction
 import org.linuxdo.android.ui.ComposerTarget
 import org.linuxdo.android.ui.ComposerUiState
@@ -257,6 +260,7 @@ import org.linuxdo.android.ui.format.RelativeTime
 import org.linuxdo.android.ui.html.CookedBlock
 import org.linuxdo.android.ui.html.CookedParser
 import org.linuxdo.android.ui.html.InlineText
+import org.linuxdo.android.ui.html.boostInlineText
 import org.linuxdo.android.ui.html.isDownloadableAttachmentUrl
 import org.linuxdo.android.ui.html.isImageLinkUrl
 import org.linuxdo.android.net.IMAGE_AUTO_RETRY_LIMIT
@@ -465,6 +469,7 @@ fun TopicDetailScreen(
     onDeleteBoost: (Long, Long) -> Unit,
     onFlagBoost: (Long, Long, Int, String?) -> Unit = { _, _, _, _ -> },
     onOpenUser: (String, String?, String?, String?) -> Unit = { _, _, _, _ -> },
+    onOpenUserProfile: (String) -> Unit,
     onRefreshPost: (Long) -> Unit,
     onSolution: (Long) -> Unit,
     composer: ComposerUiState,
@@ -523,7 +528,7 @@ fun TopicDetailScreen(
     val explicitLocateVersion = if (state.locatePostNumber != null) state.locateVersion else 0
     var located by rememberSaveable(locateTarget, explicitLocateVersion) { mutableStateOf(locateTarget == null) }
     var highlightedPost by remember { mutableStateOf<Long?>(null) }
-    var showJumpBar by remember { mutableStateOf(false) }
+    var showJumpBar by remember(topicId, showTopicScrollbar) { mutableStateOf(false) }
     var pendingTargetFloor by rememberSaveable { mutableStateOf<Int?>(null) }
     var manageTarget by remember { mutableStateOf<Post?>(null) }
     var deleteTarget by remember { mutableStateOf<Post?>(null) }
@@ -631,14 +636,21 @@ fun TopicDetailScreen(
     val preparationAnchor by remember { derivedStateOf {
         list.layoutInfo.visibleItemsInfo.firstNotNullOfOrNull { postIdFromListKey(it.key) }
     } }
-    LaunchedEffect(state.posts, active, preparationAnchor) {
+    LaunchedEffect(state.posts, active, preparationAnchor, pendingTargetFloor, locateTarget) {
         if (!active) return@LaunchedEffect
         val postsById = state.posts.associateBy { it.id }
         preparedBodies = preparedBodies.filter { (id, body) -> postsById[id]?.let(body::matches) == true }
         val visibleIds = list.layoutInfo.visibleItemsInfo.mapNotNull { postIdFromListKey(it.key) }.toSet()
-        val targetFloor = initialPosition?.postNumber ?: initialPostNumber
+        val requestedFloor = pendingTargetFloor ?: locateTarget ?: initialPosition?.postNumber
+        val targetFloor = requestedFloor?.let { resolveTopicFloor(state.posts, it)?.postNumber }
         val pending = state.posts.filter { post -> preparedBodies[post.id]?.matches(post) != true }
-            .sortedBy { if (it.id in visibleIds || it.postNumber == targetFloor) 0 else 1 }
+            .sortedBy {
+                when {
+                    it.postNumber == targetFloor -> 0
+                    it.id in visibleIds -> 1
+                    else -> 2
+                }
+            }
         for (post in pending) {
             val body = withContext(Dispatchers.Default) {
                 val blocks = try {
@@ -698,8 +710,8 @@ fun TopicDetailScreen(
     val nearEnd by remember { derivedStateOf {
         (list.layoutInfo.visibleItemsInfo.lastOrNull()?.index ?: -1) >= list.layoutInfo.totalItemsCount - 6
     } }
-    LaunchedEffect(active, nearEnd, state.loading, state.consumedIds.size, state.error, located) {
-        if (active && located && nearEnd && !state.loading && state.error == null &&
+    LaunchedEffect(active, nearEnd, state.loading, state.consumedIds.size, state.error, located, pendingTargetFloor) {
+        if (active && located && pendingTargetFloor == null && nearEnd && !state.loading && state.error == null &&
             state.posts.isNotEmpty() && state.remaining.any { it !in state.realtimePostIds }) onLoadMore()
     }
     // 真实屏幕可见楼层提取（对齐 Fluxdo 与 Discourse screen-track.js：只要帖子与视口有交集即计入可见）
@@ -749,6 +761,7 @@ fun TopicDetailScreen(
         }
     }
     val hasSideNavigation = showTopicScrollbar && effectiveFloorTotal > 1 && rows.isNotEmpty()
+    val hasBottomNavigation = !showTopicScrollbar && effectiveFloorTotal > 3 && !firstPostVisible
     val readingFloorIndicator by remember(rows, list.firstVisibleItemIndex, effectiveFloorTotal, treeView, state.descending) {
         derivedStateOf {
             val visibleIds = list.layoutInfo.visibleItemsInfo.mapNotNull { postIdFromListKey(it.key) }.toSet()
@@ -822,6 +835,14 @@ fun TopicDetailScreen(
         val sliceIndex = slices.indexOfFirst { it.row.post.id == postId }.takeIf { it >= 0 } ?: slices.size
         val count = preparedBodies[postId]?.parts?.size ?: 1
         return 1 + topErrorCount + orderBarBefore + gapBefore + sliceIndex + partIndex.coerceIn(0, count - 1)
+    }
+
+    suspend fun scrollToFloor(rowIndex: Int) {
+        // 负偏移把目标回复的开头放到阅读区域中部，避免被顶部固定栏挡住。
+        // 列表两端由 LazyColumn 自行夹紧，不通过长距离动画经过中间楼层。
+        val layout = list.layoutInfo
+        val centerOffset = -((layout.viewportSize.height - layout.afterContentPadding).coerceAtLeast(0) / 2)
+        list.scrollToItem(lazyIndexOf(rowIndex), centerOffset)
     }
 
     LaunchedEffect(active, state.loading, preparedBodies, rows, savedPositionRestored) {
@@ -909,7 +930,7 @@ fun TopicDetailScreen(
         if (targetIndex >= 0) {
             val targetId = rows[targetIndex].post.id
             scope.launch {
-                list.animateScrollToItem(lazyIndexOf(targetIndex))
+                scrollToFloor(targetIndex)
                 highlightedPost = targetId
             }
         }
@@ -918,54 +939,23 @@ fun TopicDetailScreen(
     val performJumpToFloor: (Int) -> Unit = performJumpToFloor@{ targetFloor ->
         val clamped = targetFloor.coerceIn(1, effectiveFloorTotal)
         if (clamped == 1 && !state.descending && showPreviousGap) {
+            pendingTargetFloor = null
             scope.launch { list.scrollToItem(0) }
             onReloadFromStart()
             return@performJumpToFloor
         }
-        if (treeView) {
-            // 楼中楼模式: 目标只对齐到主楼(depth == 0)
-            val rootRows = rows.filter { it.depth == 0 }
-            val directHit = rootRows.firstOrNull { it.post.postNumber == clamped }
-            if (directHit != null) {
-                scope.launch {
-                    val targetIdx = rows.indexOfFirst { it.post.id == directHit.post.id }
-                    if (targetIdx >= 0) {
-                        list.animateScrollToItem(lazyIndexOf(targetIdx))
-                        highlightedPost = directHit.post.id
-                    }
-                }
-                return@performJumpToFloor
-            }
-            val localPost = state.posts.firstOrNull { it.postNumber == clamped }
-            if (localPost != null) {
-                // 如果命中且是子回复，对齐到离目标楼层最近的一级主楼
-                val matchedLocal = rootRows.minByOrNull { kotlin.math.abs(it.post.postNumber - clamped) }
-                val effectiveTarget = matchedLocal?.post ?: localPost
-                scope.launch {
-                    val targetIdx = rows.indexOfFirst { it.post.id == effectiveTarget.id }
-                    if (targetIdx >= 0) {
-                        list.animateScrollToItem(lazyIndexOf(targetIdx))
-                        highlightedPost = effectiveTarget.id
-                    }
-                }
-                return@performJumpToFloor
-            }
-        } else {
-            val localTarget = state.posts.firstOrNull { it.postNumber == clamped }
-            if (localTarget != null) {
-                scope.launch {
-                    val targetIdx = rows.indexOfFirst { it.post.postNumber == clamped }
-                    if (targetIdx >= 0) {
-                        list.animateScrollToItem(lazyIndexOf(targetIdx))
-                        highlightedPost = localTarget.id
-                    }
-                }
-                return@performJumpToFloor
-            }
-        }
-        // 远端抢占式跳转: 移除 !state.loading 阻断，即刻响应用户操作
-        pendingTargetFloor = clamped
-        onJumpToFloor(clamped)
+        // 本地和远端选楼统一直接定位，避免跨过大量富文本回复播放滚动动画。
+        // 经过 ViewModel 取消旧请求，防止先选远端、再选本地时被旧结果拉回去。
+        val target = if (treeView && state.posts.any { it.postNumber == clamped }) {
+            rows.asSequence().filter { it.depth == 0 }
+                .minByOrNull { abs(it.post.postNumber - clamped) }?.post?.postNumber ?: clamped
+        } else clamped
+        pendingTargetFloor = target
+        onJumpToFloor(target)
+    }
+
+    LaunchedEffect(state.error) {
+        if (state.error != null) pendingTargetFloor = null
     }
 
     // 切换正/倒序后把视口带回评论区头部,否则用户会停在原先的滚动偏移上、看不出顺序变了。
@@ -979,25 +969,38 @@ fun TopicDetailScreen(
         list.scrollToItem(1 + topErrorCount + headSlices.size)
     }
 
-    LaunchedEffect(active, locateTarget, pendingTargetFloor, state.posts, rows, treeView, state.loading, state.error, located, state.previousIds.isNotEmpty(), explicitLocateVersion) {
+    val locatePost = remember(state.posts, pendingTargetFloor, locateTarget) {
+        val number = pendingTargetFloor ?: locateTarget
+        number?.let { resolveTopicFloor(state.posts, it) }
+    }
+    val locateRowPost = remember(locatePost, rows, treeView, pendingTargetFloor) {
+        if (treeView && pendingTargetFloor != null && locatePost != null) {
+            rows.asSequence().filter { it.depth == 0 }
+                .minByOrNull { abs(it.post.postNumber - locatePost.postNumber) }?.post ?: locatePost
+        } else locatePost
+    }
+    // 居中定位会把目标前面的楼层留在视口内。它们从占位展开为正文/多个切片时，
+    // LazyColumn 保持的是首个可见项的位置，目标就会被挤走；先准备好目标及其前序正文。
+    val locateRowIndex = rows.indexOfFirst { it.post.id == locateRowPost?.id }
+    val locateBodyReady = locateRowIndex >= 0 && rows.take(locateRowIndex + 1).all { row ->
+        preparedBodies[row.post.id]?.matches(row.post) == true
+    }
+    LaunchedEffect(active, locateTarget, pendingTargetFloor, state.posts, rows, locateBodyReady, treeView, state.loading, state.error, located, state.previousIds.isNotEmpty(), explicitLocateVersion) {
         val targetLocateNumber = pendingTargetFloor ?: locateTarget
         val needLocate = (!located && locateTarget != null) || pendingTargetFloor != null
         if (active && needLocate && !state.loading && state.error == null && targetLocateNumber != null && (savedPositionRestored || initialPosition == null)) {
             // 目标楼层可能已被删除(抽楼)或超出当前加载范围。此时不能直接 return，
             // 否则 located 永远为 false，会连带锁死倒序切换等依赖它的逻辑。
             // 降级为「第一个不小于目标楼层的可见楼层」，再不行就按帖子顺序找最近的一层。
-            val target = state.posts.firstOrNull { it.postNumber == targetLocateNumber }
-                ?: state.posts.firstOrNull { it.postNumber >= targetLocateNumber }
-                ?: state.posts.minByOrNull { kotlin.math.abs(it.postNumber - targetLocateNumber) }
-                ?: run { located = true; pendingTargetFloor = null; return@LaunchedEffect }
+            val target = locatePost ?: run { located = true; pendingTargetFloor = null; return@LaunchedEffect }
             val isUserJump = pendingTargetFloor != null
             if (treeView && isUserJump) {
                 // 楼中楼模式下的用户手动跳转: 严格对齐到主楼(depth == 0), 绝不跳进子回复层
-                val rootTargetRow = rows.filter { it.depth == 0 }.minByOrNull { kotlin.math.abs(it.post.postNumber - target.postNumber) }
-                val effectivePost = rootTargetRow?.post ?: target
+                val effectivePost = locateRowPost ?: target
                 val index = rows.indexOfFirst { it.post.id == effectivePost.id }
+                if (index >= 0 && !locateBodyReady) return@LaunchedEffect
                 if (index >= 0) {
-                    list.scrollToItem(lazyIndexOf(index))
+                    scrollToFloor(index)
                     highlightedPost = effectivePost.id
                 }
             } else {
@@ -1009,18 +1012,19 @@ fun TopicDetailScreen(
                     if (needUncollapse || needExpand) {
                         if (needUncollapse) collapsed = collapsed.filterNot { it in ancestors }
                         if (needExpand) expanded = (expanded + ancestors).distinct()
-                        withFrameNanos { }
-                        withFrameNanos { }
+                        // 等新 rows 生效后再算索引，不能继续使用展开前捕获的列表。
+                        return@LaunchedEffect
                     }
                 }
                 val index = rows.indexOfFirst { it.post.postNumber == anchorPostNumber }
+                if (index >= 0 && !locateBodyReady) return@LaunchedEffect
                 if (index >= 0) {
-                    list.scrollToItem(lazyIndexOf(index))
+                    scrollToFloor(index)
                     withFrameNanos { }
                     if (list.layoutInfo.visibleItemsInfo.none { postIdFromListKey(it.key) == target.id }) {
-                        list.scrollToItem(lazyIndexOf(index))
+                        scrollToFloor(index)
                     }
-                    if (isUserJump) highlightedPost = target.id
+                    highlightedPost = target.id
                 }
             }
             // 无论是否滚动成功都终结定位，避免状态悬挂。
@@ -1356,7 +1360,10 @@ fun TopicDetailScreen(
     CompositionLocalProvider(
         LocalOpenTopic provides onOpenTopic,
         LocalSelectionResetKey provides selectionResetKey,
-        LocalOpenExternalUrl provides { browserUrl = it },
+        LocalOpenExternalUrl provides { url ->
+            val username = parseInternalUserProfileUrl(url)
+            if (username != null) onOpenUserProfile(username) else browserUrl = url
+        },
         LocalVotePoll provides onVotePoll,
         LocalPollBusy provides { postId -> postId in state.reactingPosts },
         LocalPollError provides { postId -> state.reactionErrors[postId] },
@@ -1594,9 +1601,9 @@ fun TopicDetailScreen(
                                 }
                             }
                         }
-                        if (hasSideNavigation && !showJumpBar) {
+                        if (hasSideNavigation) {
                             TopicFloorScrollbar(
-                                currentFloor = readingFloorIndicator.rootFloor,
+                                currentFloor = pendingTargetFloor ?: readingFloorIndicator.rootFloor,
                                 total = effectiveFloorTotal,
                                 descending = state.descending,
                                 onJumpToFloor = { floor ->
@@ -1613,7 +1620,7 @@ fun TopicDetailScreen(
                         }
 
                         // 全屏透明遮罩: 当跳楼浮卡展开时，点击任意外部区域收起浮卡
-                        if (showJumpBar) {
+                        if (!showTopicScrollbar && showJumpBar) {
                             Box(
                                 modifier = Modifier
                                     .fillMaxSize()
@@ -1626,7 +1633,7 @@ fun TopicDetailScreen(
 
                         // 快速跳楼浮卡: 悬浮在左下角胶囊上方
                         androidx.compose.animation.AnimatedVisibility(
-                            visible = showJumpBar,
+                            visible = !showTopicScrollbar && showJumpBar,
                             enter = fadeIn() + slideInVertically { it / 2 },
                             exit = fadeOut() + slideOutVertically { it / 2 },
                             modifier = Modifier
@@ -1647,7 +1654,7 @@ fun TopicDetailScreen(
 
                         // 左下角放阅读进度胶囊，右下角放回复按钮，配合列表底部 76dp 留白，彻底避免遮挡最后一条评论的操作栏。
                         // 支持点击左侧回到 1 楼、点击右侧打开跳楼卡片、长按任意区域触感震动并打开跳楼卡片。
-                        if (effectiveFloorTotal > 3 && !firstPostVisible) {
+                        if (hasBottomNavigation) {
                             ReadingProgressPill(
                                 indicator = readingFloorIndicator,
                                 savedCount = savedTopicCount,
@@ -1666,7 +1673,7 @@ fun TopicDetailScreen(
                                 },
                             )
                         }
-                        if (savedTopicCount > 0 && (effectiveFloorTotal <= 3 || firstPostVisible)) {
+                        if (savedTopicCount > 0 && !hasBottomNavigation) {
                             org.linuxdo.android.ui.SavedTopicChip(
                                 savedTopicCount, onOpenSavedTopics,
                                 Modifier.align(Alignment.BottomStart).padding(start = 12.dp, bottom = 16.dp),
@@ -2751,34 +2758,41 @@ private fun TopicFloorScrollbar(
     modifier: Modifier = Modifier,
 ) {
     val latestJump by rememberUpdatedState(onJumpToFloor)
+    val latestFloor by rememberUpdatedState(currentFloor)
     var dragFraction by remember(total, descending) { mutableStateOf<Float?>(null) }
     var pressed by remember(total, descending) { mutableStateOf(false) }
-    val interacting = pressed || dragFraction != null
+    val dragging by remember(total, descending) { derivedStateOf { dragFraction != null } }
+    val interacting by remember(total, descending) { derivedStateOf { pressed || dragging } }
     val railAlpha by animateFloatAsState(
-        targetValue = if (interacting) 1f else 0.22f,
-        animationSpec = tween(durationMillis = if (interacting) 0 else 250),
+        targetValue = if (interacting) 0.9f else 0.4f,
+        animationSpec = tween(durationMillis = if (interacting) 0 else 180),
         label = "floor-navigation-opacity",
     )
-    val fraction = dragFraction ?: TopicFloorNavigation.fractionOfFloor(currentFloor, total, descending)
-    val previewFloor = TopicFloorNavigation.floorAtFraction(fraction, total, descending)
+    // 每个触摸采样只更新绘制/位置；楼层文字仅在实际选中楼层变化时更新。
+    val fraction = remember(total, descending) {
+        derivedStateOf { dragFraction ?: TopicFloorNavigation.fractionOfFloor(latestFloor, total, descending) }
+    }
+    val previewFloor = remember(total, descending) {
+        derivedStateOf { TopicFloorNavigation.floorAtFraction(fraction.value, total, descending) }
+    }
     val accent = IosTheme.colors.accent
 
     BoxWithConstraints(modifier.fillMaxWidth()) {
         val density = LocalDensity.current
-        val thumbHeight = minOf(44.dp, maxHeight)
+        val thumbHeight = minOf(40.dp, maxHeight)
         val thumbHeightPx = with(density) { thumbHeight.toPx() }
         val travelPx = with(density) { (maxHeight - thumbHeight).toPx() }.coerceAtLeast(1f)
-        val thumbOffset = (fraction * travelPx).roundToInt()
 
         fun fractionAt(y: Float): Float = ((y - thumbHeightPx / 2f) / travelPx).coerceIn(0f, 1f)
 
+        // 视觉滑块紧贴屏幕右缘，32dp 的透明触摸区仍然方便手指拖动。
         Box(
             Modifier.align(Alignment.CenterEnd).width(32.dp).fillMaxHeight()
                 .graphicsLayer { alpha = railAlpha }
                 .semantics {
                     contentDescription = "楼层导航条"
-                    stateDescription = "第 $previewFloor 楼，共 $total 楼"
-                    progressBarRangeInfo = ProgressBarRangeInfo(previewFloor.toFloat(), 1f..total.toFloat())
+                    stateDescription = "第 ${previewFloor.value} 楼，共 $total 楼"
+                    progressBarRangeInfo = ProgressBarRangeInfo(previewFloor.value.toFloat(), 1f..total.toFloat())
                     setProgress { value ->
                         if (!value.isFinite()) false
                         else {
@@ -2797,8 +2811,8 @@ private fun TopicFloorScrollbar(
                         // 拖动只预览，松手才复用跳楼请求，避免逐帧触发网络加载。
                         onDragEnd = {
                             val target = dragFraction?.let { TopicFloorNavigation.floorAtFraction(it, total, descending) }
-                            dragFraction = null
                             if (target != null) latestJump(target)
+                            dragFraction = null
                         },
                         onDragCancel = { dragFraction = null },
                     )
@@ -2814,37 +2828,45 @@ private fun TopicFloorScrollbar(
                 },
         ) {
             Canvas(Modifier.fillMaxSize()) {
-                val centerX = size.width / 2f
-                val top = thumbHeightPx / 2f
-                drawLine(accent.copy(alpha = 0.2f), Offset(centerX, top), Offset(centerX, top + travelPx), 3.dp.toPx(), StrokeCap.Round)
-                repeat(11) { tick ->
-                    val y = top + travelPx * tick / 10f
-                    drawLine(accent.copy(alpha = 0.25f), Offset(centerX + 5.dp.toPx(), y), Offset(centerX + 8.dp.toPx(), y), 1.dp.toPx())
+                if (interacting) {
+                    val railWidth = 1.dp.toPx()
+                    drawLine(
+                        accent.copy(alpha = 0.16f),
+                        Offset(size.width - railWidth / 2f, thumbHeightPx / 2f),
+                        Offset(size.width - railWidth / 2f, thumbHeightPx / 2f + travelPx),
+                        railWidth,
+                    )
                 }
-            }
-            Box(
-                Modifier.align(Alignment.TopCenter).offset { IntOffset(0, thumbOffset) }
-                    .width(14.dp).height(thumbHeight).clip(RoundedCornerShape(7.dp)).background(accent),
-                contentAlignment = Alignment.Center,
-            ) {
-                Box(Modifier.width(2.dp).height(14.dp).clip(CircleShape).background(Color.White.copy(alpha = 0.8f)))
+                val thumbWidth = (if (interacting) 5.dp else 3.dp).toPx()
+                drawRoundRect(
+                    color = accent,
+                    topLeft = Offset(size.width - thumbWidth, fraction.value * travelPx),
+                    size = androidx.compose.ui.geometry.Size(thumbWidth, thumbHeightPx),
+                    cornerRadius = CornerRadius(thumbWidth / 2f),
+                )
             }
         }
-        if (dragFraction != null) {
-            Text(
-                "第 $previewFloor / $total 楼",
-                style = IosTheme.type.footnote,
-                color = IosTheme.colors.label,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-                modifier = Modifier.align(Alignment.TopEnd).padding(end = 40.dp)
-                    .offset { IntOffset(0, thumbOffset) }
-                    .shadow(4.dp, RoundedCornerShape(10.dp))
-                    .background(IosTheme.colors.card, RoundedCornerShape(10.dp))
-                    .padding(horizontal = 12.dp, vertical = 10.dp),
+        if (dragging) {
+            FloorScrollbarPreview(
+                floor = previewFloor,
+                total = total,
+                modifier = Modifier.align(Alignment.TopEnd).padding(end = 12.dp)
+                    .offset { IntOffset(0, (fraction.value * travelPx).roundToInt()) },
             )
         }
     }
+}
+
+@Composable
+private fun FloorScrollbarPreview(floor: State<Int>, total: Int, modifier: Modifier = Modifier) {
+    Text(
+        "${floor.value} / $total",
+        style = IosTheme.type.footnote,
+        color = IosTheme.colors.label,
+        maxLines = 1,
+        modifier = modifier.background(IosTheme.colors.card, RoundedCornerShape(6.dp))
+            .padding(horizontal = 8.dp, vertical = 4.dp),
+    )
 }
 
 /** 全屏/退出全屏切换按钮图标 (四个朝外直角展开 / 四个朝内折角收起) */
@@ -3469,8 +3491,8 @@ private fun ComposerSheet(
     var previewingImage by remember { mutableStateOf<String?>(null) }
     var editorView by remember(target) { mutableStateOf<RichMarkdownEditorView?>(null) }
 
-    // 编辑原文异步取回时只替换一次草稿。
-    LaunchedEffect(target, composer.loadingDraft) {
+    // 服务端草稿恢复或冲突选择后刷新内容，普通输入不重置光标。
+    LaunchedEffect(target, composer.loadingDraft, composer.remoteRevision) {
         if (!composer.loadingDraft) {
             editorView?.setInitialMarkdown(composer.draft, composer.attachments)
         }
@@ -3499,7 +3521,7 @@ private fun ComposerSheet(
     val pickFile = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
         uri?.let(onAttach)
     }
-    val busy = composer.submitting || composer.uploading
+    val busy = composer.submitting || composer.uploading || composer.loadingDraft
 
     BackHandler(enabled = true) {
         when {
@@ -3637,6 +3659,7 @@ private fun ComposerSheet(
                 }
             }
 
+            composer.syncStatus?.let { Text(it, style = IosTheme.type.caption, color = IosTheme.colors.secondaryLabel) }
             composer.error?.let {
                 Text(it, style = IosTheme.type.footnote, color = IosTheme.colors.destructive, maxLines = 1)
             }
@@ -4394,26 +4417,28 @@ private fun PostActions(
                 onClick = onSolution,
             )
         }
-        val selected = post.currentUserReaction?.id
-        val canReact = signedIn && !busy && !post.yours && (selected == null || post.currentUserReaction?.canUndo == true)
-        Box {
-            TiebaPostActionButton(
-                label = "点赞",
-                action = PostAction.Like,
-                selected = selected != null,
-                enabled = canReact,
-                compact = compact,
-                onClick = { onReact("heart") },
-                onLongClick = { chooseReaction = true },
-            )
-            if (chooseReaction) {
-                ReactionBubblePopup(
-                    reactions = reactions,
-                    emojiUrls = emojiUrls,
-                    busy = busy,
-                    onReact = onReact,
-                    onDismiss = { chooseReaction = false },
+        if (!post.yours) {
+            val selected = post.currentUserReaction?.id
+            val canReact = signedIn && !busy && (selected == null || post.currentUserReaction?.canUndo == true)
+            Box {
+                TiebaPostActionButton(
+                    label = "点赞",
+                    action = PostAction.Like,
+                    selected = selected != null,
+                    enabled = canReact,
+                    compact = compact,
+                    onClick = { onReact("heart") },
+                    onLongClick = { chooseReaction = true },
                 )
+                if (chooseReaction) {
+                    ReactionBubblePopup(
+                        reactions = reactions,
+                        emojiUrls = emojiUrls,
+                        busy = busy,
+                        onReact = onReact,
+                        onDismiss = { chooseReaction = false },
+                    )
+                }
             }
         }
         if (canReply) {
@@ -4547,7 +4572,7 @@ private fun PostActions(
       FlowRow(horizontalArrangement = Arrangement.spacedBy(5.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
         post.boosts.take(visibleBoosts).forEach { boost ->
             key(boost.id) {
-                val content = remember(boost.cooked) { CookedParser.parseCached(boost.cooked) }
+                val content = remember(boost.cooked, emojiUrls) { boostInlineText(boost.cooked, emojiUrls) }
                 Row(Modifier.widthIn(max = 260.dp).clip(RoundedCornerShape(50))
                     .background(chipBg)
                     .combinedClickable(
@@ -4566,7 +4591,7 @@ private fun PostActions(
                         cornerRadius = 3.dp,
                     )
                     Box(Modifier.padding(start = 4.dp, end = 3.dp)) {
-                        RichParagraph(content.filterIsInstance<CookedBlock.Paragraph>().flatMap { it.runs }, compact = true)
+                        RichParagraph(content, compact = true)
                     }
                 }
             }
@@ -4578,6 +4603,7 @@ private fun PostActions(
     boostActionTarget?.let { boost ->
         BoostActionSheet(
             boost = boost,
+            emojiUrls = emojiUrls,
             onDismiss = { boostActionTarget = null },
             onOpenAuthor = { username ->
                 boostActionTarget = null
@@ -4660,6 +4686,7 @@ private fun PostActions(
 @Composable
 private fun BoostActionSheet(
     boost: Boost,
+    emojiUrls: Map<String, String>,
     onDismiss: () -> Unit,
     onOpenAuthor: (String) -> Unit,
     onCopy: (String) -> Unit,
@@ -4667,6 +4694,7 @@ private fun BoostActionSheet(
     onDelete: () -> Unit,
 ) {
     val author = boost.user
+    val content = remember(boost.cooked, emojiUrls) { boostInlineText(boost.cooked, emojiUrls) }
     val cookedText = remember(boost.cooked) {
         val doc = Jsoup.parse(boost.cooked)
         doc.select("img").forEach { img ->
@@ -4742,12 +4770,12 @@ private fun BoostActionSheet(
                     onOpenAuthor(cleanUsername)
                 },
             )
-            Text(
-                cookedText.ifBlank { "（无文本内容）" },
-                style = IosTheme.type.body.copy(fontSize = 17.sp, lineHeight = 25.sp),
-                color = IosTheme.colors.label,
-                modifier = Modifier.fillMaxWidth(),
-            )
+            Box(Modifier.fillMaxWidth()) {
+                RichParagraph(
+                    content.ifEmpty { listOf(InlineText(cookedText.ifBlank { "（无文本内容）" })) },
+                    style = IosTheme.type.body.copy(fontSize = 17.sp, lineHeight = 25.sp),
+                )
+            }
             IosDivider(startIndent = 0.dp)
             author?.username?.let { username ->
                 BoostActionCard(
@@ -5583,6 +5611,7 @@ data class ImageViewerItem(
     val url: String,
     val previewUrl: String? = null,
     val description: String? = null,
+    val previewMemoryCacheKey: coil.memory.MemoryCache.Key? = null,
 )
 
 fun extractPostImages(blocks: List<CookedBlock>): List<ImageViewerItem> {
@@ -5849,7 +5878,7 @@ internal fun CookedContent(
                                     val host = runCatching { Uri.parse(currentUrl).host?.lowercase() }.getOrNull().orEmpty()
                                     val isSite = host == Config.HOST || host.endsWith(".${Config.HOST}") ||
                                         host == "ldstatic.com" || host.endsWith(".ldstatic.com")
-                                    val factory = if (isSite) container.dynamicCallFactory else externalMediaCallFactory
+                                    val factory = if (isSite) container.dynamicCallFactory else externalMediaCallFactory(container)
                                     val req = Request.Builder()
                                         .url(currentUrl)
                                         .header("User-Agent", container.userAgent)
@@ -6226,20 +6255,36 @@ private class InlineMediaSession(val player: ExoPlayer, val generation: Long, pr
     }
 }
 
-private val externalMediaCallFactory: okhttp3.Call.Factory by lazy {
-    okhttp3.OkHttpClient.Builder()
-        .followRedirects(true)
-        .followSslRedirects(true)
-        .build()
+// 外站媒体仍隔离论坛 Cookie/故障切换，只共享用户选定的代理策略。
+private val externalMediaClients by lazy {
+    org.linuxdo.android.net.NetworkMode.entries.associateWith { mode ->
+        okhttp3.OkHttpClient.Builder()
+            .proxy(if (mode == org.linuxdo.android.net.NetworkMode.BUILT_IN) java.net.Proxy.NO_PROXY else null)
+            .followRedirects(true)
+            .followSslRedirects(true)
+            .build()
+    }
 }
 
-private val externalNoRedirectCallFactory: okhttp3.Call.Factory by lazy {
-    (externalMediaCallFactory as okhttp3.OkHttpClient).newBuilder()
-        .followRedirects(false)
-        .followSslRedirects(false)
-        .retryOnConnectionFailure(false)
-        .callTimeout(30, java.util.concurrent.TimeUnit.SECONDS)
-        .build()
+private val externalNoRedirectClients by lazy {
+    externalMediaClients.mapValues { (_, client) ->
+        client.newBuilder()
+            .followRedirects(false)
+            .followSslRedirects(false)
+            .retryOnConnectionFailure(false)
+            .callTimeout(30, java.util.concurrent.TimeUnit.SECONDS)
+            .build()
+    }
+}
+
+private fun externalMediaCallFactory(
+    container: org.linuxdo.android.AppContainer,
+    followRedirects: Boolean = true,
+): okhttp3.Call.Factory = object : okhttp3.Call.Factory {
+    override fun newCall(request: Request): okhttp3.Call {
+        val clients = if (followRedirects) externalMediaClients else externalNoRedirectClients
+        return clients.getValue(container.networkMode.value).newCall(request)
+    }
 }
 
 private fun mediaTime(position: Long): String {
@@ -6303,7 +6348,7 @@ private fun InlineMediaCard(
         val host = runCatching { Uri.parse(url).host?.lowercase() }.getOrNull().orEmpty()
         val isSiteHost = host == Config.HOST || host.endsWith(".${Config.HOST}") ||
             host == "ldstatic.com" || host.endsWith(".ldstatic.com")
-        val callFactory = if (isSiteHost && !forceDirect) container.dynamicCallFactory else externalMediaCallFactory
+        val callFactory = if (isSiteHost && !forceDirect) container.dynamicCallFactory else externalMediaCallFactory(container)
         val dataSource = OkHttpDataSource.Factory(callFactory)
             .setUserAgent(container.sessionStore.userAgentOrNull() ?: container.userAgent)
         val next = ExoPlayer.Builder(context)
@@ -8111,7 +8156,12 @@ private fun PollCard(poll: CookedBlock.Poll, postId: Long?) {
 }
 
 @Composable
-private fun RichParagraph(runs: List<InlineText>, compact: Boolean = false, subReply: Boolean = false) {
+private fun RichParagraph(
+    runs: List<InlineText>,
+    compact: Boolean = false,
+    subReply: Boolean = false,
+    style: TextStyle? = null,
+) {
     val colors = IosTheme.colors
     val context = LocalContext.current
     val openTopic = LocalOpenTopic.current
@@ -8207,7 +8257,7 @@ private fun RichParagraph(runs: List<InlineText>, compact: Boolean = false, subR
             else -> DecryptableSelection {
                 Text(
                     annotated,
-                    style = IosTheme.type.body.copy(fontSize = 15.5.sp, lineHeight = 22.sp),
+                    style = style ?: IosTheme.type.body.copy(fontSize = 15.5.sp, lineHeight = 22.sp),
                     inlineContent = inline,
                 )
             }
@@ -9011,12 +9061,16 @@ private fun ImageViewerPage(
     onDismiss: () -> Unit,
 ) {
     val context = LocalContext.current
+    val cachedPreview = remember(context, item.previewMemoryCacheKey) {
+        item.previewMemoryCacheKey?.let { coil.Coil.imageLoader(context).memoryCache?.get(it)?.bitmap }
+    }
     val scope = rememberCoroutineScope()
     var zoom by remember(item.url) { mutableFloatStateOf(1f) }
     var panOffset by remember(item.url) { mutableStateOf(Offset.Zero) }
     var containerSize by remember { mutableStateOf(IntSize.Zero) }
     var animJob by remember(item.url) { mutableStateOf<Job?>(null) }
     var reloadTrigger by remember(item.url) { mutableIntStateOf(0) }
+    var originalReady by remember(item.url, reloadTrigger) { mutableStateOf(false) }
     var showSpinner by remember(item.url, reloadTrigger) { mutableStateOf(false) }
 
     LaunchedEffect(isActive) {
@@ -9219,7 +9273,12 @@ private fun ImageViewerPage(
             contentAlignment = Alignment.Center,
         ) {
             // 1. 底层常驻预览图：优先从内存/磁盘缓存秒显，作为无缝垫底底图，大图加载全过程及切换时永不卸载，杜绝闪屏
-            if (!item.previewUrl.isNullOrBlank()) {
+            if (cachedPreview != null && !originalReady) {
+                androidx.compose.foundation.Image(
+                    bitmap = cachedPreview.asImageBitmap(), contentDescription = item.description,
+                    contentScale = ContentScale.Fit, modifier = Modifier.fillMaxSize(),
+                )
+            } else if (cachedPreview == null && !item.previewUrl.isNullOrBlank()) {
                 AsyncImage(
                     model = ImageRequest.Builder(context)
                         .data(item.previewUrl)
@@ -9236,6 +9295,7 @@ private fun ImageViewerPage(
                 contentDescription = item.description ?: "图片预览",
                 contentScale = ContentScale.Fit,
                 modifier = Modifier.fillMaxSize(),
+                onState = { originalReady = it is AsyncImagePainter.State.Success },
             ) {
                 val state = painter.state
                 when (state) {
@@ -10747,7 +10807,7 @@ internal object SignatureMediaLoader {
                     }
                     .build()
             } else {
-                externalNoRedirectCallFactory
+                externalMediaCallFactory(container, followRedirects = false)
             }
             val request = Request.Builder()
                 .url(currentUrl)

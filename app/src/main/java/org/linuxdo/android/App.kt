@@ -32,6 +32,17 @@ import org.linuxdo.android.net.DohTransport
 import org.linuxdo.android.net.anycast.AnycastPool
 import org.linuxdo.android.net.proxy.LocalProxyServer
 import org.linuxdo.android.net.NetworkStateMonitor
+import org.linuxdo.android.net.NetworkMode
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.suspendCancellableCoroutine
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
+import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeout
+import kotlin.coroutines.resume
 import org.linuxdo.android.net.buildBootstrapClient
 import org.linuxdo.android.net.buildSharedHttpClient
 
@@ -141,6 +152,23 @@ class App : Application(), ImageLoaderFactory {
 }
 
 class AppContainer(context: Context) {
+    val chatRealtime by lazy {
+        org.linuxdo.android.data.ChatRealtime(topicRepository, sessionStore) { channel, message ->
+            val key = "chat_notified_${sessionStore.currentUserId()}_${channel.id}"
+            if (message.id > preferences.getLong(key, 0L)) {
+                val shown = org.linuxdo.android.service.NotificationHelper.showNotification(
+                    context = context,
+                    notificationId = message.id,
+                    title = "直接消息 · ${channel.displayTitle}",
+                    content = message.message.ifBlank { "收到一条新消息" },
+                    chatChannelId = channel.id,
+                    chatUserId = sessionStore.currentUserId(),
+                )
+                if (shown) preferences.edit().putLong(key, message.id).apply()
+            }
+        }
+    }
+
     val preferences = context.getSharedPreferences("display_preferences", Context.MODE_PRIVATE)
     val diagnostics = Diagnostics(File(context.filesDir, "diagnostics.log")).also {
         org.linuxdo.android.net.NetDiagnostics.sink = it
@@ -149,7 +177,11 @@ class AppContainer(context: Context) {
     init {
         installCrashHandler(context, diagnostics)
     }
+    private val appContext = context.applicationContext
     val sessionStore = SessionStore(context)
+    private val _networkMode = MutableStateFlow(sessionStore.getNetworkMode())
+    val networkMode = _networkMode.asStateFlow()
+    private val networkModeMutex = Mutex()
     val reading = ReadingStore(context)
     val accountManager = AccountManager(context).also { manager ->
         sessionStore.accountCookieFallback = { uid ->
@@ -176,13 +208,13 @@ class AppContainer(context: Context) {
         store = sessionStore,
         diagnostics = diagnostics,
         httpClientProvider = { dohCoordinator.currentClient },
-        isProxyOrVpnActiveProvider = { networkMonitor.detect().shouldYieldToSystem(sessionStore.isDohForceOverProxyEnabled()) },
+        isProxyOrVpnActiveProvider = { sessionStore.getNetworkMode() == NetworkMode.SYSTEM },
     )
 
     val networkMonitor = NetworkStateMonitor(context) {
-        // 当开启/关闭 VPN 或系统代理时，通知协调器刷新代次以暂停或恢复 DoH 直连
+        // 环境变化只回收连接，不更改用户选定的联网方式。
         dohCoordinator.refresh()
-        // VPN / 系统代理智能让渡：有真实 VPN 时清除 WebView 代理，无 VPN 时挂载本地代理
+        // 三个网络栈继续遵循同一个已保存的模式。
         updateWebViewProxyState()
         org.linuxdo.android.net.gecko.GeckoManager.refreshNetworkSettings(context)
         dohCoordinator.startSmartRouteMonitoring()
@@ -281,8 +313,6 @@ class AppContainer(context: Context) {
     /** 最近一次退到后台的时间（elapsedRealtime）；0 表示当前在前台或尚未退过后台。 */
     @Volatile private var backgroundSince = 0L
 
-    @Volatile private var lastShouldPauseDoh: Boolean? = null
-
     init {
         dohCoordinator.onEpochChanged = { epoch ->
             val label = epochLabel(epoch)
@@ -307,29 +337,57 @@ class AppContainer(context: Context) {
         }
         updateWebViewProxyState()
         dohCoordinator.warmUpAnycastIfNeeded()
+        dohCoordinator.startSmartRouteMonitoring()
     }
 
-    /**
-     * 根据当前网络环境自动更新 WebView 代理挂载状态（Task 3.1 / 3.5）。
-     * 检测到系统 VPN/代理开启时，主动释放本地代理，让渡系统网络；纯直连时挂载本地分片代理。
-     * 并在代理与直连状态切换时，自动清除旧网络出口下的 cf_clearance，避免携带异地 IP 凭据撞盾。
-     */
-    fun updateWebViewProxyState() {
-        val shouldPause = networkMonitor.detect().shouldYieldToSystem(sessionStore.isDohForceOverProxyEnabled())
-        val previousPause = lastShouldPauseDoh
-        if (previousPause != null && previousPause != shouldPause) {
-            val oldFp = sessionStore.currentCfClearanceFp()
-            if (oldFp != "-") {
+    /** WebView 的目标站点使用内置 CONNECT，其余域名直连；系统模式清除覆盖规则。 */
+    fun updateWebViewProxyState(onApplied: (() -> Unit)? = null) {
+        if (sessionStore.getNetworkMode() == NetworkMode.SYSTEM) {
+            LocalProxyServer.clearWebViewProxyOverride(onApplied)
+        } else {
+            LocalProxyServer.applyWebViewProxyOverride(localProxyServer.port, onApplied = onApplied)
+        }
+    }
+
+    private suspend fun awaitWebViewNetworkSettings() = withTimeout(8_000L) {
+        if (sessionStore.getNetworkMode() == NetworkMode.BUILT_IN) {
+            check(localProxyServer.port > 0 && androidx.webkit.WebViewFeature.isFeatureSupported(
+                androidx.webkit.WebViewFeature.PROXY_OVERRIDE,
+            )) { "此设备的 WebView 暂不支持内置网络" }
+        }
+        suspendCancellableCoroutine<Unit> { continuation ->
+            updateWebViewProxyState { if (continuation.isActive) continuation.resume(Unit) }
+        }
+    }
+
+    /** 完成浏览器和业务客户端同步后才更新 UI；失败恢复原偏好，保留账号及草稿。 */
+    suspend fun setNetworkMode(mode: NetworkMode) = withContext(Dispatchers.Main.immediate) {
+        networkModeMutex.withLock {
+            val previous = sessionStore.getNetworkMode()
+            if (previous == mode) return@withLock
+            sessionStore.setNetworkMode(mode)
+            try {
+                check(org.linuxdo.android.net.gecko.GeckoManager.applyNetworkSettings(appContext)) {
+                    "验证浏览器网络设置未完成，请重试"
+                }
+                awaitWebViewNetworkSettings()
+                dohCoordinator.refreshAndAwait()
+                // cf_clearance 与出口绑定，仅清除这项验证凭据，不清除登录会话。
                 sessionStore.clearCookie(Config.CF_CLEARANCE_COOKIE)
                 sessionStore.clearChallengedClearances()
-                diagnostics.log("网络链路: 出口代理状态切换(shouldPause: $previousPause -> $shouldPause)，重置旧 cf_clearance(fp=$oldFp) 避免异地 IP 撞盾")
+                _networkMode.value = mode
+                diagnostics.log("联网方式已切换: ${previous.label} -> ${mode.label}")
+                dohCoordinator.warmUpAnycastIfNeeded()
+            } catch (error: Exception) {
+                withContext(NonCancellable) {
+                    sessionStore.setNetworkMode(previous)
+                    runCatching { org.linuxdo.android.net.gecko.GeckoManager.applyNetworkSettings(appContext) }
+                    runCatching { awaitWebViewNetworkSettings() }
+                    dohCoordinator.refreshAndAwait()
+                }
+                diagnostics.log("联网方式切换未完成，已恢复偏好: ${previous.label} (${error.javaClass.simpleName})")
+                throw error
             }
-        }
-        lastShouldPauseDoh = shouldPause
-        if (shouldPause) {
-            LocalProxyServer.clearWebViewProxyOverride()
-        } else {
-            LocalProxyServer.applyWebViewProxyOverride(localProxyServer.port)
         }
     }
 
@@ -373,7 +431,8 @@ class AppContainer(context: Context) {
      */
     fun rebuildHttpClient() {
         dohCoordinator.refresh()
-        if (sessionStore.isDohEnabled()) {
+        if (sessionStore.getNetworkMode() == NetworkMode.BUILT_IN &&
+            sessionStore.isDohEnabled() && sessionStore.isDohAutoOptimizeEnabled()) {
             dohCoordinator.triggerSmartRouteEvaluation()
         }
     }
@@ -383,7 +442,11 @@ class AppContainer(context: Context) {
         private const val STALE_CONNECTION_IDLE_MS = 5 * 60_000L
 
         private fun epochLabel(epoch: org.linuxdo.android.net.TransportEpoch): String =
-            "gen=${epoch.generation} " + if (epoch.transport != null) "${epoch.routeMode.label}(${epoch.server.name})" else "系统网络"
+            "gen=${epoch.generation} " + when {
+                epoch.routeMode == org.linuxdo.android.net.NetworkRouteMode.SYSTEM -> "跟随系统"
+                epoch.transport != null -> "${epoch.routeMode.label}(${epoch.server.name})"
+                else -> "内置网络 · 平台 TLS"
+            }
 
         /**
          * 全应用共用同一个 UA。首次运行时由系统 WebView 的默认 UA 规整成 Chrome 移动端的形态

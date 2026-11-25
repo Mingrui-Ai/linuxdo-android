@@ -31,6 +31,8 @@ sealed interface Route : Serializable {
     data object Chat : Route
     data class ChatRoom(val channelId: Long, val title: String) : Route
     data class FollowList(val username: String) : Route
+    data class ProfileNetwork(val username: String, val followers: Boolean) : Route
+    data class UserBadges(val username: String) : Route
     data object Blacklist : Route
     data class UserProfile(
         val username: String,
@@ -45,7 +47,7 @@ enum class SettingsPage(val title: String) {
     Reading("阅读与浏览"),
     FloatingBall("辅助悬浮球"),
     Notifications("通知与保活"),
-    Network("网络与缓存"),
+    Network("网络与代理"),
 }
 
 /**

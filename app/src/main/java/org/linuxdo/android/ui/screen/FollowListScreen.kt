@@ -56,6 +56,9 @@ fun FollowListScreen(
     onBack: () -> Unit,
     onRetry: () -> Unit,
     onOpenUser: (String) -> Unit,
+    title: String = "我的关注",
+    canManage: Boolean = true,
+    emptyText: String = "还没有关注的人",
     onUnfollow: (String) -> Unit = {},
     onUnfollowBatch: (List<String>) -> Unit = {},
 ) {
@@ -65,12 +68,12 @@ fun FollowListScreen(
     var showBatchConfirmDialog by remember { mutableStateOf(false) }
 
     IosLargeTitleScaffold(
-        title = "我的关注",
+        title = title,
         showLargeTitle = false,
         onBack = onBack,
         backLabel = "返回",
         trailing = {
-            if (state.users.isNotEmpty()) {
+            if (canManage && state.users.isNotEmpty()) {
                 Box(
                     modifier = Modifier
                         .clip(RoundedCornerShape(8.dp))
@@ -103,7 +106,7 @@ fun FollowListScreen(
             }
             state.users.isEmpty() -> item("empty") {
                 Box(Modifier.fillMaxWidth().padding(36.dp), contentAlignment = Alignment.Center) {
-                    Text("还没有关注的人", color = IosTheme.colors.secondaryLabel)
+                    Text(emptyText, color = IosTheme.colors.secondaryLabel)
                 }
             }
             else -> {
@@ -121,7 +124,7 @@ fun FollowListScreen(
                     SwipeToDismissBox(
                         state = dismissState,
                         enableDismissFromStartToEnd = false,
-                        enableDismissFromEndToStart = !isBatchMode,
+                        enableDismissFromEndToStart = canManage && !isBatchMode,
                         backgroundContent = {
                             Box(
                                 modifier = Modifier

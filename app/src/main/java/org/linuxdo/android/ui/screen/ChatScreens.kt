@@ -5,7 +5,6 @@ import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.PickVisualMediaRequest
 import androidx.activity.result.contract.ActivityResultContracts
-import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -15,6 +14,7 @@ import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxHeight
@@ -29,16 +29,20 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.Notifications
 import androidx.compose.material.icons.filled.Search
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.Surface
@@ -46,6 +50,12 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.snapshotFlow
+import androidx.compose.ui.platform.LocalSoftwareKeyboardController
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
+import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.collectLatest
 import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
@@ -63,7 +73,6 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Path
-import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.StrokeJoin
 import androidx.compose.ui.graphics.drawscope.Stroke
@@ -88,37 +97,34 @@ import org.linuxdo.android.data.ChatMessageSummary
 import org.linuxdo.android.data.avatarUrlOf
 import org.linuxdo.android.ui.ChatUiState
 import org.linuxdo.android.ui.design.IosActivityIndicator
+import org.linuxdo.android.ui.design.scrollListBars
+import org.linuxdo.android.ui.design.FeedItemDivider
+import org.linuxdo.android.ui.design.MessageFeedRow
+import org.linuxdo.android.ui.design.UserAvatar
 import org.linuxdo.android.ui.design.IosDivider
 import org.linuxdo.android.ui.design.IosNavBar
 import org.linuxdo.android.ui.design.IosTheme
+import org.linuxdo.android.ui.design.MessageListRefresh
+import org.linuxdo.android.ui.design.MessageSearchField
 import org.linuxdo.android.ui.design.FullscreenDialog
 import org.linuxdo.android.ui.format.RelativeTime
 
 @Composable
-fun ChatListScreen(
+internal fun ChatList(
     state: ChatUiState,
-    active: Boolean,
-    onLoad: () -> Unit,
+    directMessages: Boolean,
+    showSearch: Boolean,
+    feedDisplayMode: String,
+    scrollToTopRequest: Int,
     onRefresh: () -> Unit,
     onOpenChannel: (ChatChannelSummary) -> Unit,
-    onBack: (() -> Unit)? = null,
+    active: Boolean,
 ) {
-    var selectedTab by rememberSaveable { mutableIntStateOf(0) } // 0: 频道, 1: 直接消息
-    var searchQuery by rememberSaveable { mutableStateOf("") }
-    var showSearch by rememberSaveable { mutableStateOf(false) }
-
-    LaunchedEffect(active) {
-        if (active) onLoad()
-    }
-
-    val publicChannels = remember(state.channels) { state.channels.filter { !it.isDirectMessage } }
-    val directChannels = remember(state.channels) { state.channels.filter { it.isDirectMessage } }
-
-    val publicUnread = remember(publicChannels) { publicChannels.sumOf { it.unreadCount } }
-    val directUnread = remember(directChannels) { directChannels.sumOf { it.unreadCount } }
-
-    val currentList = remember(selectedTab, publicChannels, directChannels, searchQuery) {
-        val base = if (selectedTab == 0) publicChannels else directChannels
+    var queryText by rememberSaveable { mutableStateOf("") }
+    val searchQuery = if (showSearch) queryText else ""
+    LaunchedEffect(showSearch) { if (!showSearch) queryText = "" }
+    val currentList = remember(directMessages, state.channels, searchQuery) {
+        val base = state.channels.filter { it.isDirectMessage == directMessages }
         val query = searchQuery.trim()
         if (query.isEmpty()) base
         else base.filter { channel ->
@@ -129,338 +135,97 @@ fun ChatListScreen(
     }
 
     Column(Modifier.fillMaxSize().background(IosTheme.colors.groupedBackground)) {
-        // 顶部导航栏
-        IosNavBar(
-            title = "聊天",
-            onBack = onBack,
-            trailing = {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    IconButton(onClick = {
-                        showSearch = !showSearch
-                        if (!showSearch) searchQuery = ""
-                    }) {
-                        Icon(
-                            imageVector = if (showSearch) Icons.Default.Close else Icons.Default.Search,
-                            contentDescription = "搜索",
-                            tint = IosTheme.colors.label,
-                            modifier = Modifier.size(20.dp),
-                        )
-                    }
-                    TextButton(onClick = onRefresh, enabled = !state.loadingChannels) {
-                        Text("刷新", color = IosTheme.colors.accent)
-                    }
-                }
-            },
-        )
-
-        // 搜索栏展开
-        AnimatedVisibility(visible = showSearch) {
-            Column(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .background(IosTheme.colors.card)
-                    .padding(horizontal = 14.dp, vertical = 8.dp),
-            ) {
-                BasicTextField(
-                    value = searchQuery,
-                    onValueChange = { searchQuery = it },
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .clip(RoundedCornerShape(8.dp))
-                        .background(IosTheme.colors.fieldBackground)
-                        .padding(horizontal = 10.dp, vertical = 8.dp),
-                    textStyle = TextStyle(fontSize = 14.sp, color = IosTheme.colors.label),
-                    singleLine = true,
-                    cursorBrush = SolidColor(IosTheme.colors.accent),
-                    decorationBox = { innerTextField ->
-                        if (searchQuery.isEmpty()) {
-                            Text(
-                                if (selectedTab == 0) "搜索频道..." else "搜索直接消息...",
-                                style = TextStyle(fontSize = 14.sp, color = IosTheme.colors.tertiaryLabel),
-                            )
-                        }
-                        innerTextField()
-                    },
-                )
-            }
+        if (showSearch) {
+            MessageSearchField(queryText, { queryText = it }, if (directMessages) "搜索直接消息…" else "搜索频道…")
         }
-
-        // 频道/消息列表内容
-        Box(modifier = Modifier.weight(1f).fillMaxWidth()) {
-            when {
-                state.loadingChannels && state.channels.isEmpty() -> {
-                    Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+        val list = rememberLazyListState()
+        org.linuxdo.android.ui.design.ScrollToTopOnRequest(list, scrollToTopRequest)
+        LaunchedEffect(searchQuery) { list.scrollToItem(0) }
+        MessageListRefresh(state.loadingChannels && state.channels.isNotEmpty(), active, onRefresh,
+            Modifier.weight(1f).fillMaxWidth()) {
+            LazyColumn(
+                state = list,
+                contentPadding = PaddingValues(bottom = 72.dp),
+                modifier = Modifier.fillMaxSize().scrollListBars(list, active),
+            ) {
+                if (state.loadingChannels && state.channels.isEmpty()) item {
+                    Box(Modifier.fillMaxWidth().padding(24.dp), contentAlignment = Alignment.Center) {
                         IosActivityIndicator(diameter = 24.dp, color = IosTheme.colors.accent)
                     }
                 }
-                state.error != null && state.channels.isEmpty() -> {
+                state.channelsError?.let { message -> item {
                     Column(
-                        Modifier.fillMaxSize().padding(24.dp),
+                        Modifier.fillMaxWidth().padding(24.dp),
                         horizontalAlignment = Alignment.CenterHorizontally,
-                        verticalArrangement = Arrangement.Center,
                     ) {
-                        Text(state.error, style = IosTheme.type.footnote, color = IosTheme.colors.secondaryLabel)
+                        Text(message, style = IosTheme.type.footnote, color = IosTheme.colors.secondaryLabel)
                         Spacer(Modifier.height(12.dp))
                         TextButton(onClick = onRefresh) { Text("重试") }
                     }
-                }
-                currentList.isEmpty() -> {
-                    Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                } }
+                if (currentList.isEmpty() && !state.loadingChannels && state.channelsError == null) item {
+                    Box(Modifier.fillMaxWidth().padding(24.dp), contentAlignment = Alignment.Center) {
                         Text(
                             text = if (searchQuery.isNotBlank()) "未搜索到匹配项"
-                            else if (selectedTab == 0) "暂无公共频道" else "暂无直接消息",
+                            else if (!directMessages) "暂无公共频道" else "暂无直接消息",
                             style = IosTheme.type.footnote,
                             color = IosTheme.colors.secondaryLabel,
                         )
                     }
                 }
-                else -> {
-                    LazyColumn(
-                        modifier = Modifier.fillMaxSize(),
-                    ) {
-                        items(currentList, key = { it.id }) { channel ->
-                            if (selectedTab == 0) {
-                                PublicChannelRow(channel = channel, onClick = { onOpenChannel(channel) })
-                            } else {
-                                DirectMessageRow(channel = channel, onClick = { onOpenChannel(channel) })
-                            }
-                        }
-                    }
+                itemsIndexed(currentList, key = { _, channel -> channel.id }) { index, channel ->
+                    ChatChannelRow(channel, onClick = { onOpenChannel(channel) })
+                    if (index < currentList.lastIndex) FeedItemDivider(feedDisplayMode)
                 }
             }
         }
 
-        // 底部 PC 样式 Tab 切换栏（频道 / 直接消息）
-        IosDivider()
-        Surface(
-            color = IosTheme.colors.card,
-            modifier = Modifier.fillMaxWidth().navigationBarsPadding(),
-        ) {
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .height(54.dp),
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                // 频道 Tab
-                ChatBottomTabItem(
-                    title = "频道",
-                    iconEmoji = "💬",
-                    selected = selectedTab == 0,
-                    badgeCount = publicUnread,
-                    modifier = Modifier.weight(1f),
-                    onClick = { selectedTab = 0 },
-                )
-
-                // 直接消息 Tab
-                ChatBottomTabItem(
-                    title = "直接消息",
-                    iconEmoji = "👥",
-                    selected = selectedTab == 1,
-                    badgeCount = directUnread,
-                    modifier = Modifier.weight(1f),
-                    onClick = { selectedTab = 1 },
-                )
-            }
-        }
     }
 }
 
 @Composable
-private fun ChatBottomTabItem(
-    title: String,
-    iconEmoji: String,
-    selected: Boolean,
-    badgeCount: Int,
-    modifier: Modifier = Modifier,
-    onClick: () -> Unit,
-) {
-    val activeColor = IosTheme.colors.accent
-    val inactiveColor = IosTheme.colors.secondaryLabel
-
-    Box(
-        modifier = modifier
-            .fillMaxHeight()
-            .clickable(onClick = onClick),
-        contentAlignment = Alignment.Center,
-    ) {
-        Column(
-            horizontalAlignment = Alignment.CenterHorizontally,
-            verticalArrangement = Arrangement.spacedBy(2.dp),
-        ) {
-            Box {
-                Text(
-                    text = iconEmoji,
-                    fontSize = 18.sp,
-                )
-                if (badgeCount > 0) {
-                    Box(
-                        modifier = Modifier
-                            .align(Alignment.TopEnd)
-                            .offset(x = 6.dp, y = (-2).dp)
-                            .size(8.dp)
-                            .clip(CircleShape)
-                            .background(Color(0xFF0088CC)),
-                    )
-                }
-            }
-            Text(
-                text = title,
-                style = TextStyle(
-                    fontSize = 11.sp,
-                    fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Normal,
-                    color = if (selected) activeColor else inactiveColor,
-                ),
-            )
+private fun ChatChannelRow(channel: ChatChannelSummary, onClick: () -> Unit) {
+    val direct = channel.isDirectMessage
+    val last = channel.lastMessage
+    val preview = remember(last, direct, channel.categoryName) {
+        if (last == null) {
+            if (direct) "暂无对话" else channel.categoryName ?: "暂无新消息"
+        } else {
+            val raw = last.message.ifBlank { org.jsoup.Jsoup.parseBodyFragment(last.cooked).text() }
+            val message = renderEmojiShortcodes(raw, keepUnknown = true).orEmpty()
+            val sender = last.user?.name?.takeIf { it.isNotBlank() } ?: last.user?.username
+            listOfNotNull(sender, message).filter { it.isNotBlank() }.joinToString("：")
         }
     }
-}
-
-@Composable
-private fun PublicChannelRow(channel: ChatChannelSummary, onClick: () -> Unit) {
-    val lastMessage = channel.lastMessage
-    Column(
-        Modifier
-            .fillMaxWidth()
-            .background(IosTheme.colors.card)
-            .clickable(onClick = onClick)
-            .padding(horizontal = 16.dp, vertical = 12.dp),
-        verticalArrangement = Arrangement.spacedBy(4.dp),
-    ) {
-        Row(
-            Modifier.fillMaxWidth(),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            // PC 风格圆形对话气泡图标
-            Box(
-                modifier = Modifier
-                    .size(40.dp)
-                    .clip(CircleShape)
-                    .background(Color(0xFF00A884).copy(alpha = 0.12f)),
-                contentAlignment = Alignment.Center,
-            ) {
-                Text("💬", fontSize = 18.sp)
-            }
-
-            Spacer(Modifier.width(12.dp))
-
-            Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(3.dp)) {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Text(
-                        text = channel.displayTitle,
-                        style = TextStyle(fontSize = 16.sp, fontWeight = FontWeight.SemiBold, color = IosTheme.colors.label),
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
-                        modifier = Modifier.weight(1f, fill = false),
-                    )
-                    if (channel.unreadCount > 0) {
-                        Spacer(Modifier.width(6.dp))
-                        Box(
-                            modifier = Modifier
-                                .size(8.dp)
-                                .clip(CircleShape)
-                                .background(Color(0xFF0088CC)),
-                        )
-                    }
-                }
-                Text(
-                    text = lastMessage?.let {
-                        val sender = it.user?.name ?: it.user?.username.orEmpty()
-                        val msg = renderEmojiShortcodes(it.message.ifBlank { it.cooked }, keepUnknown = true).orEmpty()
-                        "$sender: $msg"
-                    } ?: channel.categoryName ?: "暂无新消息",
-                    style = TextStyle(fontSize = 13.sp, color = IosTheme.colors.secondaryLabel),
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                )
-            }
-
-            Spacer(Modifier.width(8.dp))
-
-            Text(
-                text = RelativeTime.format(lastMessage?.createdAt),
-                style = TextStyle(fontSize = 12.sp, color = IosTheme.colors.tertiaryLabel),
-            )
-        }
-    }
-    IosDivider()
-}
-
-@Composable
-private fun DirectMessageRow(channel: ChatChannelSummary, onClick: () -> Unit) {
-    val targetUser = channel.dmUsers.firstOrNull() ?: channel.lastMessage?.user
-    val lastMessage = channel.lastMessage
-
-    Column(
-        Modifier
-            .fillMaxWidth()
-            .background(IosTheme.colors.card)
-            .clickable(onClick = onClick)
-            .padding(horizontal = 16.dp, vertical = 12.dp),
-        verticalArrangement = Arrangement.spacedBy(4.dp),
-    ) {
-        Row(
-            Modifier.fillMaxWidth(),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            // 对方头像
-            val avatar = avatarUrlOf(targetUser?.avatarTemplate, 80)
-            AsyncImage(
-                model = avatar,
-                contentDescription = targetUser?.username,
-                contentScale = ContentScale.Crop,
-                modifier = Modifier
-                    .size(42.dp)
-                    .clip(RoundedCornerShape(10.dp))
-                    .background(IosTheme.colors.fieldBackground),
-            )
-
-            Spacer(Modifier.width(12.dp))
-
-            Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(3.dp)) {
-                Text(
-                    text = channel.displayTitle,
-                    style = TextStyle(fontSize = 16.sp, fontWeight = FontWeight.SemiBold, color = IosTheme.colors.label),
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                )
-                Text(
-                    text = lastMessage?.let {
-                        val sender = it.user?.name ?: it.user?.username.orEmpty()
-                        val msg = renderEmojiShortcodes(it.message.ifBlank { it.cooked }, keepUnknown = true).orEmpty()
-                        "$sender: $msg"
-                    } ?: "暂无对话",
-                    style = TextStyle(fontSize = 13.sp, color = IosTheme.colors.secondaryLabel),
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                )
-            }
-
-            Spacer(Modifier.width(8.dp))
-
-            Column(horizontalAlignment = Alignment.End, verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                Text(
-                    text = RelativeTime.format(lastMessage?.createdAt),
-                    style = TextStyle(fontSize = 12.sp, color = IosTheme.colors.tertiaryLabel),
-                )
-                if (channel.unreadCount > 0) {
-                    Box(
-                        modifier = Modifier
-                            .clip(CircleShape)
-                            .background(IosTheme.colors.accent)
-                            .padding(horizontal = 6.dp, vertical = 1.dp),
-                        contentAlignment = Alignment.Center,
-                    ) {
-                        Text(
-                            text = channel.unreadCount.coerceAtMost(99).toString(),
-                            style = TextStyle(fontSize = 11.sp, fontWeight = FontWeight.Bold, color = Color.White),
-                        )
-                    }
+    MessageFeedRow(
+        name = channel.displayTitle,
+        preview = preview,
+        date = RelativeTime.format(last?.createdAt),
+        onClick = onClick,
+        avatar = {
+            if (direct) {
+                val user = channel.dmUsers.firstOrNull() ?: last?.user
+                UserAvatar(avatarUrl = avatarUrlOf(user?.avatarTemplate, 80),
+                    username = user?.username ?: channel.displayTitle, modifier = Modifier.size(32.dp))
+            } else {
+                Box(Modifier.size(32.dp).background(IosTheme.colors.fieldBackground, CircleShape),
+                    contentAlignment = Alignment.Center) {
+                    Text("#", style = IosTheme.type.body, color = IosTheme.colors.secondaryLabel)
                 }
             }
-        }
-    }
-    IosDivider()
+        },
+        badge = {
+            if (!direct && channel.membership?.muted == true) {
+                Text("免打扰", style = IosTheme.type.caption, color = IosTheme.colors.secondaryLabel)
+            } else if (channel.unreadCount > 0) {
+                val count = channel.unreadCount
+                Text(if (count > 99) "99+" else count.toString(), style = IosTheme.type.caption.copy(fontSize = 11.sp),
+                    color = Color.White, modifier = Modifier.background(IosTheme.colors.accent, CircleShape)
+                        .padding(horizontal = 6.dp, vertical = 1.dp)
+                        .semantics { contentDescription = "${count}条未读消息" })
+            }
+        },
+    )
 }
 
 @Composable
@@ -471,7 +236,9 @@ fun ChatRoomScreen(
     currentUsername: String? = null,
     onLoad: (Long, Boolean) -> Unit,
     onLoadPast: (Long) -> Unit = {},
-    onSend: (Long, String, List<Long>) -> Unit,
+    onSetChannelMuted: (Long, Boolean) -> Unit,
+    onMessagesVisible: (Long, Long) -> Unit = { _, _ -> },
+    onSend: (Long, String, List<Long>, () -> Unit) -> Unit,
     onUploadAttachment: (Long, Uri, (AttachedMedia) -> Unit, (String) -> Unit) -> Unit = { _, _, _, _ -> },
     onOpenUser: (String) -> Unit = {},
     onBack: () -> Unit,
@@ -479,11 +246,21 @@ fun ChatRoomScreen(
     val channelId = channel.id
     val messages = state.messagesByChannel[channelId].orEmpty()
     val listState = rememberLazyListState()
-    var draft by remember(channelId) { mutableStateOf("") }
+    var draft by rememberSaveable(channelId) { mutableStateOf("") }
     var showEmojiPicker by remember(channelId) { mutableStateOf(false) }
     var showComposerSheet by remember(channelId) { mutableStateOf(false) }
     var pendingAttachments by remember(channelId) { mutableStateOf<List<AttachedMedia>>(emptyList()) }
     var isUploading by remember(channelId) { mutableStateOf(false) }
+    val keyboard = LocalSoftwareKeyboardController.current
+    val send: (String, List<Long>) -> Unit = { text, uploads ->
+        onSend(channelId, text, uploads) {
+            draft = ""
+            pendingAttachments = emptyList()
+            showComposerSheet = false
+            showEmojiPicker = false
+            keyboard?.hide()
+        }
+    }
 
     val pickImage = rememberLauncherForActivityResult(ActivityResultContracts.PickVisualMedia()) { uri ->
         if (uri != null) {
@@ -512,10 +289,17 @@ fun ChatRoomScreen(
     LaunchedEffect(active, channelId) {
         if (!active) return@LaunchedEffect
         onLoad(channelId, false)
-        while (true) {
-            delay(10_000)
-            onLoad(channelId, true)
-        }
+    }
+
+    LaunchedEffect(active, channelId, messages, channel.membership?.lastReadMessageId) {
+        if (!active) return@LaunchedEffect
+        snapshotFlow { listState.layoutInfo.visibleItemsInfo.mapNotNull { it.key as? Long }.maxOrNull() }
+            .distinctUntilChanged().collectLatest { lastVisible ->
+                if (lastVisible != null) {
+                    delay(400)
+                    onMessagesVisible(channelId, lastVisible)
+                }
+            }
     }
 
     var initialScrollDone by remember(channelId) { mutableStateOf(false) }
@@ -562,11 +346,25 @@ fun ChatRoomScreen(
             IosNavBar(
                 title = channel.displayTitle,
                 onBack = onBack,
+                trailing = {
+                    val membership = channel.membership
+                    if (!channel.isDirectMessage && membership != null) {
+                        ChatChannelNotificationMenu(
+                            channelId = channelId,
+                            muted = membership.muted,
+                            enabled = channelId !in state.updatingMuteChannelIds,
+                            onSetMuted = { onSetChannelMuted(channelId, it) },
+                        )
+                    }
+                },
             )
 
         // 错误提示
-        if (state.error != null && messages.isEmpty()) {
-            Text(state.error, modifier = Modifier.padding(16.dp), color = IosTheme.colors.secondaryLabel)
+        if (state.error != null) {
+            Column(Modifier.padding(horizontal = 16.dp, vertical = 8.dp)) {
+                Text(state.error, color = IosTheme.colors.secondaryLabel)
+                org.linuxdo.android.ui.design.NetworkSettingsLink()
+            }
         }
 
         // 消息气泡列表
@@ -750,7 +548,8 @@ fun ChatRoomScreen(
                             .weight(1f)
                             .clip(RoundedCornerShape(20.dp))
                             .background(IosTheme.colors.fieldBackground)
-                            .clickable { showComposerSheet = true }
+                            .clickable(enabled = state.sendingChannelId == null) { showComposerSheet = true }
+                            .semantics { contentDescription = "输入聊天消息" }
                             .padding(horizontal = 14.dp, vertical = 9.dp),
                     ) {
                         if (draft.isEmpty()) {
@@ -781,10 +580,7 @@ fun ChatRoomScreen(
                                 }
                                 if (fullMessage.isNotBlank()) {
                                     val uploadIds = pendingAttachments.mapNotNull { it.uploadId }
-                                    draft = ""
-                                    pendingAttachments = emptyList<AttachedMedia>()
-                                    showEmojiPicker = false
-                                    onSend(channelId, fullMessage, uploadIds)
+                                    send(fullMessage, uploadIds)
                                 }
                             }
                             .padding(horizontal = 14.dp, vertical = 8.dp),
@@ -834,20 +630,46 @@ fun ChatRoomScreen(
             onRemoveAttachment = { removeId: String -> pendingAttachments = pendingAttachments.filterNot { it.id == removeId } },
             isUploading = isUploading,
             isSending = state.sendingChannelId == channelId,
+            error = state.error,
             onPickImage = { pickImage.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)) },
             onPickFile = { pickFile.launch(arrayOf("*/*")) },
             onSend = { fullMessage, uploadIds ->
                 if (fullMessage.isNotBlank()) {
-                    draft = ""
-                    pendingAttachments = emptyList()
-                    showComposerSheet = false
-                    showEmojiPicker = false
-                    onSend(channelId, fullMessage, uploadIds)
+                    send(fullMessage, uploadIds)
                 }
             },
-            onDismiss = { showComposerSheet = false },
+            onDismiss = { keyboard?.hide(); showComposerSheet = false },
         )
     }
+    }
+}
+
+@Composable
+private fun ChatChannelNotificationMenu(
+    channelId: Long,
+    muted: Boolean,
+    enabled: Boolean,
+    onSetMuted: (Boolean) -> Unit,
+) {
+    var expanded by remember(channelId) { mutableStateOf(false) }
+    Box {
+        IconButton(onClick = { expanded = true }, enabled = enabled) {
+            Icon(
+                imageVector = Icons.Filled.Notifications,
+                contentDescription = if (muted) "频道通知设置，已开启消息免打扰" else "频道通知设置",
+                tint = if (enabled && !muted) IosTheme.colors.accent else IosTheme.colors.secondaryLabel,
+            )
+        }
+        DropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
+            DropdownMenuItem(
+                text = { Text(if (muted) "关闭消息免打扰" else "开启消息免打扰") },
+                enabled = enabled,
+                onClick = {
+                    expanded = false
+                    onSetMuted(!muted)
+                },
+            )
+        }
     }
 }
 
@@ -919,10 +741,12 @@ private fun ChatMessageBubble(
             ) {
                 Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
                     if (textContent.isNotBlank()) {
-                        Text(
-                            text = textContent,
-                            style = TextStyle(fontSize = 15.sp, color = Color.White, lineHeight = 21.sp),
-                        )
+                        SelectionContainer {
+                            Text(
+                                text = textContent,
+                                style = TextStyle(fontSize = 15.sp, color = Color.White, lineHeight = 21.sp),
+                            )
+                        }
                     }
                     // 渲染图片附件（缩略图点击可全屏查看）
                     imageUploads.forEach { upload ->
@@ -1002,10 +826,12 @@ private fun ChatMessageBubble(
                 ) {
                     Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
                         if (textContent.isNotBlank()) {
-                            Text(
-                                text = textContent,
-                                style = TextStyle(fontSize = 15.sp, color = IosTheme.colors.label, lineHeight = 21.sp),
-                            )
+                            SelectionContainer {
+                                Text(
+                                    text = textContent,
+                                    style = TextStyle(fontSize = 15.sp, color = IosTheme.colors.label, lineHeight = 21.sp),
+                                )
+                            }
                         }
                         // 渲染图片附件（缩略图点击可全屏查看）
                         imageUploads.forEach { upload ->
@@ -1043,6 +869,7 @@ private fun ChatComposerBottomSheet(
     onRemoveAttachment: (String) -> Unit,
     isUploading: Boolean,
     isSending: Boolean,
+    error: String?,
     onPickImage: () -> Unit,
     onPickFile: () -> Unit,
     onSend: (String, List<Long>) -> Unit,
@@ -1070,7 +897,8 @@ private fun ChatComposerBottomSheet(
     Box(
         modifier = Modifier
             .fillMaxSize()
-            .imePadding(),
+            .imePadding()
+            .navigationBarsPadding(),
         contentAlignment = Alignment.BottomCenter,
     ) {
         // 半透明暗色背景遮罩
@@ -1090,8 +918,12 @@ private fun ChatComposerBottomSheet(
             modifier = Modifier
                 .fillMaxWidth()
                 .then(
-                    if (isFullScreen) Modifier.fillMaxHeight(0.95f)
-                    else Modifier.fillMaxHeight(0.55f)
+                    when {
+                        isFullScreen -> Modifier.fillMaxHeight(0.92f)
+                        showSheetEmojiPicker -> Modifier.height(420.dp)
+                        pendingAttachments.isNotEmpty() || isUploading -> Modifier.height(380.dp)
+                        else -> Modifier.height(280.dp)
+                    }
                 )
                 .clip(RoundedCornerShape(topStart = 16.dp, topEnd = 16.dp))
                 .background(IosTheme.colors.card)
@@ -1125,11 +957,13 @@ private fun ChatComposerBottomSheet(
                 }
 
                 Text(
-                    text = "发表评论",
+                    text = "发送给 $channelTitle",
                     style = IosTheme.type.headline,
                     fontWeight = FontWeight.SemiBold,
                     color = IosTheme.colors.label,
                     maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.weight(1f).padding(horizontal = 8.dp),
                 )
 
                 // 右上角全屏切换图标
@@ -1160,18 +994,21 @@ private fun ChatComposerBottomSheet(
                             modifier = Modifier.fillMaxSize(),
                             factory = { ctx ->
                                 RichMarkdownEditorView(ctx).apply {
+                                    hint = "发送消息…"
                                     updateThemeColors(textColorInt, hintColorInt)
                                     setCompletionSource(completionSource)
                                     setInitialMarkdown(draft, pendingAttachments)
                                     setOnMarkdownChangeListener { newRaw -> onDraftChange(newRaw) }
                                     setOnRemoveAttachmentListener { mediaId -> onRemoveAttachment(mediaId) }
                                     editorView = this
+                                    post { requestInputFocus() }
                                 }
                             },
                             update = { view ->
                                 view.updateThemeColors(textColorInt, hintColorInt)
                                 view.setTextSize(android.util.TypedValue.COMPLEX_UNIT_PX, editorTextSizePx)
                                 view.setCompletionSource(completionSource)
+                                view.isEnabled = !isSending
                             },
                         )
                     }
@@ -1246,6 +1083,8 @@ private fun ChatComposerBottomSheet(
                     }
                 }
             }
+
+            error?.let { Text(it, style = IosTheme.type.footnote, color = IosTheme.colors.destructive, maxLines = 2) }
 
             // 底部操作栏: 图片, 文件, 表情, B, 以及蓝底发送按钮
             Row(
@@ -1333,7 +1172,7 @@ private fun ChatComposerBottomSheet(
                         IosActivityIndicator(diameter = 16.dp, color = Color.White)
                     } else {
                         Text(
-                            text = "发表",
+                            text = "发送",
                             style = TextStyle(fontSize = 14.sp, fontWeight = FontWeight.SemiBold, color = Color.White),
                         )
                     }

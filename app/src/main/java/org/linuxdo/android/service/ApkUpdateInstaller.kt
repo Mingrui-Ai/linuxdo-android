@@ -107,7 +107,9 @@ object ApkUpdateInstaller {
                 .header("User-Agent", resolveDownloadUserAgent(appContext))
                 .get()
                 .build()
-            val response = downloadClient
+            val networkMode = (appContext as? App)?.container?.networkMode?.value
+                ?: org.linuxdo.android.data.SessionStore(appContext).getNetworkMode()
+            val response = downloadClients.getValue(networkMode)
                 .newCall(request)
                 .execute()
 
@@ -191,18 +193,21 @@ object ApkUpdateInstaller {
      * 外站安装包下载专用客户端，与论坛主站 `container.httpClient` 彻底解耦：
      * - 不经过 `DohTransport`（Rustls ECH / Proxy.NO_PROXY）与 `AnycastDns`；
      * - 不挂载 `DohFailoverInterceptor`，避免 GitHub 传输抖动误触发论坛 DoH 节点切换；
-     * - 遵循系统 DNS 与系统代理/VPN，并允许连接层失败自动重试。
+     * - 使用系统 DNS，代理策略遵循用户选择，并允许连接层失败自动重试。
      */
-    private val downloadClient: OkHttpClient by lazy {
-        OkHttpClient.Builder()
-            .connectTimeout(20, TimeUnit.SECONDS)
-            .readTimeout(60, TimeUnit.SECONDS)
-            .writeTimeout(30, TimeUnit.SECONDS)
-            .callTimeout(0, TimeUnit.MILLISECONDS)
-            .followRedirects(true)
-            .followSslRedirects(true)
-            .retryOnConnectionFailure(true)
-            .build()
+    private val downloadClients: Map<org.linuxdo.android.net.NetworkMode, OkHttpClient> by lazy {
+        org.linuxdo.android.net.NetworkMode.entries.associateWith { mode ->
+            OkHttpClient.Builder()
+                .proxy(if (mode == org.linuxdo.android.net.NetworkMode.BUILT_IN) java.net.Proxy.NO_PROXY else null)
+                .connectTimeout(20, TimeUnit.SECONDS)
+                .readTimeout(60, TimeUnit.SECONDS)
+                .writeTimeout(30, TimeUnit.SECONDS)
+                .callTimeout(0, TimeUnit.MILLISECONDS)
+                .followRedirects(true)
+                .followSslRedirects(true)
+                .retryOnConnectionFailure(true)
+                .build()
+        }
     }
 
     private fun resolveDownloadUserAgent(appContext: Context): String =

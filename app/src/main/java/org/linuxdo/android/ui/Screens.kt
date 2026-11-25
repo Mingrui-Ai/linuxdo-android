@@ -1,5 +1,13 @@
 package org.linuxdo.android.ui
 
+import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.WindowInsetsSides
+import androidx.compose.foundation.layout.displayCutout
+import androidx.compose.foundation.layout.systemBars
+import androidx.compose.foundation.layout.only
+import androidx.compose.foundation.layout.union
+import androidx.compose.foundation.layout.windowInsetsPadding
+
 import android.app.Activity
 import android.content.Context
 import android.content.ContextWrapper
@@ -19,6 +27,8 @@ import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
+import androidx.compose.foundation.selection.selectable
+import androidx.compose.foundation.selection.selectableGroup
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.ui.text.input.KeyboardType
@@ -51,6 +61,8 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.Slider
 import androidx.compose.material3.SliderDefaults
+import androidx.compose.material3.RadioButton
+import androidx.compose.material3.RadioButtonDefaults
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.foundation.pager.HorizontalPager
@@ -85,6 +97,7 @@ import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.drawscope.scale
 import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.unit.dp
@@ -124,6 +137,10 @@ import kotlinx.coroutines.cancel
 import org.linuxdo.android.data.EditorSuggestion
 import org.linuxdo.android.data.EditorCompletionRequest
 import org.linuxdo.android.ui.design.IosActivityIndicator
+import org.linuxdo.android.ui.design.ListNavigationHeader
+import org.linuxdo.android.ui.design.scrollListBars
+import org.linuxdo.android.ui.design.MessageFeedRow
+import org.linuxdo.android.ui.design.SectionHeader
 import org.linuxdo.android.ui.design.IosLargeTitleScaffold
 import org.linuxdo.android.ui.design.IosMetrics
 import org.linuxdo.android.ui.design.IosRow
@@ -134,7 +151,6 @@ import org.linuxdo.android.ui.design.IosSwitch
 import org.linuxdo.android.ui.design.UserAvatar
 import org.linuxdo.android.ui.nav.SettingsPage
 import org.linuxdo.android.data.ProfileSection
-import org.linuxdo.android.data.NotificationFilter
 import org.linuxdo.android.ui.AccountUiState
 import org.linuxdo.android.ui.screen.AccountSwitchBottomSheet
 import coil.compose.AsyncImage
@@ -225,1177 +241,120 @@ import org.linuxdo.android.ui.screen.categoryLevelOf
 import org.linuxdo.android.ui.screen.levelPillColors
 import org.linuxdo.android.ui.screen.parseCategoryColor
 
-/** 列表攒够这么多条才允许继续自动翻页;不足则改成手动按钮。 */
-private const val AUTO_LOAD_THRESHOLD = 20
-
-/**
- * 角标实测下发后,桌面保持人造数字的时长。
- *
- * 未读每 10 秒轮询一次,不冻结的话实测数字按不到 Home 键就被真实未读覆盖了。
- */
-/**
- * 精美蓝盾认证徽章 (科技蓝渐变盾牌 + 纯白对勾 + 外发光晕)
- */
-@Composable
-fun ProfileVerifiedBadge(modifier: Modifier = Modifier) {
-    Canvas(modifier = modifier.size(17.dp)) {
-        val w = size.width
-        val h = size.height
-
-        // 外层柔和微光辉光
-        drawCircle(
-            color = Color(0x3538BDF8),
-            radius = w * 0.55f,
-            center = Offset(w * 0.5f, h * 0.5f)
-        )
-
-        // 盾牌几何路径
-        val shieldPath = Path().apply {
-            moveTo(w * 0.5f, h * 0.08f)
-            cubicTo(w * 0.85f, h * 0.08f, w * 0.95f, h * 0.22f, w * 0.92f, h * 0.52f)
-            cubicTo(w * 0.88f, h * 0.78f, w * 0.55f, h * 0.96f, w * 0.5f, h * 0.98f)
-            cubicTo(w * 0.45f, h * 0.96f, w * 0.12f, h * 0.78f, w * 0.08f, h * 0.52f)
-            cubicTo(w * 0.05f, h * 0.22f, w * 0.15f, h * 0.08f, w * 0.5f, h * 0.08f)
-            close()
-        }
-
-        // 渐变填充 (天蓝 -> 宝石蓝)
-        drawPath(
-            path = shieldPath,
-            brush = Brush.verticalGradient(
-                listOf(Color(0xFF38BDF8), Color(0xFF0284C7))
-            )
-        )
-
-        // 细微高光内描边
-        drawPath(
-            path = shieldPath,
-            color = Color(0x90BAE6FD),
-            style = Stroke(width = 1.dp.toPx())
-        )
-
-        // 中间对勾 (Checkmark)
-        val checkPath = Path().apply {
-            moveTo(w * 0.32f, h * 0.52f)
-            lineTo(w * 0.46f, h * 0.67f)
-            lineTo(w * 0.70f, h * 0.38f)
-        }
-        drawPath(
-            path = checkPath,
-            color = Color.White,
-            style = Stroke(
-                width = 1.8.dp.toPx(),
-                cap = StrokeCap.Round,
-                join = StrokeJoin.Round
-            )
-        )
-    }
-}
-
-data class ProfileBannerTheme(
-    val bgColors: List<Color>,
-    val borderColor: Color,
-    val textColor: Color,
-    val btnColors: List<Color>,
-    val shieldPrimary: Color,
-    val shieldAccent: Color,
-)
-
-/**
- * 信任等级横幅左侧突出的立体微光盾牌
- * (立体微发光光晕 + 盾牌双层描边 + 内部星芒 + 尊荣等级文字)
- * 严格联动用户等级设计规范：Lv.2 温润琥珀金(绝无绿)，Lv.3 华贵深金皇冠
- */
-@Composable
-fun ProfileShieldBadge(
-    level: Int,
-    primaryColor: Color,
-    accentColor: Color,
-    modifier: Modifier = Modifier
-) {
-    Box(
-        modifier = modifier.size(width = 44.dp, height = 50.dp),
-        contentAlignment = Alignment.Center
-    ) {
-        Canvas(modifier = Modifier.fillMaxSize()) {
-            val w = size.width
-            val h = size.height
-
-            // 1. 底层大范围微光晕 (Glow)
-            drawCircle(
-                brush = Brush.radialGradient(
-                    colors = listOf(primaryColor.copy(alpha = 0.45f), Color.Transparent),
-                    center = Offset(w * 0.5f, h * 0.5f),
-                    radius = w * 0.68f
-                )
-            )
-
-            // 2. 盾牌几何路径
-            val shieldPath = Path().apply {
-                moveTo(w * 0.5f, h * 0.06f)
-                cubicTo(w * 0.88f, h * 0.06f, w * 0.98f, h * 0.20f, w * 0.94f, h * 0.55f)
-                cubicTo(w * 0.90f, h * 0.80f, w * 0.56f, h * 0.97f, w * 0.5f, h * 0.99f)
-                cubicTo(w * 0.44f, h * 0.97f, w * 0.10f, h * 0.80f, w * 0.06f, h * 0.55f)
-                cubicTo(w * 0.02f, h * 0.20f, w * 0.12f, h * 0.06f, w * 0.5f, h * 0.06f)
-                close()
-            }
-
-            // 3. 盾牌半透明立体填充
-            drawPath(
-                path = shieldPath,
-                brush = Brush.verticalGradient(
-                    listOf(
-                        primaryColor.copy(alpha = 0.90f),
-                        accentColor.copy(alpha = 0.95f)
-                    )
-                )
-            )
-
-            // 4. 金属发光高光描边
-            drawPath(
-                path = shieldPath,
-                brush = Brush.verticalGradient(
-                    listOf(Color.White.copy(alpha = 0.75f), accentColor)
-                ),
-                style = Stroke(width = 1.6.dp.toPx())
-            )
-
-            // 5. 顶部微小星芒 ✨ (3 颗闪烁点)
-            val starPoints = listOf(
-                Offset(w * 0.36f, h * 0.23f) to 1.1.dp.toPx(),
-                Offset(w * 0.50f, h * 0.18f) to 1.6.dp.toPx(),
-                Offset(w * 0.64f, h * 0.23f) to 1.1.dp.toPx(),
-            )
-            for ((center, radius) in starPoints) {
-                drawCircle(color = Color.White.copy(alpha = 0.92f), radius = radius, center = center)
-            }
-        }
-
-        // 中部尊荣等级文字 Lv.X
-        Column(
-            horizontalAlignment = Alignment.CenterHorizontally,
-            modifier = Modifier.padding(top = 8.dp)
-        ) {
-            Text(
-                text = "Lv.$level",
-                style = IosTheme.type.caption.copy(
-                    fontSize = 12.5.sp,
-                    fontWeight = FontWeight.Black,
-                    letterSpacing = (-0.2).sp
-                ),
-                color = Color.White,
-            )
-        }
-    }
-}
-
-/**
- * 拟态微光玻璃球金刚位图标
- * (立体渐变球底 + 专属主题色内发光晕 + 弧形环境高光 + 细微立体描边)
- */
-@Composable
-fun SphereIconButton(
-    title: String,
-    iconGlyph: String,
-    glowColor: Color,
-    onClick: () -> Unit,
-    modifier: Modifier = Modifier
-) {
-    val isDark = IosTheme.colors.isDark
-    Column(
-        horizontalAlignment = Alignment.CenterHorizontally,
-        modifier = modifier.clickable(onClick = onClick)
-    ) {
-        Box(
-            modifier = Modifier.size(48.dp),
-            contentAlignment = Alignment.Center
-        ) {
-            Canvas(modifier = Modifier.fillMaxSize()) {
-                val w = size.width
-                val h = size.height
-
-                // 1. 底层立体玻璃球底座
-                val sphereBrush = Brush.radialGradient(
-                    colors = if (isDark) {
-                        listOf(Color(0xFF2C3342), Color(0xFF141720))
-                    } else {
-                        listOf(Color(0xFFFFFFFF), Color(0xFFE2E8F0))
-                    },
-                    center = Offset(w * 0.4f, h * 0.32f),
-                    radius = w * 0.62f
-                )
-                drawCircle(brush = sphereBrush)
-
-                // 2. 内部专属主题色微光晕
-                drawCircle(
-                    brush = Brush.radialGradient(
-                        colors = listOf(glowColor.copy(alpha = if (isDark) 0.38f else 0.28f), Color.Transparent),
-                        center = Offset(w * 0.5f, h * 0.5f),
-                        radius = w * 0.46f
-                    )
-                )
-
-                // 3. 顶部微弱弧形高光反射条
-                val highlightPath = Path().apply {
-                    moveTo(w * 0.26f, h * 0.18f)
-                    quadraticTo(w * 0.5f, h * 0.12f, w * 0.74f, h * 0.18f)
-                }
-                drawPath(
-                    path = highlightPath,
-                    color = Color.White.copy(alpha = if (isDark) 0.35f else 0.70f),
-                    style = Stroke(width = 1.2.dp.toPx(), cap = StrokeCap.Round)
-                )
-
-                // 4. 外圆圈立体微边框
-                drawCircle(
-                    color = if (isDark) Color(0x33FFFFFF) else Color(0x1F000000),
-                    style = Stroke(width = 1.dp.toPx())
-                )
-            }
-
-            // 中央图标
-            Text(
-                text = iconGlyph,
-                fontSize = 20.sp
-            )
-        }
-        Spacer(Modifier.height(6.dp))
-        Text(
-            text = title,
-            style = IosTheme.type.caption.copy(fontSize = 11.5.sp, fontWeight = FontWeight.Normal),
-            color = IosTheme.colors.label,
-            maxLines = 1
-        )
-    }
-}
-
 private const val BADGE_TEST_HOLD_MILLIS = 3 * 60 * 1000L
 
-@OptIn(ExperimentalLayoutApi::class)
 @Composable
-fun ProfileScreen(
-    username: String?,
-    states: Map<ProfileSection, ProfileUiState>,
-    onLoad: (ProfileSection, Boolean, Boolean) -> Unit,
+internal fun NotificationRow(
+    entry: org.linuxdo.android.data.ProfileEntry,
     onOpenTopic: (Long, String, Int?) -> Unit,
-    onDiagnostics: () -> Unit,
-    onSettings: () -> Unit,
-    onLogout: () -> Unit = {},
-    active: Boolean,
-    notificationOnly: Boolean = false,
-    onBack: (() -> Unit)? = null,
-    onReadNotification: (Long) -> Unit = {},
-    notificationFilter: NotificationFilter = NotificationFilter.All,
-    onNotificationFilter: (NotificationFilter) -> Unit = {},
-    unreadFilters: Set<NotificationFilter> = emptySet(),
-    onOpenUserTopics: ((username: String, title: String, isBookmark: Boolean) -> Unit)? = null,
-    draftCount: String = "0",
-    onOpenDrafts: (() -> Unit)? = null,
-    accountState: AccountUiState = AccountUiState(),
-    onRefreshAccounts: () -> Unit = {},
-    onSwitchAccount: (Long) -> Unit = {},
-    onRemoveAccount: (Long) -> Unit = {},
-    onAddAccount: () -> Unit = {},
-    onOpenConnect: () -> Unit = {},
-    onOpenHistory: () -> Unit = {},
-    onOpenFollowing: () -> Unit = {},
-    onOpenChat: () -> Unit = {},
-    onOpenBlacklist: () -> Unit = {},
-    onOpenLdcStore: () -> Unit = {},
-    onOpenLdcMail: () -> Unit = {},
-    onOpenUser: (username: String, primaryAvatar: String?, staticAvatar: String?) -> Unit = { _, _, _ -> },
-    onComposePrivateMessage: (String) -> Unit = {},
-    onOpenUserReplies: ((String) -> Unit)? = null,
-    onOpenUserActions: ((username: String, title: String, filter: String) -> Unit)? = null,
-    scrollToTopRequest: Int = 0,
-    onMarkAllNotificationsRead: (() -> Unit)? = null,
-    userBadges: List<UserBadgeItem>? = null,
-    isUserBadgesLoading: Boolean = false,
-    onRefreshUserBadges: (() -> Unit)? = null,
-    cdkScore: Int? = null,
-    onLoadCdkScore: () -> Unit = {},
-    trailing: @Composable () -> Unit = {},
+    onRead: (Long) -> Unit,
+    onOpenUser: (String) -> Unit,
 ) {
-    var selectedBadge by remember { mutableStateOf<UserBadgeItem?>(null) }
-    var section by rememberSaveable { mutableStateOf(if (notificationOnly) ProfileSection.Notifications else ProfileSection.Summary) }
-    var previousSection by rememberSaveable { mutableStateOf(section) }
-    val list = rememberLazyListState()
-    val state = states[section] ?: ProfileUiState()
-    val summaryState = states[ProfileSection.Summary] ?: ProfileUiState()
-    val summaryFields = summaryState.content.fields
-
-    val visibleEntries = state.content.entries
-    val nearEnd by remember { derivedStateOf {
-        (list.layoutInfo.visibleItemsInfo.lastOrNull()?.index ?: -1) >= list.layoutInfo.totalItemsCount - 3
-    } }
-    LaunchedEffect(section, active) {
-        if (active) {
-            onLoad(section, section == ProfileSection.Notifications, false)
-            if (section != ProfileSection.Summary && summaryFields.isEmpty()) {
-                onLoad(ProfileSection.Summary, false, false)
-            }
-            if (section != ProfileSection.Summary && !notificationOnly && userBadges == null && !isUserBadgesLoading) {
-                onRefreshUserBadges?.invoke()
-            }
-            if (!notificationOnly) {
-                kotlinx.coroutines.delay(600L)
-                onLoadCdkScore()
-            }
-        }
-        if (previousSection != section) {
-            previousSection = section
-            list.scrollToItem(0)
-        }
-    }
-    LaunchedEffect(active, nearEnd, state, notificationFilter) {
-        if (active && nearEnd && state.loaded && !state.loading && state.error == null &&
-            state.content.hasMore && visibleEntries.size >= AUTO_LOAD_THRESHOLD) {
-            onLoad(section, false, true)
-        }
-    }
-    var showLogoutDialog by remember { mutableStateOf(false) }
-    var showMarkAllReadConfirmDialog by remember { mutableStateOf(false) }
-    var showAccountSwitchSheet by remember { mutableStateOf(false) }
-    val activeAccount = accountState.accounts.firstOrNull { it.userId == accountState.activeUserId }
-
-    val daysVisited = remember(summaryFields) { findMetric(summaryFields, "访问天数") }
-    val timeRead = remember(summaryFields) { findMetric(summaryFields, "阅读时长") }
-    val topicsEntered = remember(summaryFields) { findMetric(summaryFields, "浏览话题") }
-
-    val postsRead = remember(summaryFields) { findMetric(summaryFields, "已读帖子") }
-    val likesReceived = remember(summaryFields) { findMetric(summaryFields, "收到赞") }
-    val likesGiven = remember(summaryFields) { findMetric(summaryFields, "送出赞") }
-    val postCount = remember(summaryFields) { findMetric(summaryFields, "回复数量") }
-    val topicCount = remember(summaryFields) { findMetric(summaryFields, "创建话题", findMetric(summaryFields, "发表话题")) }
-    val context = LocalContext.current
-    val bookmarkCount = remember(summaryFields) { findMetric(summaryFields, "我的收藏") }
-
-    IosLargeTitleScaffold(
-        title = if (notificationOnly) "通知" else "我的",
-        listState = list,
-        onBack = if (notificationOnly) null else onBack,
-        showLargeTitle = false,
-        backLabel = if (notificationOnly) "" else "返回",
-        scrollToTopRequest = scrollToTopRequest,
-        trailing = {
-            if (!notificationOnly) {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    trailing()
-                    Spacer(Modifier.width(10.dp))
-                    Box(
-                        modifier = Modifier
-                            .size(34.dp)
-                            .clip(CircleShape)
-                            .clickable(onClick = onSettings),
-                        contentAlignment = Alignment.Center,
-                    ) {
-                        ProfileSettingsGearIcon(tint = IosTheme.colors.secondaryLabel)
-                    }
-                }
-            } else {
-                if (onMarkAllNotificationsRead != null) {
-                    Box(
-                        modifier = Modifier
-                            .size(34.dp)
-                            .clip(CircleShape)
-                            .clickable {
-                                showMarkAllReadConfirmDialog = true
-                            },
-                        contentAlignment = Alignment.Center,
-                    ) {
-                        BroomGlyph(tint = IosTheme.colors.label)
-                    }
-                }
+    val typeTag = notificationTypeTag(entry.notificationType)
+    val date = entry.subtitle.substringAfterLast(" · ", "").takeIf { it.length == 10 && it[4] == '-' }
+    MessageFeedRow(
+        name = entry.actor?.takeIf { it.isNotBlank() } ?: "系统通知",
+        preview = entry.title,
+        date = date?.takeLast(5).orEmpty(),
+        onClick = {
+            if (entry.unread) entry.id.toLongOrNull()?.let(onRead)
+            entry.topicId?.let { onOpenTopic(it, entry.title, entry.postNumber) }
+        },
+        avatar = {
+            NotificationAvatarWithBadge(entry.avatarUrl, entry.actor, entry.notificationType, entry.unread) {
+                entry.actor?.let(onOpenUser)
             }
         },
+        badge = {
+            val tint = notificationTypeTint(entry.notificationType)
+            Text(typeTag, style = IosTheme.type.caption.copy(fontSize = 11.sp), color = tint,
+                modifier = Modifier.background(tint.copy(alpha = 0.13f), RoundedCornerShape(4.dp))
+                    .padding(horizontal = 5.dp, vertical = 1.dp))
+            if (entry.unread) Spacer(Modifier.size(6.dp).background(IosTheme.colors.accent, CircleShape)
+                .semantics { contentDescription = "未读" })
+        },
+    )
+}
+
+@Composable
+internal fun ConfirmReadNotifications(onDismiss: () -> Unit, onConfirm: () -> Unit) {
+    val context = LocalContext.current
+    Dialog(
+        onDismissRequest = { onDismiss() },
+        properties = DialogProperties(usePlatformDefaultWidth = false),
     ) {
-        if (!notificationOnly) {
-            // ── 贴吧风格全新现代化个人主页 (顶部身份 + 晋级卡片 + 4列仪表盘 + 5宫格金刚位) ──
-            item("tieba-profile-header") {
-                val animCandidate = activeAccount?.animatedAvatar ?: AvatarCache.get(username)
-                val avatarUrl = avatarUrlOf(
-                    activeAccount?.avatarTemplate,
-                    animCandidate,
-                    size = 120,
-                    username = username,
-                )
-                val staticAvatarUrl = avatarUrlOf(activeAccount?.avatarTemplate, size = 120)
-                val level = activeAccount?.trustLevel ?: 0
-
-                Column(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(horizontal = 14.dp, vertical = 4.dp),
-                    verticalArrangement = Arrangement.spacedBy(8.dp),
-                ) {
-                    val isDark = IosTheme.colors.isDark
-
-                    // 1. 用户身份主卡片 (顶部大圆角，支持点击头像查看资料)
-                    Box(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .clip(RoundedCornerShape(16.dp))
-                            .background(
-                                Brush.verticalGradient(
-                                    if (isDark) {
-                                        listOf(Color(0xFF1E2430), Color(0xFF151922))
-                                    } else {
-                                        listOf(Color(0xFFF8FAFC), Color(0xFFFFFFFF))
-                                    }
-                                )
-                            )
-                            .border(
-                                1.dp,
-                                if (isDark) Color(0xFF2B3342) else Color(0xFFE2E8F0),
-                                RoundedCornerShape(16.dp)
-                            )
-                            .padding(horizontal = 14.dp, vertical = 12.dp)
-                    ) {
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            verticalAlignment = Alignment.CenterVertically,
-                        ) {
-                            // 大头像 (外圈光环)
-                            Box(
-                                modifier = Modifier
-                                    .size(58.dp)
-                                    .clip(CircleShape)
-                                    .border(
-                                        2.dp,
-                                        if (isDark) Color(0xFF0284C7) else Color(0xFFBAE6FD),
-                                        CircleShape
-                                    )
-                                    .clickable {
-                                        if (!username.isNullOrBlank()) {
-                                            val animPath = animCandidate?.takeIf(::isAnimatedAvatarPath)
-                                            val primaryToSend = if (animPath != null) avatarUrl else null
-                                            onOpenUser(username, primaryToSend, staticAvatarUrl)
-                                        }
-                                    },
-                                contentAlignment = Alignment.Center,
-                            ) {
-                                UserAvatar(
-                                    avatarUrl = avatarUrl,
-                                    fallbackUrl = staticAvatarUrl,
-                                    username = username,
-                                    modifier = Modifier.fillMaxSize(),
-                                    cornerRadius = 29.dp,
-                                )
-                            }
-
-                            Spacer(Modifier.width(14.dp))
-
-                            // 用户信息
-                            Column(
-                                modifier = Modifier.weight(1f),
-                                verticalArrangement = Arrangement.spacedBy(5.dp),
-                            ) {
-                                Row(
-                                    verticalAlignment = Alignment.CenterVertically,
-                                    horizontalArrangement = Arrangement.spacedBy(6.dp),
-                                ) {
-                                    Text(
-                                        text = username ?: "尚未确认登录",
-                                        style = IosTheme.type.headline.copy(fontSize = 19.sp, fontWeight = FontWeight.Bold),
-                                        color = IosTheme.colors.label,
-                                        maxLines = 1,
-                                        overflow = TextOverflow.Ellipsis,
-                                    )
-                                    ProfileVerifiedBadge()
-                                }
-
-                                Row(
-                                    horizontalArrangement = Arrangement.spacedBy(8.dp),
-                                    verticalAlignment = Alignment.CenterVertically,
-                                ) {
-                                    // 社区分胶囊
-                                    Box(
-                                        modifier = Modifier
-                                            .clip(RoundedCornerShape(50))
-                                            .background(
-                                                if (isDark) Color(0x332B3950) else Color(0x181890FF)
-                                            )
-                                            .border(
-                                                1.dp,
-                                                if (isDark) Color(0x5538BDF8) else Color(0x351890FF),
-                                                RoundedCornerShape(50)
-                                            )
-                                            .padding(horizontal = 8.dp, vertical = 2.dp),
-                                        contentAlignment = Alignment.Center,
-                                    ) {
-                                        Text(
-                                            text = "社区分 ${cdkScore ?: "-"}",
-                                            style = IosTheme.type.caption.copy(
-                                                fontSize = 11.sp,
-                                                fontWeight = FontWeight.SemiBold,
-                                                color = if (isDark) Color(0xFF7DD3FC) else Color(0xFF096DD9),
-                                            ),
-                                        )
-                                    }
-
-                                    // 获赞胶囊
-                                    Box(
-                                        modifier = Modifier
-                                            .clip(RoundedCornerShape(50))
-                                            .background(
-                                                if (isDark) Color(0x20334155) else Color(0x1264748B)
-                                            )
-                                            .border(
-                                                1.dp,
-                                                if (isDark) Color(0x30475569) else Color(0x20CBD5E1),
-                                                RoundedCornerShape(50)
-                                            )
-                                            .padding(horizontal = 8.dp, vertical = 2.dp),
-                                        contentAlignment = Alignment.Center,
-                                    ) {
-                                        Text(
-                                            text = "获赞 $likesReceived",
-                                            style = IosTheme.type.caption.copy(
-                                                fontSize = 11.sp,
-                                                color = IosTheme.colors.secondaryLabel
-                                            ),
-                                        )
-                                    }
-                                }
-                            }
-
-                            // 切换账号胶囊 (参考图右侧圆角胶囊按钮)
-                            Box(
-                                modifier = Modifier
-                                    .clip(RoundedCornerShape(50))
-                                    .background(if (isDark) Color(0x30334155) else Color(0xFFF1F5F9))
-                                    .border(
-                                        1.dp,
-                                        if (isDark) Color(0x50475569) else Color(0xFFE2E8F0),
-                                        RoundedCornerShape(50)
-                                    )
-                                    .clickable {
-                                        onRefreshAccounts()
-                                        showAccountSwitchSheet = true
-                                    }
-                                    .padding(horizontal = 12.dp, vertical = 6.dp),
-                                contentAlignment = Alignment.Center,
-                            ) {
-                                Text(
-                                    text = "切换 ⇄",
-                                    style = IosTheme.type.caption.copy(fontSize = 12.sp, fontWeight = FontWeight.Medium),
-                                    color = IosTheme.colors.secondaryLabel,
-                                )
-                            }
-                        }
-                    }
-
-                    // 2. 贴吧式「信任等级进阶微横幅」 (立体发光微光盾牌 + 严格联动用户等级设计规范配色)
-                    val bannerTheme = when (level) {
-                        1 -> ProfileBannerTheme(
-                            // Lv.1 活跃成员：科技冰蓝
-                            bgColors = if (isDark) listOf(Color(0xFF092032), Color(0xFF133854)) else listOf(Color(0xFFEBF5FF), Color(0xFFD0E8FF)),
-                            borderColor = if (isDark) Color(0xFF0369A1) else Color(0xFFBAE6FD),
-                            textColor = if (isDark) Color(0xFF7DD3FC) else Color(0xFF0369A1),
-                            btnColors = listOf(Color(0xFF0284C7), Color(0xFF0369A1)),
-                            shieldPrimary = Color(0xFF38BDF8),
-                            shieldAccent = Color(0xFF0284C7)
-                        )
-                        2 -> ProfileBannerTheme(
-                            // Lv.2 进阶成员：温润琥珀流金 (严格杜绝绿色！)
-                            bgColors = if (isDark) listOf(Color(0xFF2E1F0A), Color(0xFF463012)) else listOf(Color(0xFFFFF7E6), Color(0xFFFFE8BA)),
-                            borderColor = if (isDark) Color(0xFF784F12) else Color(0xFFFFD591),
-                            textColor = if (isDark) Color(0xFFFFD166) else Color(0xFF874D00),
-                            btnColors = listOf(Color(0xFFF59E0B), Color(0xFFD97706)),
-                            shieldPrimary = Color(0xFFFBBF24),
-                            shieldAccent = Color(0xFFD97706)
-                        )
-                        3 -> ProfileBannerTheme(
-                            // Lv.3 资深核心：华贵深鎏金皇冠
-                            bgColors = if (isDark) listOf(Color(0xFF382305), Color(0xFF523508)) else listOf(Color(0xFFFFF2E8), Color(0xFFFFDBB5)),
-                            borderColor = if (isDark) Color(0xFF92400E) else Color(0xFFFFBB96),
-                            textColor = if (isDark) Color(0xFFFFC069) else Color(0xFF9A3412),
-                            btnColors = listOf(Color(0xFFEA580C), Color(0xFFC2410C)),
-                            shieldPrimary = Color(0xFFFCD34D),
-                            shieldAccent = Color(0xFFD97706)
-                        )
-                        4 -> ProfileBannerTheme(
-                            // Lv.4 领袖成员：尊贵紫晶
-                            bgColors = if (isDark) listOf(Color(0xFF2B1038), Color(0xFF3F1952)) else listOf(Color(0xFFFAF5FF), Color(0xFFE9D5FF)),
-                            borderColor = if (isDark) Color(0xFF6B21A8) else Color(0xFFD8B4FE),
-                            textColor = if (isDark) Color(0xFFD8B4FE) else Color(0xFF6B21A8),
-                            btnColors = listOf(Color(0xFF9333EA), Color(0xFF7E22CE)),
-                            shieldPrimary = Color(0xFFD8B4FE),
-                            shieldAccent = Color(0xFF9333EA)
-                        )
-                        else -> ProfileBannerTheme(
-                            // Lv.0 探索者：钛金银灰
-                            bgColors = if (isDark) listOf(Color(0xFF1E2128), Color(0xFF2B2F38)) else listOf(Color(0xFFF1F3F5), Color(0xFFE2E8F0)),
-                            borderColor = if (isDark) Color(0xFF475569) else Color(0xFFCBD5E1),
-                            textColor = if (isDark) Color(0xFFCBD5E1) else Color(0xFF475569),
-                            btnColors = listOf(Color(0xFF64748B), Color(0xFF475569)),
-                            shieldPrimary = Color(0xFFCBD5E1),
-                            shieldAccent = Color(0xFF64748B)
-                        )
-                    }
-
-                    Box(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .clip(RoundedCornerShape(16.dp))
-                            .background(Brush.horizontalGradient(bannerTheme.bgColors))
-                            .border(
-                                1.dp,
-                                bannerTheme.borderColor,
-                                RoundedCornerShape(16.dp)
-                            )
-                            .clickable(onClick = onOpenConnect)
-                            .padding(horizontal = 14.dp, vertical = 10.dp)
-                    ) {
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.SpaceBetween,
-                        ) {
-                            Row(
-                                verticalAlignment = Alignment.CenterVertically,
-                                horizontalArrangement = Arrangement.spacedBy(10.dp)
-                            ) {
-                                // 左侧立体微光盾牌
-                                ProfileShieldBadge(
-                                    level = level,
-                                    primaryColor = bannerTheme.shieldPrimary,
-                                    accentColor = bannerTheme.shieldAccent
-                                )
-                                val levelStatusText = if (level >= 3) "继续保持" else "继续加油"
-                                Text(
-                                    text = "信任等级 Lv.$level · $levelStatusText",
-                                    style = IosTheme.type.caption.copy(fontSize = 13.5.sp, fontWeight = FontWeight.SemiBold),
-                                    color = bannerTheme.textColor,
-                                )
-                            }
-                            // 右侧发光胶囊按钮
-                            Box(
-                                modifier = Modifier
-                                    .clip(RoundedCornerShape(50))
-                                    .background(Brush.horizontalGradient(bannerTheme.btnColors))
-                                    .border(1.dp, Color(0x60FFFFFF), RoundedCornerShape(50))
-                                    .padding(horizontal = 14.dp, vertical = 6.dp),
-                                contentAlignment = Alignment.Center,
-                            ) {
-                                Text(
-                                    text = "等级积分",
-                                    style = IosTheme.type.caption.copy(fontSize = 11.5.sp, fontWeight = FontWeight.Bold),
-                                    color = Color.White,
-                                )
-                            }
-                        }
-                    }
-
-                    // 3. 4 列核心大数字横排仪表盘
-                    Box(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .clip(RoundedCornerShape(16.dp))
-                            .background(IosTheme.colors.card)
-                            .border(
-                                1.dp,
-                                if (isDark) Color(0xFF2C2D30) else Color(0xFFEFF1F4),
-                                RoundedCornerShape(16.dp)
-                            )
-                            .padding(vertical = 12.dp)
-                    ) {
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.SpaceAround,
-                        ) {
-                            // 我的发帖
-                            Column(
-                                horizontalAlignment = Alignment.CenterHorizontally,
-                                modifier = Modifier
-                                    .weight(1f)
-                                    .clickable {
-                                        if (!username.isNullOrBlank()) onOpenUserTopics?.invoke(username, "创建的话题", false)
-                                    }
-                            ) {
-                                Text(
-                                    text = topicCount,
-                                    style = IosTheme.type.headline.copy(fontSize = 17.5.sp, fontWeight = FontWeight.Bold),
-                                    color = IosTheme.colors.label,
-                                )
-                                Spacer(Modifier.height(4.dp))
-                                Text("发帖", style = IosTheme.type.caption.copy(fontSize = 11.sp), color = IosTheme.colors.secondaryLabel)
-                            }
-                            // 我的回帖
-                            Column(
-                                horizontalAlignment = Alignment.CenterHorizontally,
-                                modifier = Modifier
-                                    .weight(1f)
-                                    .clickable {
-                                        if (!username.isNullOrBlank()) onOpenUserReplies?.invoke(username)
-                                    }
-                            ) {
-                                Text(
-                                    text = postCount,
-                                    style = IosTheme.type.headline.copy(fontSize = 17.5.sp, fontWeight = FontWeight.Bold),
-                                    color = IosTheme.colors.label,
-                                )
-                                Spacer(Modifier.height(4.dp))
-                                Text("我的回帖", style = IosTheme.type.caption.copy(fontSize = 11.sp), color = IosTheme.colors.secondaryLabel)
-                            }
-                            // 阅读时长
-                            Column(horizontalAlignment = Alignment.CenterHorizontally, modifier = Modifier.weight(1.2f)) {
-                                Text(
-                                    text = timeRead,
-                                    style = IosTheme.type.headline.copy(fontSize = 17.5.sp, fontWeight = FontWeight.Bold),
-                                    color = IosTheme.colors.label,
-                                    maxLines = 1,
-                                )
-                                Spacer(Modifier.height(4.dp))
-                                Text("阅读时长", style = IosTheme.type.caption.copy(fontSize = 11.sp), color = IosTheme.colors.secondaryLabel)
-                            }
-                            // 访问天数
-                            Column(horizontalAlignment = Alignment.CenterHorizontally, modifier = Modifier.weight(1f)) {
-                                Text(
-                                    text = daysVisited,
-                                    style = IosTheme.type.headline.copy(fontSize = 17.5.sp, fontWeight = FontWeight.Bold),
-                                    color = IosTheme.colors.label,
-                                )
-                                Spacer(Modifier.height(4.dp))
-                                Text("访问天数", style = IosTheme.type.caption.copy(fontSize = 11.sp), color = IosTheme.colors.secondaryLabel)
-                            }
-                        }
-                    }
-
-                    // 4. 5 联微光玻璃球拟态金刚位 (参考图通透悬浮排列)
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(vertical = 4.dp),
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                        verticalAlignment = Alignment.CenterVertically,
-                    ) {
-                        // 1: 我的收藏 (金色星芒)
-                        SphereIconButton(
-                            title = "我的收藏",
-                            iconGlyph = "⭐",
-                            glowColor = Color(0xFFFAAD14),
-                            onClick = {
-                                if (!username.isNullOrBlank()) onOpenUserTopics?.invoke(username, "我的收藏", true)
-                            },
-                            modifier = Modifier.weight(1f)
-                        )
-                        // 2: 我的点赞 (珊瑚暖橙赞)
-                        SphereIconButton(
-                            title = "我的点赞",
-                            iconGlyph = "👍",
-                            glowColor = Color(0xFFFF5722),
-                            onClick = {
-                                if (!username.isNullOrBlank() && onOpenUserActions != null) {
-                                    onOpenUserActions(username, "我的点赞", "1")
-                                } else {
-                                    section = ProfileSection.Summary
-                                }
-                            },
-                            modifier = Modifier.weight(1f)
-                        )
-                        // 3: 浏览历史 (科技冰蓝钟)
-                        SphereIconButton(
-                            title = "浏览历史",
-                            iconGlyph = "🕒",
-                            glowColor = Color(0xFF1890FF),
-                            onClick = onOpenHistory,
-                            modifier = Modifier.weight(1f)
-                        )
-                        // 4: 我的关注 (天蓝双人群组)
-                        SphereIconButton(
-                            title = "我的关注",
-                            iconGlyph = "👥",
-                            glowColor = Color(0xFF2F54EB),
-                            onClick = onOpenFollowing,
-                            modifier = Modifier.weight(1f)
-                        )
-                        // 5: 草稿箱 (翡翠薄荷铅笔)
-                        SphereIconButton(
-                            title = "草稿箱",
-                            iconGlyph = "✏️",
-                            glowColor = Color(0xFF52C41A),
-                            onClick = { onOpenDrafts?.invoke() },
-                            modifier = Modifier.weight(1f)
-                        )
-                    }
-
-                    Row(
-                        modifier = Modifier.fillMaxWidth().height(IntrinsicSize.Min),
-                        horizontalArrangement = Arrangement.spacedBy(10.dp),
-                    ) {
-                        ProfileQuickLink("LDCstore", "🛍️", onOpenLdcStore, Modifier.weight(1f).fillMaxHeight())
-                        ProfileQuickLink("专属邮箱", "✉️", onOpenLdcMail, Modifier.weight(1f).fillMaxHeight())
-                    }
-
-                    Row(
-                        modifier = Modifier.fillMaxWidth().height(IntrinsicSize.Min),
-                        horizontalArrangement = Arrangement.spacedBy(10.dp),
-                    ) {
-                        ProfileQuickLink("实时聊天", "💬", onOpenChat, Modifier.weight(1f).fillMaxHeight())
-                        ProfileQuickLink("本地黑名单", "🚫", onOpenBlacklist, Modifier.weight(1f).fillMaxHeight())
-                    }
-
-                    // 6. 徽章展示模块 (玻璃质感大卡片，优先展示已获得，后排未获得，与上方卡片保持统一的 8dp 间距)
-                    UserBadgesSectionCard(
-                        badges = userBadges,
-                        isLoading = isUserBadgesLoading,
-                        onRefresh = onRefreshUserBadges,
-                        onBadgeClick = { selectedBadge = it },
-                    )
-                }
-            }
-        }
-
-        // 通知分类 Tab (全部、回复、点赞、私信)
-        if (section == ProfileSection.Notifications) item("notification-filters") {
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(horizontal = 16.dp, vertical = 8.dp),
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
+        Box(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 36.dp)
+                .clip(RoundedCornerShape(18.dp))
+                .background(IosTheme.colors.card)
+                .padding(horizontal = 20.dp, vertical = 22.dp),
+            contentAlignment = Alignment.Center,
+        ) {
+            Column(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalAlignment = Alignment.CenterHorizontally,
             ) {
-                NotificationFilter.entries.forEach { filter ->
-                    val selected = notificationFilter == filter
-                    val color = if (selected) IosTheme.colors.accent else IosTheme.colors.secondaryLabel
-                    val hasUnread = filter != NotificationFilter.All && (
-                        filter in unreadFilters || visibleEntries.any { it.unread && filter.includes(it.notificationType) }
-                    )
-                    Row(
+                Text(
+                    text = "确定将所有通知标记为已读吗？",
+                    fontSize = 16.5.sp,
+                    fontWeight = FontWeight.Bold,
+                    color = IosTheme.colors.label,
+                    textAlign = TextAlign.Center,
+                    modifier = Modifier.fillMaxWidth(),
+                )
+                Spacer(modifier = Modifier.height(22.dp))
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(12.dp),
+                ) {
+                    // 取消按钮
+                    Box(
                         modifier = Modifier
                             .weight(1f)
+                            .height(42.dp)
                             .clip(RoundedCornerShape(10.dp))
-                            .background(if (selected) IosTheme.colors.accent.copy(alpha = 0.12f) else IosTheme.colors.card)
-                            .clickable { onNotificationFilter(filter) }
-                            .padding(vertical = 10.dp),
-                        horizontalArrangement = Arrangement.Center,
-                        verticalAlignment = Alignment.CenterVertically,
+                            .background(if (IosTheme.colors.isDark) Color(0xFF2C2C2E) else Color(0xFFF4F5F7))
+                            .clickable { onDismiss() },
+                        contentAlignment = Alignment.Center,
                     ) {
-                        if (hasUnread) {
-                            Box(
-                                Modifier
-                                    .size(6.dp)
-                                    .clip(CircleShape)
-                                    .background(Color(0xFFFF3B30)),
-                            )
-                            Spacer(Modifier.width(4.dp))
-                        }
-                        NotificationTabIcon(filter, color)
                         Text(
-                            text = filter.label,
-                            style = IosTheme.type.subheadline,
-                            color = color,
-                            modifier = Modifier.padding(start = 5.dp),
+                            text = "取消",
+                            fontSize = 15.sp,
+                            fontWeight = FontWeight.Medium,
+                            color = IosTheme.colors.label,
+                        )
+                    }
+                    // 确定按钮
+                    Box(
+                        modifier = Modifier
+                            .weight(1f)
+                            .height(42.dp)
+                            .clip(RoundedCornerShape(10.dp))
+                            .background(Color(0xFFFF3B30))
+                            .clickable {
+                                onDismiss()
+                                onConfirm()
+                                Toast.makeText(context, "已全部标记为已读", Toast.LENGTH_SHORT).show()
+                            },
+                        contentAlignment = Alignment.Center,
+                    ) {
+                        Text(
+                            text = "确定",
+                            fontSize = 15.sp,
+                            fontWeight = FontWeight.SemiBold,
+                            color = Color.White,
                         )
                     }
                 }
             }
         }
-
-
-        if (state.loading && !state.loaded) item("loading") { IosLoadingBox() }
-        state.error?.let { message -> item("error") { ErrorNotice(message) { onLoad(section, true, false) } } }
-
-        if (section != ProfileSection.Summary) {
-            items(visibleEntries, key = { it.id }) { entry ->
-                val notification = section == ProfileSection.Notifications
-                IosGroupCard(Modifier.padding(bottom = if (notification) 4.dp else 8.dp)) {
-                    IosRow(onClick = {
-                        if (section == ProfileSection.Notifications && entry.unread) entry.id.toLongOrNull()?.let(onReadNotification)
-                        entry.topicId?.let { onOpenTopic(it, entry.title, entry.postNumber) }
-                    }) {
-                        if (entry.unread) Text("•", color = IosTheme.colors.accent, modifier = Modifier.padding(end = 6.dp))
-                        if (notification) {
-                            NotificationAvatarWithBadge(
-                                avatarUrl = entry.avatarUrl,
-                                actor = entry.actor,
-                                notificationType = entry.notificationType,
-                                unread = entry.unread,
-                                onClick = { entry.actor?.let { onOpenUser(it, entry.avatarUrl, null) } },
-                            )
-                            Spacer(Modifier.width(10.dp))
-                        } else {
-                            entry.avatarUrl?.let { url ->
-                                AsyncImage(
-                                    url,
-                                    entry.actor,
-                                    modifier = Modifier.size(32.dp).clip(avatarShape(entry.actor, url, 4.dp))
-                                        .clickable(enabled = !entry.actor.isNullOrBlank()) { entry.actor?.let { onOpenUser(it, url, null) } },
-                                )
-                                Spacer(Modifier.width(10.dp))
-                            }
-                        }
-                        Column(Modifier.weight(1f).padding(vertical = if (notification) 0.dp else 4.dp)) {
-                            if (notification) {
-                                val typeTag = notificationTypeTag(entry.notificationType)
-                                val dateStr = entry.subtitle.substringAfterLast(" · ").takeLast(5)
-                                Row(
-                                    Modifier.fillMaxWidth(),
-                                    verticalAlignment = Alignment.CenterVertically,
-                                ) {
-                                    Row(
-                                        Modifier.weight(1f),
-                                        verticalAlignment = Alignment.CenterVertically,
-                                    ) {
-                                        if (!entry.actor.isNullOrBlank()) {
-                                            Text(
-                                                text = entry.actor,
-                                                style = IosTheme.type.footnote,
-                                                fontWeight = FontWeight.SemiBold,
-                                                maxLines = 1,
-                                            )
-                                            Spacer(Modifier.width(6.dp))
-                                        }
-                                        Box(
-                                            Modifier
-                                                .clip(RoundedCornerShape(4.dp))
-                                                .background(notificationTypeTint(entry.notificationType).copy(alpha = 0.13f))
-                                                .padding(horizontal = 5.dp, vertical = 1.dp),
-                                        ) {
-                                            Text(
-                                                text = typeTag,
-                                                style = IosTheme.type.caption.copy(fontSize = 11.sp),
-                                                fontWeight = FontWeight.Medium,
-                                                color = notificationTypeTint(entry.notificationType),
-                                            )
-                                        }
-                                    }
-                                    if (dateStr.isNotBlank()) {
-                                        Text(
-                                            text = dateStr,
-                                            style = IosTheme.type.caption,
-                                            color = IosTheme.colors.secondaryLabel,
-                                            modifier = Modifier.padding(start = 6.dp),
-                                        )
-                                    }
-                                }
-                            } else {
-                                entry.actor?.let { actor ->
-                                    Row(verticalAlignment = Alignment.CenterVertically) {
-                                        Text(actor, style = IosTheme.type.footnote, fontWeight = FontWeight.SemiBold, modifier = Modifier.weight(1f))
-                                    }
-                                }
-                            }
-                            Text(
-                                text = entry.title,
-                                style = if (notification) IosTheme.type.subheadline else IosTheme.type.body,
-                                maxLines = if (notification) 2 else 3,
-                                modifier = Modifier.padding(top = if (notification) 2.dp else 0.dp),
-                            )
-                            if (!notification && entry.subtitle.isNotBlank()) Text(entry.subtitle, style = IosTheme.type.footnote,
-                                color = IosTheme.colors.secondaryLabel, maxLines = 3, modifier = Modifier.padding(top = 6.dp))
-                        }
-                    }
-                }
-            }
-        }
-
-        // 还有更多但不足一屏: 给手动加载入口
-        if (state.loaded && !state.loading && state.error == null && state.content.hasMore &&
-            visibleEntries.size < AUTO_LOAD_THRESHOLD && state.content.fields.isEmpty()) {
-            item("load-more") {
-                Box(Modifier.fillMaxWidth().padding(vertical = 12.dp), contentAlignment = Alignment.Center) {
-                    IosTextAction(if (visibleEntries.isEmpty()) "这一页没有更多，继续往前找" else "加载更早的记录") {
-                        onLoad(section, false, true)
-                    }
-                }
-            }
-        }
-        if (state.loaded && visibleEntries.isEmpty() && state.content.fields.isEmpty() &&
-            state.error == null && !state.content.hasMore) {
-            item("empty") { EmptyNotice() }
-        }
-        if (state.loading && state.loaded) item("more") { IosLoadingBox() }
-    }
-
-    if (showAccountSwitchSheet) {
-        AccountSwitchBottomSheet(
-            state = accountState,
-            onDismiss = { showAccountSwitchSheet = false },
-            onSwitch = onSwitchAccount,
-            onRemoveAccount = onRemoveAccount,
-            onAddAccount = {
-                showAccountSwitchSheet = false
-                onAddAccount()
-            },
-        )
-    }
-
-    // 退出登录确认对话框（防止误触，对齐评论管理弹框风格）
-    if (showLogoutDialog) {
-        LogoutConfirmDialog(
-            onDismiss = { showLogoutDialog = false },
-            onConfirm = {
-                showLogoutDialog = false
-                onLogout()
-            },
-        )
-    }
-
-    // 标记全部已读确认对话框 (参考图高保真对齐: 居中加粗标题 + 左灰右红双胶囊按键)
-    if (showMarkAllReadConfirmDialog) {
-        Dialog(
-            onDismissRequest = { showMarkAllReadConfirmDialog = false },
-            properties = DialogProperties(usePlatformDefaultWidth = false),
-        ) {
-            Box(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(horizontal = 36.dp)
-                    .clip(RoundedCornerShape(18.dp))
-                    .background(IosTheme.colors.card)
-                    .padding(horizontal = 20.dp, vertical = 22.dp),
-                contentAlignment = Alignment.Center,
-            ) {
-                Column(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalAlignment = Alignment.CenterHorizontally,
-                ) {
-                    Text(
-                        text = "确定将所有消息标记为已读吗？",
-                        fontSize = 16.5.sp,
-                        fontWeight = FontWeight.Bold,
-                        color = IosTheme.colors.label,
-                        textAlign = TextAlign.Center,
-                        modifier = Modifier.fillMaxWidth(),
-                    )
-                    Spacer(modifier = Modifier.height(22.dp))
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.spacedBy(12.dp),
-                    ) {
-                        // 取消按钮
-                        Box(
-                            modifier = Modifier
-                                .weight(1f)
-                                .height(42.dp)
-                                .clip(RoundedCornerShape(10.dp))
-                                .background(if (IosTheme.colors.isDark) Color(0xFF2C2C2E) else Color(0xFFF4F5F7))
-                                .clickable { showMarkAllReadConfirmDialog = false },
-                            contentAlignment = Alignment.Center,
-                        ) {
-                            Text(
-                                text = "取消",
-                                fontSize = 15.sp,
-                                fontWeight = FontWeight.Medium,
-                                color = IosTheme.colors.label,
-                            )
-                        }
-                        // 确定按钮
-                        Box(
-                            modifier = Modifier
-                                .weight(1f)
-                                .height(42.dp)
-                                .clip(RoundedCornerShape(10.dp))
-                                .background(Color(0xFFFF3B30))
-                                .clickable {
-                                    showMarkAllReadConfirmDialog = false
-                                    onMarkAllNotificationsRead?.invoke()
-                                    Toast.makeText(context, "已全部标记为已读", Toast.LENGTH_SHORT).show()
-                                },
-                            contentAlignment = Alignment.Center,
-                        ) {
-                            Text(
-                                text = "确定",
-                                fontSize = 15.sp,
-                                fontWeight = FontWeight.SemiBold,
-                                color = Color.White,
-                            )
-                        }
-                    }
-                }
-            }
-        }
-    }
-
-    selectedBadge?.let { badge ->
-        BadgeDetailDialog(
-            badge = badge,
-            onDismiss = { selectedBadge = null },
-        )
     }
 }
 
 @Composable
-private fun ProfileQuickLink(
-    title: String,
-    icon: String,
-    onClick: () -> Unit,
-    modifier: Modifier = Modifier,
-) {
-    Row(
-        modifier.fillMaxWidth().heightIn(min = 44.dp)
-            .clip(RoundedCornerShape(12.dp))
-            .background(IosTheme.colors.card)
-            .border(1.dp, IosTheme.colors.separator.copy(alpha = 0.4f), RoundedCornerShape(12.dp))
-            .clickable(onClick = onClick)
-            .padding(horizontal = 12.dp, vertical = 8.dp),
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(6.dp),
-    ) {
-        Text(icon, fontSize = 16.sp)
-        Text(
-            title,
-            style = IosTheme.type.body.copy(fontSize = 13.5.sp, fontWeight = FontWeight.SemiBold),
-            modifier = Modifier.weight(1f),
-            maxLines = 2,
-            overflow = TextOverflow.Ellipsis,
-        )
-        Text("›", fontSize = 18.sp, color = IosTheme.colors.secondaryLabel)
-    }
-}
-
-private fun findMetric(fields: List<Pair<String, String>>, key: String, fallback: String = "0"): String {
-    return fields.firstOrNull { it.first == key }?.second?.ifBlank { fallback } ?: fallback
-}
-
-@Composable
-private fun ProfileSettingsGearIcon(tint: Color) {
-    Canvas(Modifier.size(22.dp)) {
-        scale(size.width / 24f, size.height / 24f, pivot = Offset.Zero) {
-            val cx = 12f
-            val cy = 12f
-            val r = 9.2f
-            val cornerRatio = 0.22f
-            val vertices = Array(6) { i ->
-                val rad = (i * 60f) * (kotlin.math.PI / 180.0)
-                Offset(
-                    x = cx + (r * kotlin.math.cos(rad)).toFloat(),
-                    y = cy + (r * kotlin.math.sin(rad)).toFloat(),
-                )
-            }
-            val hexPath = Path().apply {
-                for (i in 0 until 6) {
-                    val prev = vertices[(i + 5) % 6]
-                    val curr = vertices[i]
-                    val next = vertices[(i + 1) % 6]
-                    val pStart = Offset(
-                        x = curr.x + (prev.x - curr.x) * cornerRatio,
-                        y = curr.y + (prev.y - curr.y) * cornerRatio,
-                    )
-                    val pEnd = Offset(
-                        x = curr.x + (next.x - curr.x) * cornerRatio,
-                        y = curr.y + (next.y - curr.y) * cornerRatio,
-                    )
-                    if (i == 0) moveTo(pStart.x, pStart.y) else lineTo(pStart.x, pStart.y)
-                    quadraticTo(curr.x, curr.y, pEnd.x, pEnd.y)
-                }
-                close()
-            }
-            val stroke = Stroke(
-                width = 1.7f,
-                cap = StrokeCap.Round,
-                join = androidx.compose.ui.graphics.StrokeJoin.Round,
-            )
-            drawPath(hexPath, color = tint, style = stroke)
-            drawCircle(color = tint, radius = 3.0f, center = Offset(cx, cy), style = stroke)
-        }
-    }
-}
-
-@Composable
-private fun BroomGlyph(tint: Color) {
+internal fun BroomGlyph(tint: Color) {
     Canvas(Modifier.size(20.dp)) {
         scale(size.width / 24f, size.height / 24f, pivot = Offset.Zero) {
             val stroke = Stroke(width = 1.7f, cap = StrokeCap.Round, join = androidx.compose.ui.graphics.StrokeJoin.Round)
@@ -1758,21 +717,21 @@ private fun NotificationAvatarWithBadge(
         IosTheme.colors.isDark -> Color(0xFFD1D1D6)
         else -> Color(0xFF3A3A3C)
     }
-    Box(Modifier.size(38.dp).clickable(enabled = !actor.isNullOrBlank(), onClick = onClick)) {
+    Box(Modifier.size(32.dp).clickable(enabled = !actor.isNullOrBlank(), onClick = onClick)) {
         if (avatarUrl != null) {
             AsyncImage(
                 model = avatarUrl,
                 contentDescription = actor,
                 modifier = Modifier
                     .align(Alignment.BottomStart)
-                    .size(34.dp)
+                    .size(32.dp)
                     .clip(avatarShape(actor, avatarUrl, 4.dp)),
             )
         } else {
             Box(
                 Modifier
                     .align(Alignment.BottomStart)
-                    .size(34.dp)
+                    .size(32.dp)
                     .clip(avatarShape(actor, null, 4.dp))
                     .background(IosTheme.colors.fieldBackground),
                 contentAlignment = Alignment.Center,
@@ -1788,7 +747,7 @@ private fun NotificationAvatarWithBadge(
         Box(
             Modifier
                 .align(Alignment.TopEnd)
-                .size(18.dp)
+                .size(16.dp)
                 .clip(CircleShape)
                 .background(badgeBgColor)
                 .then(
@@ -1944,41 +903,6 @@ private fun NotificationAvatarWithBadge(
 }
 
 @Composable
-private fun NotificationTabIcon(filter: NotificationFilter, color: Color) {
-    Canvas(Modifier.size(17.dp)) {
-        scale(size.width / 24f, size.height / 24f, pivot = Offset.Zero) {
-            val shape = Path()
-            when (filter) {
-                NotificationFilter.All -> {
-                    shape.moveTo(5f, 17f); shape.lineTo(7f, 14f); shape.lineTo(7f, 9f)
-                    shape.cubicTo(7f, 2f, 17f, 2f, 17f, 9f)
-                    shape.lineTo(17f, 14f); shape.lineTo(19f, 17f); shape.close()
-                    drawPath(shape, color, style = Stroke(1.7f))
-                    drawCircle(color, 1.5f, Offset(12f, 20f))
-                }
-                NotificationFilter.Replies -> {
-                    shape.moveTo(10f, 5f); shape.lineTo(3f, 11f); shape.lineTo(10f, 17f)
-                    shape.lineTo(10f, 13f); shape.cubicTo(17f, 12f, 19f, 15f, 21f, 20f)
-                    shape.cubicTo(21f, 10f, 17f, 8f, 10f, 9f); shape.close()
-                    drawPath(shape, color)
-                }
-                NotificationFilter.Messages -> {
-                    shape.moveTo(3f, 5f); shape.lineTo(21f, 5f); shape.lineTo(21f, 19f)
-                    shape.lineTo(3f, 19f); shape.close()
-                    shape.moveTo(3f, 6f); shape.lineTo(12f, 13f); shape.lineTo(21f, 6f)
-                    drawPath(shape, color, style = Stroke(1.7f))
-                }
-                NotificationFilter.Likes -> {
-                    shape.moveTo(12f, 21f); shape.cubicTo(10f, 19f, 3f, 13f, 3f, 8f)
-                    shape.cubicTo(3f, 2f, 10f, 1f, 12f, 6f); shape.cubicTo(14f, 1f, 21f, 2f, 21f, 8f)
-                    shape.cubicTo(21f, 13f, 14f, 19f, 12f, 21f); shape.close(); drawPath(shape, color)
-                }
-            }
-        }
-    }
-}
-
-@Composable
 fun SettingsScreen(
     treeView: Boolean,
     onTreeView: (Boolean) -> Unit,
@@ -2035,8 +959,12 @@ fun SettingsScreen(
     onDohAutoFailover: (Boolean) -> Unit = {},
     dohAutoOptimize: Boolean = true,
     onDohAutoOptimize: (Boolean) -> Unit = {},
-    dohForceOverProxy: Boolean = false,
-    onDohForceOverProxy: (Boolean) -> Unit = {},
+    networkMode: org.linuxdo.android.net.NetworkMode = org.linuxdo.android.net.NetworkMode.BUILT_IN,
+    onNetworkMode: (org.linuxdo.android.net.NetworkMode) -> Unit = {},
+    networkEnvironment: org.linuxdo.android.net.NetworkSecurityState = org.linuxdo.android.net.NetworkSecurityState(),
+    activeNetworkRoute: org.linuxdo.android.net.NetworkRouteMode = org.linuxdo.android.net.NetworkRouteMode.DIRECT,
+    networkModeSwitching: Boolean = false,
+    networkModeError: String? = null,
     dohLatencies: Map<String, Long?> = emptyMap(),
     dohSummaries: Map<String, String> = emptyMap(),
     isTestingAllDoh: Boolean = false,
@@ -2077,6 +1005,7 @@ fun SettingsScreen(
     var showNotificationScopeDialog by remember { mutableStateOf(false) }
     var showTestPushLabDialog by remember { mutableStateOf(false) }
     var showSignatureSyncDialog by remember { mutableStateOf(false) }
+    var showFloorNavigationDialog by remember { mutableStateOf(false) }
 
     val prefs = remember { context.getSharedPreferences("display_preferences", Context.MODE_PRIVATE) }
     var devOptionsUnlocked by remember {
@@ -2259,7 +1188,7 @@ fun SettingsScreen(
                 SettingsEntryRow(
                     title = SettingsPage.Network.title,
                     badgeColor = Color(0xFFE3F5E8),
-                    value = if (dohEnabled) "DoH 已开启" else "DoH 已关闭",
+                    value = networkMode.label,
                     onClick = { onOpenPage(SettingsPage.Network) },
                 ) { SettingDohIcon(tint = Color(0xFF34C759)) }
             }
@@ -2339,22 +1268,12 @@ fun SettingsScreen(
         if (page == SettingsPage.Reading) item("group-reading") {
             SectionTitle("列表与阅读偏好")
             IosGroupCard {
-                IosRow(onClick = { onShowTopicScrollbar(!showTopicScrollbar) }) {
-                    SettingIconBadge(bgColor = Color(0xFFE8F3FF)) {
-                        SettingBookIcon(tint = IosTheme.colors.accent)
-                    }
-                    Spacer(Modifier.width(12.dp))
-                    Column(Modifier.weight(1f).padding(end = 8.dp)) {
-                        Text("右侧楼层导航条", style = IosTheme.type.body.copy(fontSize = 14.5.sp))
-                        Text(
-                            "半透明悬浮于右侧，按住时显示清晰，拖动并松手跳转楼层；轻触不会跳转",
-                            style = IosTheme.type.footnote.copy(fontSize = 12.sp),
-                            color = IosTheme.colors.secondaryLabel,
-                            modifier = Modifier.padding(top = 3.dp),
-                        )
-                    }
-                    IosSwitch(checked = showTopicScrollbar, onCheckedChange = onShowTopicScrollbar)
-                }
+                SettingsEntryRow(
+                    title = "选楼方式",
+                    badgeColor = Color(0xFFE8F3FF),
+                    value = if (showTopicScrollbar) "右侧滑动条" else "左下角浮窗",
+                    onClick = { showFloorNavigationDialog = true },
+                ) { SettingBookIcon(tint = IosTheme.colors.accent) }
                 IosDivider()
                 // 2.0 展现模式分段选择器（图文模式 / 小图模式 / 纯文模式）
                 // [临时屏蔽] 强制使用无正文模式展示以避免爬取正文风险，保留代码供后续优化
@@ -2643,7 +1562,7 @@ fun SettingsScreen(
                     Column(Modifier.weight(1f)) {
                         Text("同步楼层与阅读时长", style = IosTheme.type.body.copy(fontSize = 14.5.sp), fontWeight = FontWeight.Normal)
                         Text(
-                            "在后台实时记录阅读位置与社区足迹",
+                            "同步实际阅读楼层与时长，离线记录联网后补传",
                             style = IosTheme.type.footnote.copy(fontSize = 12.sp),
                             color = IosTheme.colors.secondaryLabel,
                             modifier = Modifier.padding(top = 3.dp),
@@ -3240,53 +2159,27 @@ fun SettingsScreen(
             }
         }
 
-        // ── 4.5 DoH 安全直连 ──
-        if (page == SettingsPage.Network) item("group-doh") {
+        if (page == SettingsPage.Network) item("network-mode") {
+            SectionTitle("联网方式")
+            NetworkModeSettings(
+                mode = networkMode,
+                route = activeNetworkRoute,
+                environment = networkEnvironment,
+                switching = networkModeSwitching,
+                error = networkModeError,
+                onSelect = onNetworkMode,
+            )
+        }
+
+        // 内置网络专用选项；跟随系统时保留偏好，但不运行这些功能。
+        if (page == SettingsPage.Network && networkMode == org.linuxdo.android.net.NetworkMode.BUILT_IN &&
+            !networkModeSwitching) item("group-doh") {
             var showAddServerDialog by remember { mutableStateOf(false) }
             var editingServer by remember { mutableStateOf<DohServer?>(null) }
             var showResetConfirmDialog by remember { mutableStateOf(false) }
 
-            val netSecurityState = remember(context) {
-                runCatching { org.linuxdo.android.net.NetworkStateMonitor(context).detect() }
-                    .getOrDefault(org.linuxdo.android.net.NetworkSecurityState())
-            }
-            val keepingDohOverVpn = netSecurityState.isVpn && !netSecurityState.isProxy && dohForceOverProxy
-
-            SectionTitle("DoH 安全直连")
+            SectionTitle("内置网络选项")
             IosGroupCard {
-                // VPN / 系统代理开启提示
-                if (netSecurityState.shouldPauseDoh) {
-                    IosRow(onClick = {}) {
-                        SettingIconBadge(bgColor = if (keepingDohOverVpn) Color(0xFFE8F5E9) else Color(0xFFFFF3E0)) {
-                            SettingInfoIcon(tint = if (keepingDohOverVpn) Color(0xFF4CAF50) else Color(0xFFFF9500))
-                        }
-                        Spacer(Modifier.width(12.dp))
-                        Column(Modifier.weight(1f)) {
-                            Text(
-                                when {
-                                    netSecurityState.isProxy -> "已检测到系统 HTTP 代理 (已让渡代理)"
-                                    keepingDohOverVpn -> "已检测到 VPN (已强制保持 DoH)"
-                                    else -> "已检测到 VPN / 系统代理"
-                                },
-                                style = IosTheme.type.body.copy(fontSize = 14.5.sp),
-                                fontWeight = FontWeight.SemiBold,
-                                color = if (keepingDohOverVpn) Color(0xFF4CAF50) else Color(0xFFFF9500),
-                            )
-                            Text(
-                                when {
-                                    netSecurityState.isProxy -> "系统 HTTP 代理下 Gecko 验证与业务请求统一走系统代理，避免双出口引发风控"
-                                    keepingDohOverVpn -> "已保持原生 DoH + ECH 隧道，可防止代理分流规则设为直连时的明文 SNI 阻断"
-                                    else -> "若 VPN 分流规则将 L 站设为了直连，可能导致打不开；可开启下方「代理环境保持 DoH」（系统 HTTP 代理下不生效）"
-                                },
-                                style = IosTheme.type.footnote.copy(fontSize = 12.sp),
-                                color = IosTheme.colors.secondaryLabel,
-                                modifier = Modifier.padding(top = 2.dp),
-                            )
-                        }
-                    }
-                    IosDivider()
-                }
-
                 // 开关行
                 IosRow(onClick = {}) {
                     SettingIconBadge(bgColor = Color(0xFFE3F5E8)) {
@@ -3332,32 +2225,13 @@ fun SettingsScreen(
                                 style = IosTheme.type.body.copy(fontSize = 14.5.sp),
                             )
                             Text(
-                                "每 10 分钟自动监测各节点延迟，智能切换至最快健康节点",
+                                "在前台每 10 分钟比较内置线路，自动选择更稳定的连接方式",
                                 style = IosTheme.type.footnote.copy(fontSize = 12.sp),
                                 color = IosTheme.colors.secondaryLabel,
                                 modifier = Modifier.padding(top = 2.dp),
                             )
                         }
                         IosSwitch(checked = dohAutoOptimize, onCheckedChange = onDohAutoOptimize)
-                    }
-
-                    IosDivider()
-
-                    // 代理环境保持 DoH
-                    IosRow(onClick = {}) {
-                        Column(Modifier.weight(1f)) {
-                            Text(
-                                "代理环境保持 DoH",
-                                style = IosTheme.type.body.copy(fontSize = 14.5.sp),
-                            )
-                            Text(
-                                "仅对 VPN 生效：分流规则直连 L 站时保持 DoH，防止明文 SNI 阻断；系统 HTTP 代理下始终走代理，保持验证与业务同一出口",
-                                style = IosTheme.type.footnote.copy(fontSize = 12.sp),
-                                color = IosTheme.colors.secondaryLabel,
-                                modifier = Modifier.padding(top = 2.dp),
-                            )
-                        }
-                        IosSwitch(checked = dohForceOverProxy, onCheckedChange = onDohForceOverProxy)
                     }
 
                     IosDivider()
@@ -3994,6 +2868,70 @@ fun SettingsScreen(
                 }
             }
             Spacer(Modifier.height(36.dp))
+        }
+    }
+
+    if (showFloorNavigationDialog) {
+        Dialog(onDismissRequest = { showFloorNavigationDialog = false }) {
+            Column(
+                modifier = Modifier
+                    .widthIn(min = 280.dp, max = 340.dp)
+                    .clip(RoundedCornerShape(18.dp))
+                    .background(IosTheme.colors.card)
+                    .padding(20.dp),
+                verticalArrangement = Arrangement.spacedBy(12.dp),
+            ) {
+                Text("选楼方式", style = IosTheme.type.headline, fontWeight = FontWeight.Bold)
+                Text(
+                    "浏览帖子时只显示选中的一种，选择后立即生效。",
+                    style = IosTheme.type.footnote,
+                    color = IosTheme.colors.secondaryLabel,
+                )
+                Column(Modifier.selectableGroup()) {
+                    listOf(false, true).forEach { useScrollbar ->
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clip(RoundedCornerShape(10.dp))
+                                .selectable(
+                                    selected = showTopicScrollbar == useScrollbar,
+                                    role = Role.RadioButton,
+                                    onClick = {
+                                        onShowTopicScrollbar(useScrollbar)
+                                        showFloorNavigationDialog = false
+                                    },
+                                )
+                                .padding(vertical = 12.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            RadioButton(
+                                selected = showTopicScrollbar == useScrollbar,
+                                onClick = null,
+                                colors = RadioButtonDefaults.colors(
+                                    selectedColor = IosTheme.colors.accent,
+                                    unselectedColor = IosTheme.colors.secondaryLabel,
+                                ),
+                            )
+                            Spacer(Modifier.width(12.dp))
+                            Column(Modifier.weight(1f)) {
+                                Text(
+                                    if (useScrollbar) "右侧滑动条" else "左下角浮窗",
+                                    style = IosTheme.type.body,
+                                )
+                                Text(
+                                    if (useScrollbar) "沿右侧滑动，松手跳转楼层" else "点击浮窗，可输入楼层或拖动选楼",
+                                    style = IosTheme.type.caption,
+                                    color = IosTheme.colors.secondaryLabel,
+                                )
+                            }
+                        }
+                    }
+                }
+                TextButton(
+                    onClick = { showFloorNavigationDialog = false },
+                    modifier = Modifier.align(Alignment.End),
+                ) { Text("取消", color = IosTheme.colors.accent) }
+            }
         }
     }
 
@@ -5602,10 +4540,11 @@ fun DiagnosticsScreen(state: UiState, viewModel: MainViewModel, onBack: () -> Un
                     // 与屏幕一致按新→旧排列：粘贴目标（笔记、聊天）截断长文本时丢掉的是最旧的部分，
                     // 按文件顺序复制会把最新几分钟截没。
                     val newestFirst = viewModel.diagnostics.readLatestLines(300).asReversed()
+                    val logTitle = "${context.getString(org.linuxdo.android.R.string.app_name)} 诊断日志"
                     val range = if (newestFirst.isEmpty()) "" else
-                        "LinuxDo 诊断日志（新→旧，${newestFirst.first().take(14)} ~ ${newestFirst.last().take(14)}，共 ${newestFirst.size} 行）\n"
+                        "$logTitle（新→旧，${newestFirst.first().take(14)} ~ ${newestFirst.last().take(14)}，共 ${newestFirst.size} 行）\n"
                     context.getSystemService(android.content.ClipboardManager::class.java)
-                        ?.setPrimaryClip(android.content.ClipData.newPlainText("LinuxDo 诊断日志", range + newestFirst.joinToString("\n")))
+                        ?.setPrimaryClip(android.content.ClipData.newPlainText(logTitle, range + newestFirst.joinToString("\n")))
                     Toast.makeText(context, "已复制最新${newestFirst.size}行日志（新→旧）", Toast.LENGTH_SHORT).show()
                 }) {
                     Text("复制当前日志", style = IosTheme.type.body, color = IosTheme.colors.accent)
@@ -6178,22 +5117,25 @@ fun DraftsScreen(
     onRefresh: () -> Unit,
     onEditDraft: (DraftItem) -> Unit,
     onDeleteDraft: (DraftItem) -> Unit,
-    trailing: @Composable () -> Unit = {},
+    onCreateTopic: () -> Unit,
 ) {
     val categoryById = remember(categories) { categories.associateBy { it.id.toInt() } }
     var draftPendingDelete by remember { mutableStateOf<DraftItem?>(null) }
     val pullState = rememberPullToRefreshState()
+    val list = rememberLazyListState()
 
     Column(
         Modifier
             .fillMaxSize()
             .background(IosTheme.colors.groupedBackground),
     ) {
-        IosNavBar(
-            title = "我的草稿",
-            onBack = onBack,
-            trailing = trailing,
-        )
+        ListNavigationHeader {
+            IosNavBar(
+                title = "草稿箱",
+                onBack = onBack,
+                trailing = { IosTextAction("新建帖子", onClick = onCreateTopic) },
+            )
+        }
 
         PullToRefreshBox(
             isRefreshing = state.loading && state.loaded,
@@ -6219,7 +5161,8 @@ fun DraftsScreen(
             },
         ) {
             LazyColumn(
-                modifier = Modifier.fillMaxSize(),
+                state = list,
+                modifier = Modifier.fillMaxSize().scrollListBars(list),
             ) {
                 if (state.loading && !state.loaded) {
                     item("loading") { IosLoadingBox() }
@@ -6247,7 +5190,7 @@ fun DraftsScreen(
                                 )
                                 Spacer(Modifier.height(6.dp))
                                 Text(
-                                    text = "在发帖界面点击“保存”即可将草稿存放在这里",
+                                    text = "点击右上角新建帖子，内容会自动保存并同步",
                                     style = IosTheme.type.footnote,
                                     color = IosTheme.colors.tertiaryLabel,
                                 )
@@ -6329,8 +5272,8 @@ private fun DraftCard(
             .replace(Regex("\\s+"), " ")
             .trim()
     }
-    val timeText = remember(draft.createdAt) {
-        RelativeTime.format(draft.createdAt)
+    val timeText = remember(draft.createdAt, draft.syncStatus) {
+        draft.syncStatus ?: RelativeTime.format(draft.createdAt)
     }
 
     Box(
@@ -7972,6 +6915,9 @@ fun TopicCreatorSheet(
 
     var editorView by remember { mutableStateOf<RichMarkdownEditorView?>(null) }
 
+    LaunchedEffect(editorView, state.loadingDraft, state.remoteRevision) {
+        if (!state.loadingDraft) editorView?.setInitialMarkdown(state.raw, state.attachments)
+    }
     LaunchedEffect(state.attachments) {
         editorView?.syncAttachments(state.attachments)
     }
@@ -8045,6 +6991,7 @@ fun TopicCreatorSheet(
         modifier = Modifier
             .fillMaxSize()
             .background(IosTheme.colors.card)
+            .windowInsetsPadding(WindowInsets.systemBars.union(WindowInsets.displayCutout).only(WindowInsetsSides.Top))
             .clickable(
                 interactionSource = remember { MutableInteractionSource() },
                 indication = null,
@@ -8137,6 +7084,7 @@ fun TopicCreatorSheet(
         IosDivider()
 
         // 错误或保存成功轻提示
+        state.syncStatus?.let { Text(it, style = IosTheme.type.footnote, color = IosTheme.colors.secondaryLabel) }
         state.error?.let { err ->
             Row(
                 modifier = Modifier
@@ -8480,6 +7428,7 @@ fun TopicCreatorSheet(
                 BasicTextField(
                     value = state.title,
                     onValueChange = onTitleChange,
+                    enabled = !state.loadingDraft && !state.submitting,
                     textStyle = IosTheme.type.headline.copy(
                         fontSize = 18.sp,
                         fontWeight = FontWeight.SemiBold,
@@ -8564,6 +7513,7 @@ fun TopicCreatorSheet(
                 update = { view ->
                     view.updateThemeColors(textColorInt, hintColorInt)
                     view.setTextSize(android.util.TypedValue.COMPLEX_UNIT_PX, editorTextSizePx)
+                    view.isEnabled = !state.loadingDraft && !state.submitting
                     view.setCompletionSource(completionSource, categoryId = state.categoryId)
                     view.setOnEditPollListener { span, spec ->
                         editingPollTarget = Pair(span, spec)
@@ -8601,7 +7551,7 @@ fun TopicCreatorSheet(
         IosDivider()
 
         // 底部工具栏：图片上传、文件上传、Emoji、快捷 Markdown、字数提示
-        val canPickMedia = !state.uploading && !state.submitting && !state.savingDraft
+        val canPickMedia = !state.loadingDraft && !state.uploading && !state.submitting && !state.savingDraft
         Row(
             modifier = Modifier
                 .fillMaxWidth()
@@ -8826,7 +7776,7 @@ fun TopicCreatorSheet(
                 }
 
                 Text(
-                    text = "保存草稿？",
+                    text = "草稿还在同步中",
                     style = IosTheme.type.largeTitle.copy(fontWeight = FontWeight.Bold, fontSize = 22.sp),
                     color = IosTheme.colors.label,
                     textAlign = TextAlign.Center,
@@ -8835,7 +7785,7 @@ fun TopicCreatorSheet(
                 Spacer(Modifier.height(10.dp))
 
                 Text(
-                    text = "当前有未保存的内容，关闭前是否\n将其保存为草稿？",
+                    text = "可以等待同步到网页后退出，\n也可以保留在手机，联网后继续同步。",
                     style = IosTheme.type.body.copy(fontSize = 15.sp, lineHeight = 22.sp),
                     color = IosTheme.colors.secondaryLabel,
                     textAlign = TextAlign.Center,
@@ -8866,7 +7816,7 @@ fun TopicCreatorSheet(
 
                 Spacer(Modifier.height(12.dp))
 
-                // 浅红背景红字胶囊按钮：放弃更改
+                // 保留本机草稿，退出后仍可重试同步
                 Box(
                     modifier = Modifier
                         .fillMaxWidth()
@@ -8881,7 +7831,7 @@ fun TopicCreatorSheet(
                     contentAlignment = Alignment.Center,
                 ) {
                     Text(
-                        text = "放弃更改",
+                        text = "保留手机草稿并退出",
                         style = IosTheme.type.headline.copy(fontWeight = FontWeight.SemiBold, fontSize = 16.sp),
                         color = Color(0xFFFF453A),
                     )
@@ -9916,406 +8866,8 @@ private fun PollTextInputField(
 // ── Discourse 官方徽章展示组件 ──
 // ==========================================
 
-enum class BadgeFilterTab(val label: String) {
-    All("全部"),
-    Earned("已解锁"),
-    Unearned("待解锁")
-}
-
 @Composable
-fun UserBadgesSectionCard(
-    badges: List<UserBadgeItem>?,
-    isLoading: Boolean,
-    onRefresh: (() -> Unit)?,
-    onBadgeClick: (UserBadgeItem) -> Unit,
-    modifier: Modifier = Modifier,
-) {
-    val isDark = IosTheme.colors.isDark
-    var selectedTab by remember { mutableStateOf(BadgeFilterTab.All) }
-
-    val earnedCount = remember(badges) { badges?.count { it.isEarned } ?: 0 }
-    val totalCount = remember(badges) { badges?.size ?: 0 }
-
-    val filteredList = remember(badges, selectedTab) {
-        val list = badges.orEmpty()
-        when (selectedTab) {
-            BadgeFilterTab.All -> list
-            BadgeFilterTab.Earned -> list.filter { it.isEarned }
-            BadgeFilterTab.Unearned -> list.filter { !it.isEarned }
-        }
-    }
-
-    // 玻璃感卡片背景与微光边框 (与分类页/个人中心快捷卡片高度协同)
-    val glassBg = if (isDark) {
-        Brush.verticalGradient(
-            listOf(
-                Color(0xFF222428).copy(alpha = 0.88f),
-                Color(0xFF1A1B1F).copy(alpha = 0.94f)
-            )
-        )
-    } else {
-        Brush.verticalGradient(
-            listOf(
-                Color(0xFFFFFFFF).copy(alpha = 0.92f),
-                Color(0xFFF7F8FA).copy(alpha = 0.98f)
-            )
-        )
-    }
-    val glassBorder = if (isDark) {
-        Brush.verticalGradient(
-            listOf(
-                Color.White.copy(alpha = 0.18f),
-                Color.White.copy(alpha = 0.05f)
-            )
-        )
-    } else {
-        Brush.verticalGradient(
-            listOf(
-                Color.White.copy(alpha = 0.95f),
-                Color.Black.copy(alpha = 0.06f)
-            )
-        )
-    }
-
-    Box(
-        modifier = modifier
-            .fillMaxWidth()
-            .clip(RoundedCornerShape(18.dp))
-            .background(glassBg)
-            .border(1.dp, glassBorder, RoundedCornerShape(18.dp))
-            .padding(start = 14.dp, end = 14.dp, top = 12.dp, bottom = 14.dp)
-    ) {
-        Column(modifier = Modifier.fillMaxWidth()) {
-            // 1. 卡片顶栏：左侧标题与计数，右侧切页药丸
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.SpaceBetween,
-            ) {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Text(
-                        text = "徽章展示",
-                        style = IosTheme.type.body.copy(fontSize = 15.sp, fontWeight = FontWeight.SemiBold),
-                        color = IosTheme.colors.label,
-                    )
-                    Spacer(Modifier.width(6.dp))
-                    Box(
-                        modifier = Modifier
-                            .clip(RoundedCornerShape(6.dp))
-                            .background(
-                                if (isDark) Color(0xFF2C2F36) else Color(0xFFEFF1F5)
-                            )
-                            .padding(horizontal = 6.dp, vertical = 2.dp)
-                    ) {
-                        Text(
-                            text = if (totalCount > 0) "$earnedCount/$totalCount" else "...",
-                            style = IosTheme.type.caption.copy(fontSize = 11.sp, fontWeight = FontWeight.Medium),
-                            color = IosTheme.colors.accent,
-                        )
-                    }
-                }
-
-                // 右侧微型切页药丸 Tab
-                Row(
-                    modifier = Modifier
-                        .clip(RoundedCornerShape(8.dp))
-                        .background(if (isDark) Color(0xFF16171A) else Color(0xFFECEEF2))
-                        .padding(2.dp),
-                    horizontalArrangement = Arrangement.spacedBy(2.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    BadgeFilterTab.entries.forEach { tab ->
-                        val isSelected = tab == selectedTab
-                        Box(
-                            modifier = Modifier
-                                .clip(RoundedCornerShape(6.dp))
-                                .background(
-                                    if (isSelected) {
-                                        if (isDark) Color(0xFF2E3138) else Color.White
-                                    } else Color.Transparent
-                                )
-                                .clickable { selectedTab = tab }
-                                .padding(horizontal = 8.dp, vertical = 3.dp),
-                            contentAlignment = Alignment.Center,
-                        ) {
-                            Text(
-                                text = tab.label,
-                                style = IosTheme.type.caption.copy(
-                                    fontSize = 11.sp,
-                                    fontWeight = if (isSelected) FontWeight.SemiBold else FontWeight.Normal,
-                                ),
-                                color = if (isSelected) IosTheme.colors.label else IosTheme.colors.secondaryLabel,
-                            )
-                        }
-                    }
-                }
-            }
-
-            Spacer(Modifier.height(12.dp))
-
-            // 2. 徽章主体展示区 (2行3列网格，支持左右平滑滑动翻页)
-            if (isLoading && badges == null) {
-                // 骨架屏
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .height(176.dp),
-                    horizontalArrangement = Arrangement.SpaceAround,
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    repeat(3) {
-                        Column(
-                            horizontalAlignment = Alignment.CenterHorizontally,
-                            verticalArrangement = Arrangement.spacedBy(8.dp),
-                        ) {
-                            Box(
-                                modifier = Modifier
-                                    .size(54.dp)
-                                    .clip(CircleShape)
-                                    .background(IosTheme.colors.separator.copy(alpha = 0.25f))
-                            )
-                            Box(
-                                modifier = Modifier
-                                    .width(48.dp)
-                                    .height(10.dp)
-                                    .clip(RoundedCornerShape(3.dp))
-                                    .background(IosTheme.colors.separator.copy(alpha = 0.2f))
-                            )
-                        }
-                    }
-                }
-            } else if (filteredList.isEmpty()) {
-                Box(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .height(120.dp),
-                    contentAlignment = Alignment.Center,
-                ) {
-                    Text(
-                        text = if (selectedTab == BadgeFilterTab.Earned) "暂无已解锁的徽章" else "暂无徽章数据",
-                        style = IosTheme.type.caption,
-                        color = IosTheme.colors.secondaryLabel,
-                    )
-                }
-            } else {
-                val pageItemsCount = 6 // 2 行 x 3 列
-                val pageCount = (filteredList.size + pageItemsCount - 1) / pageItemsCount
-                val pagerState = androidx.compose.foundation.pager.rememberPagerState(
-                    pageCount = { pageCount.coerceAtLeast(1) }
-                )
-
-                Column(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalAlignment = Alignment.CenterHorizontally,
-                ) {
-                    androidx.compose.foundation.pager.HorizontalPager(
-                        state = pagerState,
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .height(176.dp),
-                    ) { pageIdx ->
-                        val startIndex = pageIdx * pageItemsCount
-                        val pageItems = filteredList.drop(startIndex).take(pageItemsCount)
-                        val row1 = pageItems.take(3)
-                        val row2 = pageItems.drop(3).take(3)
-
-                        Column(
-                            modifier = Modifier.fillMaxWidth(),
-                            verticalArrangement = Arrangement.spacedBy(10.dp),
-                        ) {
-                            // 第一行 (最多 3 个)
-                            Row(
-                                modifier = Modifier.fillMaxWidth(),
-                                horizontalArrangement = Arrangement.SpaceAround,
-                            ) {
-                                row1.forEach { badge ->
-                                    SingleBadgeItemView(badge = badge, onClick = { onBadgeClick(badge) })
-                                }
-                                repeat(3 - row1.size) {
-                                    Spacer(Modifier.width(68.dp))
-                                }
-                            }
-                            // 第二行 (最多 3 个)
-                            if (row2.isNotEmpty()) {
-                                Row(
-                                    modifier = Modifier.fillMaxWidth(),
-                                    horizontalArrangement = Arrangement.SpaceAround,
-                                ) {
-                                    row2.forEach { badge ->
-                                        SingleBadgeItemView(badge = badge, onClick = { onBadgeClick(badge) })
-                                    }
-                                    repeat(3 - row2.size) {
-                                        Spacer(Modifier.width(68.dp))
-                                    }
-                                }
-                            }
-                        }
-                    }
-
-                    // 底部多页小圆点指示器 (若多于 1 页)
-                    if (pageCount > 1) {
-                        Spacer(Modifier.height(8.dp))
-                        Row(
-                            horizontalArrangement = Arrangement.spacedBy(4.dp),
-                            verticalAlignment = Alignment.CenterVertically,
-                        ) {
-                            repeat(pageCount) { p ->
-                                val active = p == pagerState.currentPage
-                                Box(
-                                    modifier = Modifier
-                                        .size(if (active) 6.dp else 4.dp)
-                                        .clip(CircleShape)
-                                        .background(
-                                            if (active) IosTheme.colors.accent
-                                            else IosTheme.colors.tertiaryLabel.copy(alpha = 0.5f)
-                                        )
-                                )
-                            }
-                        }
-                    }
-                }
-            }
-        }
-    }
-}
-
-@Composable
-private fun SingleBadgeItemView(
-    badge: UserBadgeItem,
-    onClick: () -> Unit,
-    modifier: Modifier = Modifier,
-) {
-    val isDark = IosTheme.colors.isDark
-
-    // 金 (1)、银 (2)、铜 (3) 或待解锁深色质感圆盘
-    val diskGradient = when {
-        !badge.isEarned -> Brush.verticalGradient(
-            listOf(
-                Color(0xFF2C2D32).copy(alpha = 0.65f),
-                Color(0xFF1E1F24).copy(alpha = 0.85f)
-            )
-        )
-        badge.badgeTypeId == 1 -> Brush.linearGradient(
-            listOf(Color(0xFFFFDF00), Color(0xFFFFA000), Color(0xFFFF6F00))
-        )
-        badge.badgeTypeId == 2 -> Brush.linearGradient(
-            listOf(Color(0xFFFFFFFF), Color(0xFFCFD8DC), Color(0xFF90A4AE))
-        )
-        else -> Brush.linearGradient(
-            listOf(Color(0xFFFFAB91), Color(0xFFFF7043), Color(0xFFD84315))
-        )
-    }
-
-    val diskBorder = when {
-        !badge.isEarned -> Color.White.copy(alpha = 0.10f)
-        badge.badgeTypeId == 1 -> Color(0xFFFFECB3).copy(alpha = 0.75f)
-        badge.badgeTypeId == 2 -> Color.White.copy(alpha = 0.85f)
-        else -> Color(0xFFFFCCBC).copy(alpha = 0.70f)
-    }
-
-    Column(
-        modifier = modifier
-            .width(68.dp)
-            .clickable(onClick = onClick),
-        horizontalAlignment = Alignment.CenterHorizontally,
-    ) {
-        Box(
-            modifier = Modifier.size(54.dp),
-            contentAlignment = Alignment.Center,
-        ) {
-            // 圆盘底座 (带微光渐变与边框)
-            Box(
-                modifier = Modifier
-                    .size(52.dp)
-                    .clip(CircleShape)
-                    .background(diskGradient)
-                    .border(1.2.dp, diskBorder, CircleShape),
-                contentAlignment = Alignment.Center,
-            ) {
-                DiscourseBadgeIcon(
-                    iconName = badge.icon,
-                    imageUrl = badge.imageUrl,
-                    isEarned = badge.isEarned,
-                    badgeTypeId = badge.badgeTypeId,
-                    modifier = Modifier.size(26.dp)
-                )
-            }
-
-            // 若未获得，右下角带有优雅微型锁定小徽标 🔒
-            if (!badge.isEarned) {
-                Box(
-                    modifier = Modifier
-                        .align(Alignment.BottomEnd)
-                        .offset(x = 1.dp, y = 1.dp)
-                        .size(17.dp)
-                        .clip(CircleShape)
-                        .background(Color(0xFF1C1D21))
-                        .border(1.dp, Color.White.copy(alpha = 0.2f), CircleShape),
-                    contentAlignment = Alignment.Center,
-                ) {
-                    Canvas(Modifier.size(9.dp)) {
-                        scale(size.width / 24f, size.height / 24f, pivot = Offset.Zero) {
-                            val stroke = Stroke(2.2f, cap = StrokeCap.Round)
-                            // 锁身
-                            drawRoundRect(
-                                Color.White.copy(alpha = 0.85f),
-                                topLeft = Offset(4f, 10f),
-                                size = Size(16f, 12f),
-                                cornerRadius = CornerRadius(2.5f, 2.5f)
-                            )
-                            // 锁梁
-                            drawArc(
-                                Color.White.copy(alpha = 0.85f),
-                                startAngle = 180f,
-                                sweepAngle = 180f,
-                                useCenter = false,
-                                topLeft = Offset(7f, 3f),
-                                size = Size(10f, 12f),
-                                style = stroke
-                            )
-                        }
-                    }
-                }
-            } else if (badge.count > 1) {
-                // 若多次获得，右上角显示 xN 计数气泡
-                Box(
-                    modifier = Modifier
-                        .align(Alignment.TopEnd)
-                        .offset(x = 3.dp, y = (-2).dp)
-                        .clip(RoundedCornerShape(6.dp))
-                        .background(Color.Black.copy(alpha = 0.65f))
-                        .border(0.6.dp, Color.White.copy(alpha = 0.4f), RoundedCornerShape(6.dp))
-                        .padding(horizontal = 4.dp, vertical = 1.dp),
-                    contentAlignment = Alignment.Center,
-                ) {
-                    Text(
-                        text = "x${badge.count}",
-                        style = IosTheme.type.caption.copy(fontSize = 9.sp, fontWeight = FontWeight.Bold),
-                        color = Color.White,
-                    )
-                }
-            }
-        }
-
-        Spacer(Modifier.height(5.dp))
-
-        // 官方徽章名称 (居中，截断)
-        Text(
-            text = badge.name,
-            style = IosTheme.type.caption.copy(
-                fontSize = 11.5.sp,
-                fontWeight = if (badge.isEarned) FontWeight.Medium else FontWeight.Normal
-            ),
-            color = if (badge.isEarned) IosTheme.colors.label else IosTheme.colors.secondaryLabel,
-            maxLines = 1,
-            overflow = TextOverflow.Ellipsis,
-            textAlign = TextAlign.Center,
-        )
-    }
-}
-
-@Composable
-private fun DiscourseBadgeIcon(
+internal fun DiscourseBadgeIcon(
     iconName: String?,
     imageUrl: String?,
     isEarned: Boolean,
@@ -10445,7 +8997,7 @@ private fun DiscourseBadgeIcon(
 }
 
 @Composable
-private fun BadgeDetailDialog(
+internal fun BadgeDetailDialog(
     badge: UserBadgeItem,
     onDismiss: () -> Unit,
 ) {

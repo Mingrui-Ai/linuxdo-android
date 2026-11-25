@@ -19,6 +19,8 @@ interface DohConfigProvider {
     /** 用户自定义节点的 JSON 序列化字符串 */
     fun getDohCustomServersJson(): String?
 
-    /** 是否在开启系统代理/VPN 时强制保持 DoH + ECH 直连 */
-    fun isDohForceOverProxyEnabled(): Boolean = false
+    /** 全部网络栈共用的用户选择。 */
+    fun getNetworkMode(): NetworkMode = NetworkMode.BUILT_IN
+
+    fun isDohAutoOptimizeEnabled(): Boolean = true
 }

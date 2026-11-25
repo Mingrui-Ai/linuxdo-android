@@ -4,6 +4,17 @@ const FORUM_ORIGIN = "https://linux.do";
 const isolatedAuthTabs = new Map();
 let latestHeaderCfClearance = "";
 
+// 代理策略仅接受可信原生背景端口设置，网页消息无权修改。
+let networkMode = null;
+let resolveInitialNetworkMode;
+const initialNetworkMode = new Promise(resolve => { resolveInitialNetworkMode = resolve; });
+browser.proxy.onRequest.addListener(async () => {
+  await initialNetworkMode;
+  // null 明确移除系统代理；undefined 保留 Gecko 的系统代理（含 PAC）结果。
+  // { type: "direct" } 会回退到已有代理，不能用来覆盖系统代理。
+  return networkMode === "built_in" ? null : undefined;
+}, { urls: ["<all_urls>"] });
+
 function isForumUrl(value) {
   try {
     const url = new URL(value);
@@ -145,7 +156,12 @@ function connectCookieControl() {
       }
       cookieControlAttempts = 0;
       try {
-        if (request.command === "clearSiteCookies") {
+        if (request.command === "setNetworkMode") {
+          if (request.mode !== "built_in" && request.mode !== "system") throw new Error("Unsupported network mode");
+          networkMode = request.mode;
+          resolveInitialNetworkMode();
+          port.postMessage({ id: request.id, value: true, mode: networkMode });
+        } else if (request.command === "clearSiteCookies") {
           latestHeaderCfClearance = "";
           const cookies = await cookiesInStore("firefox-default");
           for (const cookie of cookies) await removeCookie(cookie, "firefox-default");

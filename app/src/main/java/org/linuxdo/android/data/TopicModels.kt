@@ -1,7 +1,10 @@
 package org.linuxdo.android.data
 
+import androidx.compose.runtime.snapshots.Snapshot
 import java.io.ByteArrayOutputStream
 import java.io.InputStream
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 import kotlinx.serialization.KSerializer
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
@@ -156,14 +159,13 @@ data class MiniAppLibraryState(
     )
 }
 
-/** 首页顶部支持切换的 4 个 Feed 类别。默认是 Latest。 */
+/** 首页顶部支持最新和热门两个 Feed 类别。默认是 Latest。 */
 enum class HomeFeedType(val label: String, val apiPath: String) {
     Latest("最新", "/latest.json"),
-    Unread("未读", "/unseen.json"),
-    Hot("热门", "/hot.json"),
-    Posted("我的帖子", "/posted.json");
+    Hot("热门", "/hot.json");
 
     companion object {
+        // 旧版本保存的未读、我的帖子或未知分类统一回到最新。
         fun fromName(name: String?): HomeFeedType =
             entries.firstOrNull { it.name.equals(name, ignoreCase = true) } ?: Latest
     }
@@ -243,6 +245,8 @@ data class UserReplyItem(
     val commentExcerpt: String,
     val username: String,
     val avatarUrl: String?,
+    val reactionName: String? = null,
+    val reactionUrl: String? = null,
 )
 
 data class UserRepliesUiState(
@@ -976,6 +980,8 @@ data class DraftItem(
     val avatarUrl: String? = null,
     val closed: Boolean = false,
     val archetype: String = "regular",
+    val syncStatus: String? = null,
+    val localOnly: Boolean = false,
 ) {
     val isNewTopic: Boolean
         get() = action == "createTopic" || draftKey.startsWith("new_topic") || topicId == null || topicId <= 0L
@@ -1105,6 +1111,14 @@ fun trustLevelTitle(level: Int?): String = when (level) {
 
 @Serializable
 data class UserCardData(
+    val title: String? = null,
+    val status: ProfileStatus? = null,
+    val website: String? = null,
+    @SerialName("featured_topic") val featuredTopic: ProfileFeaturedTopic? = null,
+    @SerialName("total_following") val totalFollowing: Int? = null,
+    @SerialName("total_followers") val totalFollowers: Int? = null,
+    @SerialName("can_see_following") val canSeeFollowing: Boolean? = null,
+    @SerialName("can_see_followers") val canSeeFollowers: Boolean? = null,
     val id: Long = 0L,
     val username: String,
     val name: String? = null,
@@ -1125,18 +1139,17 @@ data class UserCardData(
     @SerialName("gamification_score") val gamificationScore: Int? = null,
     val badges: List<SummaryBadgeItem> = emptyList(),
 ) {
-    /** 与 FluxDO 一致：优先个人主页背景，其次资料卡背景。 */
-    val backgroundUrl: String?
-        get() {
-            val path = profileBackgroundUploadUrl?.trim()?.takeIf { it.isNotEmpty() }
-                ?: cardBackgroundUploadUrl?.trim()?.takeIf { it.isNotEmpty() }
-                ?: return null
+    val profileBackgroundUrl: String? get() = resolveBackgroundUrl(profileBackgroundUploadUrl)
+    val cardBackgroundUrl: String? get() = resolveBackgroundUrl(cardBackgroundUploadUrl)
+
+    private fun resolveBackgroundUrl(value: String?): String? {
+            val path = value?.trim()?.takeIf { it.isNotEmpty() } ?: return null
             return when {
                 path.startsWith("//") -> "https:$path"
                 path.startsWith("https://", ignoreCase = true) || path.startsWith("http://", ignoreCase = true) -> path
                 else -> Config.BASE_URL + "/" + path.trimStart('/')
             }
-        }
+    }
 
     val topicPostCount: Int?
         get() = when (val elem = rawTopicPostCount) {
@@ -1242,6 +1255,7 @@ data class ChatMessageSummary(
 
 @Serializable
 data class ChatUserSummary(
+    val id: Long = 0L,
     val username: String = "",
     val name: String? = null,
     @SerialName("avatar_template") val avatarTemplate: String? = null,
@@ -1930,6 +1944,14 @@ object AvatarCache {
     fun clear() {
         synchronized(lock) { cache.clear() }
     }
+
+    internal fun replace(username: String, animatedAvatar: String?) {
+        val key = keyOf(username) ?: return
+        synchronized(lock) {
+            cache[key] = animatedAvatar?.takeIf(::isAnimatedAvatarPath) ?: NON_ANIMATED_SENTINEL
+            trimLocked()
+        }
+    }
 }
 
 object ExcerptCache {
@@ -1978,6 +2000,8 @@ object ExcerptCache {
     }
 
     /** 只读内存态、不碰本地库；在组合中读取可订阅后续 [record] 写入，适合每次重组都调用。 */
+    fun peekExcerpt(topicId: Long): String? = excerptMap[topicId]
+
     fun peekCoverImage(topicId: Long): String? = coverMap[topicId]
 
     fun getCoverImage(topicId: Long): String? {
@@ -1992,18 +2016,19 @@ object ExcerptCache {
         return null
     }
 
-    /**
-     * 批量从本地持久库载入内存，用于列表刷新后 0ms 瞬间把历史正文和首图直接填满内存 Compose State。
-     */
-    fun loadBatchFromStore(topicIds: Collection<Long>) {
+    /** IO 线程批量读取，回到调用方后一次性发布正文和封面。 */
+    suspend fun loadBatchFromStore(topicIds: Collection<Long>) {
         val store = opStore ?: return
-        val records = store.getAll(topicIds)
-        records.forEach { (id, record) ->
-            if (record.excerpt != null && !excerptMap.containsKey(id)) {
-                excerptMap[id] = record.excerpt
-            }
-            if (record.coverImageUrl != null && !coverMap.containsKey(id)) {
-                coverMap[id] = record.coverImageUrl
+        if (topicIds.isEmpty()) return
+        val records = withContext(Dispatchers.IO) { store.getAll(topicIds) }
+        Snapshot.withMutableSnapshot {
+            records.forEach { (id, record) ->
+                if (record.excerpt != null && !excerptMap.containsKey(id)) {
+                    excerptMap[id] = record.excerpt
+                }
+                if (record.coverImageUrl != null && !coverMap.containsKey(id)) {
+                    coverMap[id] = record.coverImageUrl
+                }
             }
         }
     }
