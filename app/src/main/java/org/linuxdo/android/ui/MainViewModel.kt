@@ -607,6 +607,9 @@ data class CdkScoreUiState(
     val username: String = "",
     val score: Int? = null,
     val cachedAt: Long = 0L,
+    val loading: Boolean = false,
+    val error: String? = null,
+    val needsAuthorization: Boolean = false,
 )
 
 data class ChatUiState(
@@ -1033,6 +1036,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     val cdkScore: StateFlow<CdkScoreUiState> = _cdkScore.asStateFlow()
     private var cdkScoreJob: Job? = null
     private var cdkScoreBackoffUntil: Long = 0L
+    private var cdkFailedAuthMarker: String? = null
     private val connectManualRefreshTimestamps = mutableListOf<Long>()
     private var connectSilentBackoffUntil: Long = 0L
     private var ldcBackoffUntil: Long = 0L
@@ -4330,11 +4334,11 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
      * 加载社区分(CDK score)，展示在「我的」头部。
      *
      * 只读缓存不发请求；缓存过期(6 小时)才静默联网，且受三道保护：
-     * 1. 本地没有缓存时，启动 10 分钟内交给后台预热([fromWarmup])错峰取，前台不抢；
+     * 1. 本地没有缓存时，自动加载交给后台预热([fromWarmup])错峰取；主动打开侧栏/点击获取可按需加载；
      * 2. 短冷却到期后仅补取一次，真正授权/挑战失败才长期退避；
      * 3. 仅 CDK 返回 401(无会话)才做一次 OAuth 握手，握手结果是 Cookie，平时不重复握手。
      */
-    fun loadCdkScore(fromWarmup: Boolean = false) {
+    fun loadCdkScore(fromWarmup: Boolean = false, userInitiated: Boolean = false) {
         val username = _state.value.username ?: return
         val checkSession = connectSessionCheck(username)
         val now = System.currentTimeMillis()
@@ -4350,14 +4354,21 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             }
         }
         if (current.score != null && now - current.cachedAt < Config.CDK_SCORE_CACHE_TTL_MS) return
-        if (now < cdkScoreBackoffUntil) return
-        if (current.score == null && !fromWarmup && connectFirstFetchLockRemainingMs(hasCache = false) > 0L) return
+        if (now < cdkScoreBackoffUntil) {
+            if (userInitiated) _cdkScore.update { it.copy(error = if (it.needsAuthorization) {
+                "请打开社区分网站完成验证或授权后返回"
+            } else "社区分服务暂缓访问，请约 ${((cdkScoreBackoffUntil - now + 59_999L) / 60_000L)} 分钟后重试") }
+            return
+        }
+        if (current.score == null && !fromWarmup && !userInitiated && connectFirstFetchLockRemainingMs(hasCache = false) > 0L) return
         if (cdkScoreJob?.isActive == true) return
         cdkScoreJob = viewModelScope.launch {
+            _cdkScore.update { it.copy(loading = true, error = null) }
             try {
                 val score = readSiteWithAuthorization(checkSession, { repository.fetchCdkScore() }, { repository.authorizeCdk() })
                 checkSession()
                 cdkScoreBackoffUntil = 0L
+                cdkFailedAuthMarker = null
                 repository.saveCachedCdkScore(username, score)
                 _cdkScore.value = CdkScoreUiState(username, score, System.currentTimeMillis())
             } catch (e: CancellationException) {
@@ -4366,9 +4377,37 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 checkSession()
                 val pause = siteFailureDelayMs(e)
                 cdkScoreBackoffUntil = System.currentTimeMillis() + pause
+                val needsAuthorization = e is NeedsInteractiveVerification || (e is HttpStatusException && e.status in setOf(401, 403))
+                cdkFailedAuthMarker = if (needsAuthorization) cdkAuthMarker() else null
+                _cdkScore.update { it.copy(loading = false, needsAuthorization = needsAuthorization, error = when (e) {
+                    is RateLimitException -> "社区分服务繁忙，请稍后重试"
+                    is NeedsInteractiveVerification -> "请打开社区分网站完成安全验证后返回"
+                    is HttpStatusException -> if (e.status == 401 || e.status == 403) "请打开社区分网站完成验证或授权后返回" else "社区分服务暂时不可用，请稍后重试"
+                    else -> "社区分暂时加载失败，请稍后重试"
+                }) }
                 diagnostics.log("获取 CDK 社区分暂缓(${(pause + 999L) / 1_000L}s): ${e.message}")
+            } finally {
+                if (runCatching { checkSession() }.isSuccess) _cdkScore.update { it.copy(loading = false) }
             }
         }
+    }
+
+    /** 网页验证改变凭据后只补取一次；未完成验证或普通限流不跳过等待。 */
+    fun onCdkWebsiteClosed() {
+        if (_cdkScore.value.needsAuthorization && cdkFailedAuthMarker != null && cdkAuthMarker() != cdkFailedAuthMarker) {
+            cdkScoreBackoffUntil = 0L
+            cdkFailedAuthMarker = null
+        }
+        loadCdkScore(userInitiated = true)
+    }
+
+    private fun cdkAuthMarker(): String {
+        val manager = android.webkit.CookieManager.getInstance()
+        val authNames = setOf("cf_clearance", "auth.session-token", "linux_do_cdk_session_id")
+        val cookies = listOf("https://connect.linux.do/oauth2/authorize", "https://cdk.linux.do/api/v1/oauth/user-info")
+            .map { url -> SessionStore.parseCookieHeader(manager.getCookie(url)).filterKeys { it in authNames }.toSortedMap() }
+        // 只在内存比较指纹，不记录或持久化任何 Cookie。
+        return org.linuxdo.android.net.NetDiagnostics.fingerprint(cookies.toString())
     }
 
     private var ldcGamificationRefreshJob: Job? = null
@@ -9487,6 +9526,7 @@ fun openTopicSearch(topicId: Long, title: String) {
         cdkScoreJob?.cancel()
         cdkScoreJob = null
         cdkScoreBackoffUntil = 0L
+        cdkFailedAuthMarker = null
         _cdkScore.value = CdkScoreUiState()
         idleWarmupJob?.cancel()
         idleWarmupJob = null

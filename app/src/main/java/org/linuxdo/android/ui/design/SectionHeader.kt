@@ -45,6 +45,7 @@ internal fun SectionHeader(
     compact: Boolean = false,
     actionWidth: Dp = 0.dp,
     actions: @Composable () -> Unit = {},
+    leading: @Composable () -> Unit = {},
 ) {
     val accent = IosTheme.colors.accent
     val animatedIndex = animateFloatAsState(selected.toFloat(), tween(170), label = "section indicator")
@@ -90,6 +91,7 @@ internal fun SectionHeader(
                 }
             }
         }
+        Box(Modifier.align(Alignment.CenterStart), contentAlignment = Alignment.CenterStart) { leading() }
         Box(Modifier.align(Alignment.CenterEnd), contentAlignment = Alignment.CenterEnd) { actions() }
     }
 }

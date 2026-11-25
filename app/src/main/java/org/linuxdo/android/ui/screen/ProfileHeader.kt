@@ -142,11 +142,7 @@ internal fun ProfileHeader(
                     Text("@$username", color = colors.secondaryLabel, fontSize = 12.sp)
                 }
                 if (onOpenCommunityScore != null) {
-                    Row(Modifier.heightIn(min = 32.dp).clickable(onClickLabel = "查看社区分", onClick = onOpenCommunityScore),
-                        verticalAlignment = Alignment.CenterVertically) {
-                        Text("社区分 ${communityScore ?: "—"}", color = colors.secondaryLabel, fontSize = 12.sp)
-                        Icon(Icons.Default.KeyboardArrowRight, null, tint = colors.secondaryLabel, modifier = Modifier.size(13.dp))
-                    }
+                    ProfileCommunityScore(communityScore, onOpenCommunityScore)
                 }
                 ProfileBadgePreview(badges, badgesLoading, onOpenBadges)
             }
@@ -164,6 +160,16 @@ internal fun ProfileHeader(
             text = { UserBioText(card?.bioExcerpt, "还没有填写个人简介", IosTheme.type.body, colors.label,
                 maxLines = Int.MAX_VALUE, modifier = Modifier.heightIn(max = 360.dp).verticalScroll(rememberScrollState())) },
             confirmButton = { TextButton(onClick = { showBio = false }) { Text("完成") } }, containerColor = colors.card)
+    }
+}
+
+@Composable
+internal fun ProfileCommunityScore(score: Int?, onClick: () -> Unit, loading: Boolean = false, needsAuthorization: Boolean = false) {
+    Row(Modifier.heightIn(min = 32.dp).clickable(onClickLabel = "查看社区分", onClick = onClick),
+        verticalAlignment = Alignment.CenterVertically) {
+        Text("社区分 ${score ?: if (loading) "…" else if (needsAuthorization) "待验证" else "—"}",
+            color = IosTheme.colors.secondaryLabel, fontSize = 12.sp)
+        Icon(Icons.Default.KeyboardArrowRight, null, tint = IosTheme.colors.secondaryLabel, modifier = Modifier.size(13.dp))
     }
 }
 
