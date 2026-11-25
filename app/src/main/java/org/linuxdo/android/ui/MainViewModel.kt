@@ -5708,18 +5708,18 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 kotlinx.coroutines.withTimeout(60_000L) {
                     when (target) {
                         is ComposerTarget.NewReply -> {
-                            when (val result = submitWithSyncedDraft(key, content) { repository.createPost(target.topicId, raw, draftKey = key) }) {
+                            when (val result = submitWithDraftSnapshot(key, content) { publishKey -> repository.createPost(target.topicId, raw, draftKey = publishKey) }) {
                                 is PostResult.Success -> applyCreatedPost(target.topicId, result.post)
                                 is PostResult.Enqueued -> setNoticeMessage(target.topicId, "您的回复已提交，正等待管理员审核后显示")
                             }
                         }
                         is ComposerTarget.ReplyTo -> {
-                            when (val result = submitWithSyncedDraft(key, content) { repository.createPost(target.topicId, raw, target.postNumber, draftKey = key) }) {
+                            when (val result = submitWithDraftSnapshot(key, content) { publishKey -> repository.createPost(target.topicId, raw, target.postNumber, draftKey = publishKey) }) {
                                 is PostResult.Success -> applyCreatedPost(target.topicId, result.post)
                                 is PostResult.Enqueued -> setNoticeMessage(target.topicId, "您的回复已提交，正等待管理员审核后显示")
                             }
                         }
-                        is ComposerTarget.Edit -> applyEditedPost(target.topicId, submitWithSyncedDraft(key, content) { repository.updatePost(target.postId, raw) })
+                        is ComposerTarget.Edit -> applyEditedPost(target.topicId, submitWithDraftSnapshot(key, content) { repository.updatePost(target.postId, raw) })
                     }
                 }
                 try {
@@ -5744,38 +5744,46 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         (_composer.value.submitting && _composer.value.target?.let(::composerDraftKey) == key) ||
             (_topicCreator.value.submitting && _topicCreator.value.draftKey == key)
 
-    /** 发帖与自动保存共用串行锁，已发送的内容不会被迟到的自动保存复活。 */
-    private suspend fun <T> submitWithSyncedDraft(key: String, content: SyncedDraftContent, submit: suspend () -> T): T {
+    /** 发送当前内容无需先备份到网页；锁只用于等待已发出的保存完成，避免旧草稿复活。 */
+    private suspend fun <T> submitWithDraftSnapshot(key: String, content: SyncedDraftContent, submit: suspend (String) -> T): T {
         val userId = store.currentUserId()
         val generation = accountScopeGeneration
-        check(syncDraftNow(key, userId, generation)) { "草稿尚未同步或存在冲突，请处理后再发送" }
         return draftSyncLocks.getOrPut(key) { kotlinx.coroutines.sync.Mutex() }.withLock {
-            check(userId == store.currentUserId() && generation == accountScopeGeneration && !store.sessionChanging) { "账号已切换" }
+            check(userId > 0 && userId == store.currentUserId() && generation == accountScopeGeneration &&
+                !store.sessionChanging && !_accounts.value.switching) { "账号已切换" }
             val local = accountDraftStore.get(userId, key)
-            check(local?.content == content && !local.dirty && !local.conflict) { "草稿已有更新，请检查内容后再发送" }
-            val remote = repository.fetchDraft(key)
-            check(userId == store.currentUserId() && generation == accountScopeGeneration && !store.sessionChanging) { "账号已切换" }
-            check(remote.content == content) { "网页草稿已改变，请重新同步后发送" }
-            val result = submit()
-            // 提交成功后不能因清理失败要求用户重发。仅清理仍与本次内容相同的草稿。
+            check(local == null || local.content == content) { "内容已有更新，请检查后再发送" }
+            // Discourse 会推进 draft_key 的序号，即使不传也会采用 topic/new_topic 默认键。
+            // 独立键避免发送时删除尚未确认的网页版本；共享草稿随后按内容与序号清理。
+            val publishKey = "android_" + java.util.UUID.randomUUID().toString().replace("-", "")
+            val result = submit(publishKey)
+            // 提交成功后不能因清理失败要求用户重发。
             if (userId == store.currentUserId() && generation == accountScopeGeneration) {
+                draftSyncJobs.remove(key)?.cancel()
+                dismissedDraftConflicts.remove(key)
+                _draftConflict.update { if (it?.local?.key == key) null else it }
                 try {
-                    accountDraftStore.remove(userId, key)
-                    _drafts.update { it.copy(items = it.items.filterNot { item -> item.draftKey == key }) }
-                    // 清理独立执行，网络超时不能把已成功的发布变成失败，也不能重放发送。
+                    if (accountDraftStore.get(userId, key)?.content == content) {
+                        accountDraftStore.remove(userId, key)
+                        _drafts.update { it.copy(items = it.items.filterNot { item -> item.draftKey == key }) }
+                    }
+                    // 清理独立执行；失败不会重放发送，也不覆盖网页上的新修改。
                     viewModelScope.launch {
                         draftSyncLocks.getOrPut(key) { kotlinx.coroutines.sync.Mutex() }.withLock {
                             try {
                                 if (userId != store.currentUserId() || generation != accountScopeGeneration || store.sessionChanging) return@withLock
                                 val after = repository.fetchDraft(key)
                                 if (userId != store.currentUserId() || generation != accountScopeGeneration || store.sessionChanging) return@withLock
-                                if (accountDraftStore.get(userId, key) == null && after.content == content) repository.deleteDraft(key, after.sequence)
+                                val unchangedBase = local != null && !local.conflict && local.base != null &&
+                                    after.sequence == local.sequence && after.content == local.base
+                                if (accountDraftStore.get(userId, key) == null && after.content != null &&
+                                    (after.content == content || unchangedBase)) repository.deleteDraft(key, after.sequence)
                             } catch (error: CancellationException) { throw error }
                             catch (_: Exception) { diagnostics.log("内容已发送，网页草稿清理等待刷新") }
                         }
                     }
                 } catch (error: CancellationException) { throw error }
-                catch (error: Exception) { diagnostics.log("内容已发送，草稿清理等待刷新") }
+                catch (_: Exception) { diagnostics.log("内容已发送，草稿清理等待刷新") }
             }
             result
         }
@@ -5874,14 +5882,15 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         return lock.withLock {
             fun valid() = userId > 0 && userId == store.currentUserId() && generation == accountScopeGeneration &&
                 !store.sessionChanging && !_accounts.value.switching
-            if (!valid() || isDraftUploading(key)) return@withLock false
+            if (!valid() || isDraftUploading(key) || isDraftSubmitting(key)) return@withLock false
             try {
-                val remote = repository.fetchDraft(key)
-                if (!valid() || isDraftUploading(key)) return@withLock false
+                if (key !in activeDraftKeys() && accountDraftStore.get(userId, key) == null) return@withLock true
+                // 草稿读取只是后台备份检查，慢请求不能长时间占住发送共用的锁。
+                val remote = kotlinx.coroutines.withTimeoutOrNull(4_000L) { repository.fetchDraft(key) }
+                    ?: error("草稿读取超时，稍后重试")
+                if (!valid() || isDraftUploading(key) || isDraftSubmitting(key)) return@withLock false
                 val local = accountDraftStore.get(userId, key)
-                val submitting = isDraftSubmitting(key)
-                val merge = if (submitting && local != null && local.content != remote.content && !local.dirty)
-                    org.linuxdo.android.data.DraftMergeAction.Conflict else org.linuxdo.android.data.draftMergeAction(local, remote)
+                val merge = org.linuxdo.android.data.draftMergeAction(local, remote)
                 when (merge) {
                     org.linuxdo.android.data.DraftMergeAction.UseRemote -> {
                         if (remote.content == null) {
@@ -5898,7 +5907,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                     }
                     org.linuxdo.android.data.DraftMergeAction.Conflict -> {
                         accountDraftStore.put(userId, local!!.copy(dirty = true, conflict = true))
-                        setDraftSyncStatus(key, "两端草稿不同，请处理冲突")
+                        setDraftSyncStatus(key, "两端草稿不同，可直接发送手机内容")
                         if (key in activeDraftKeys() && key !in dismissedDraftConflicts && _draftConflict.value == null) _draftConflict.value = DraftConflictUi(local, remote)
                         return@withLock false
                     }
@@ -5924,8 +5933,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 if (valid()) {
                     if (error is HttpStatusException && error.status == 409) {
                         accountDraftStore.get(userId, key)?.let { accountDraftStore.put(userId, it.copy(conflict = true)) }
-                        setDraftSyncStatus(key, "网页草稿已有更新，重新打开可处理冲突")
-                    } else setDraftSyncStatus(key, "已保留手机草稿，联网后重试")
+                        setDraftSyncStatus(key, "网页草稿已有更新，可直接发送手机内容")
+                    } else setDraftSyncStatus(key, "手机草稿已保留，同步稍后重试，不影响发送")
                 }
                 false
             } finally {
@@ -5968,6 +5977,9 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         try {
             accountDraftStore.get(userId, key)?.let { applyDraftContent(key, it.content, it.sequence ?: 0L) }
             accountDraftStore.markLegacyImported(userId, key)
+            // 本机内容已恢复即可编辑；后台读取晚到时仍按基线合并，不覆盖期间的新输入。
+            _composer.update { if (it.target?.let(::composerDraftKey) == key) it.copy(loadingDraft = false) else it }
+            _topicCreator.update { if (it.open && it.draftKey == key) it.copy(loadingDraft = false) else it }
             scheduleDraftSync(key, immediate = true)
         } catch (error: Exception) {
             setDraftSyncStatus(key, "手机草稿暂不可读取，请稍后重试")
@@ -6396,11 +6408,11 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             try {
                 if (current.isReplyDraft) {
                     val targetTopicId = requireNotNull(current.replyTopicId)
-                    when (val result = submitWithSyncedDraft(current.draftKey, content) { repository.createPost(
+                    when (val result = submitWithDraftSnapshot(current.draftKey, content) { publishKey -> repository.createPost(
                         topicId = targetTopicId,
                         raw = rawToSubmit,
                         replyToPostNumber = current.replyToPostNumber,
-                        draftKey = current.draftKey,
+                        draftKey = publishKey,
                     ) }) {
                         is PostResult.Success -> {
                             applyCreatedPost(targetTopicId, result.post)
@@ -6415,12 +6427,12 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                         }
                     }
                 } else {
-                    when (val result = submitWithSyncedDraft(current.draftKey, content) { repository.createTopic(
+                    when (val result = submitWithDraftSnapshot(current.draftKey, content) { publishKey -> repository.createTopic(
                         title = current.title,
                         raw = rawToSubmit,
                         categoryId = current.categoryId,
                         tags = current.tags,
-                        draftKey = current.draftKey,
+                        draftKey = publishKey,
                     ) }) {
                         is PostResult.Success -> {
                             val newTopicId = result.post.topicId ?: 0L

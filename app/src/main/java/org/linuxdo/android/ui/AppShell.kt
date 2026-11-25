@@ -678,7 +678,7 @@ private fun MainNavigation(state: UiState, viewModel: MainViewModel, lifecycle: 
             title = { Text("两端草稿内容不同") },
             text = {
                 Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                    Text("手机和网页都有修改，请选择继续使用的版本。")
+                    Text("手机和网页都有修改，可选择继续编辑的版本。也可稍后处理，直接发送手机内容，网页的不同版本会保留。")
                     Text("手机：${conflict.local.content.raw.ifBlank { conflict.local.content.title }.take(180)}")
                     Text("网页：${conflict.remote.content?.let { it.raw.ifBlank { it.title }.take(180) } ?: "草稿已删除"}")
                     TextButton(onClick = viewModel::dismissDraftConflict) { Text("稍后处理，两端保留") }

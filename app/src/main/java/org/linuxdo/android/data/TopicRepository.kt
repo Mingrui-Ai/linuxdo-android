@@ -2485,7 +2485,7 @@ class TopicRepository(
     }
 
     suspend fun fetchDraft(key: String): RemoteDraft {
-        val response = objectRequest("/drafts/${encode(key)}.json")
+        val response = objectRequest("/drafts/${encode(key)}.json?_=${java.util.UUID.randomUUID()}")
         val data = (response["draft"] as? JsonPrimitive)?.contentOrNull
         val content = data?.takeIf { it.isNotBlank() }?.let { decodeSyncedDraft(key, it) }
         return RemoteDraft(response.number("draft_sequence") ?: 0L, content, data)
