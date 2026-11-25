@@ -2192,8 +2192,13 @@ private fun MainNavigation(state: UiState, viewModel: MainViewModel, lifecycle: 
             state = userCard,
             onDismiss = viewModel::closeUserCard,
             onOpenProfile = { username ->
+                val card = userCard.user?.takeIf { it.username.equals(username, ignoreCase = true) }
+                val staticAvatar = org.linuxdo.android.data.avatarUrlOf(card?.avatarTemplate, size = 160)
+                val avatar = org.linuxdo.android.data.avatarUrlOf(card?.avatarTemplate,
+                    card?.animatedAvatar, size = 160, username = username)
                 viewModel.closeUserCard()
-                stack.push(Route.UserProfile(username))
+                stack.push(Route.UserProfile(username, initialAvatarUrl = avatar,
+                    initialStaticAvatarUrl = staticAvatar))
             },
             onOpenBadges = { username ->
                 viewModel.closeUserCard()

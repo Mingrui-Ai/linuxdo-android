@@ -40,6 +40,8 @@ internal fun ProfileAvatar(
     size: Dp,
     avatarModifier: Modifier = Modifier,
     onOpenProfile: (() -> Unit)? = null,
+    avatarClickLabel: String = "查看 @$username 的详细主页",
+    onImageLoaded: ((coil.memory.MemoryCache.Key?) -> Unit)? = null,
 ) {
     var now by remember(status) { mutableStateOf(Instant.now()) }
     LaunchedEffect(status) {
@@ -55,8 +57,8 @@ internal fun ProfileAvatar(
     Box(Modifier.size(size)) {
         UserAvatar(avatarUrl, staticAvatarUrl, username, Modifier.fillMaxSize().then(avatarModifier)
             .then(if (onOpenProfile != null) Modifier.clickable(role = Role.Button,
-                onClickLabel = "查看 @$username 的详细主页", onClick = onOpenProfile) else Modifier),
-            cornerRadius = size / 2)
+                onClickLabel = avatarClickLabel, onClick = onOpenProfile) else Modifier),
+            cornerRadius = size / 2, onImageLoaded = onImageLoaded)
         if (status?.isVisible(now) == true) {
             var expanded by remember(username, status) { mutableStateOf(false) }
             Box(Modifier.align(Alignment.TopEnd).offset(x = 10.dp, y = (-10).dp)) {

@@ -104,6 +104,7 @@ import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.graphics.StrokeCap
@@ -5610,6 +5611,7 @@ data class ImageViewerItem(
     val url: String,
     val previewUrl: String? = null,
     val description: String? = null,
+    val previewMemoryCacheKey: coil.memory.MemoryCache.Key? = null,
 )
 
 fun extractPostImages(blocks: List<CookedBlock>): List<ImageViewerItem> {
@@ -9059,12 +9061,16 @@ private fun ImageViewerPage(
     onDismiss: () -> Unit,
 ) {
     val context = LocalContext.current
+    val cachedPreview = remember(context, item.previewMemoryCacheKey) {
+        item.previewMemoryCacheKey?.let { coil.Coil.imageLoader(context).memoryCache?.get(it)?.bitmap }
+    }
     val scope = rememberCoroutineScope()
     var zoom by remember(item.url) { mutableFloatStateOf(1f) }
     var panOffset by remember(item.url) { mutableStateOf(Offset.Zero) }
     var containerSize by remember { mutableStateOf(IntSize.Zero) }
     var animJob by remember(item.url) { mutableStateOf<Job?>(null) }
     var reloadTrigger by remember(item.url) { mutableIntStateOf(0) }
+    var originalReady by remember(item.url, reloadTrigger) { mutableStateOf(false) }
     var showSpinner by remember(item.url, reloadTrigger) { mutableStateOf(false) }
 
     LaunchedEffect(isActive) {
@@ -9267,7 +9273,12 @@ private fun ImageViewerPage(
             contentAlignment = Alignment.Center,
         ) {
             // 1. 底层常驻预览图：优先从内存/磁盘缓存秒显，作为无缝垫底底图，大图加载全过程及切换时永不卸载，杜绝闪屏
-            if (!item.previewUrl.isNullOrBlank()) {
+            if (cachedPreview != null && !originalReady) {
+                androidx.compose.foundation.Image(
+                    bitmap = cachedPreview.asImageBitmap(), contentDescription = item.description,
+                    contentScale = ContentScale.Fit, modifier = Modifier.fillMaxSize(),
+                )
+            } else if (cachedPreview == null && !item.previewUrl.isNullOrBlank()) {
                 AsyncImage(
                     model = ImageRequest.Builder(context)
                         .data(item.previewUrl)
@@ -9284,6 +9295,7 @@ private fun ImageViewerPage(
                 contentDescription = item.description ?: "图片预览",
                 contentScale = ContentScale.Fit,
                 modifier = Modifier.fillMaxSize(),
+                onState = { originalReady = it is AsyncImagePainter.State.Success },
             ) {
                 val state = painter.state
                 when (state) {

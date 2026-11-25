@@ -428,7 +428,7 @@ fun UserProfileScreen(
         profileError = null
         if (repo == null) { profileCompleted = generation; return@LaunchedEffect }
         try {
-            val card = repo.fetchUserCard(username, forceRefresh = refreshGeneration > 0)
+            val card = repo.fetchUserProfile(username)
             userCard = card
             if (card.animatedAvatar.isNullOrBlank() || !isAnimatedAvatarPath(card.animatedAvatar)) {
                 userCard = repo.enrichUserCardAvatar(username, card)

@@ -37,6 +37,7 @@ fun UserCardBottomSheet(
 ) {
     val accountId = (LocalContext.current.applicationContext as App).container.sessionStore.currentUserId()
     val user = state.user
+    PrefetchProfileCover(user)
     val badges = rememberDrawerBadges(user?.username, accountId, user != null)
     ModalBottomSheet(onDismissRequest = onDismiss,
         sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true),
