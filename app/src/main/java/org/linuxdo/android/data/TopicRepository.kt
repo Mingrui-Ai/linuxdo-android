@@ -531,7 +531,7 @@ class TopicRepository(
         try { visit(json.parseToJsonElement(request("/emojis.json"))) }
         catch (error: CancellationException) { throw error }
         catch (error: Exception) { diagnostics.log("表情索引加载失败: ${error.message}") }
-        return result.toMap().also { emojiCache = it }
+        return result.toMap().also { if (it.isNotEmpty()) emojiCache = it }
     }
 
     suspend fun fetchFeed(

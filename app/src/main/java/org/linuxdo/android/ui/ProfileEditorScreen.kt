@@ -14,6 +14,8 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.selection.LocalTextSelectionColors
+import androidx.compose.foundation.text.selection.TextSelectionColors
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -21,6 +23,9 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.compositeOver
+import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.TextRange
@@ -31,10 +36,18 @@ import androidx.compose.ui.window.DialogProperties
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import coil.compose.AsyncImage
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.*
 import org.linuxdo.android.data.*
 import org.linuxdo.android.ui.design.*
 import org.linuxdo.android.App
+import org.linuxdo.android.ui.html.CookedBlock
+import org.linuxdo.android.ui.html.profileBioPreview
+import org.linuxdo.android.ui.screen.CookedContent
+import org.linuxdo.android.ui.screen.ImageViewer
+import org.linuxdo.android.ui.screen.ImageViewerItem
 import java.time.*
 import java.time.format.DateTimeFormatter
 import java.util.Locale
@@ -42,9 +55,37 @@ import java.util.Locale
 /** A standalone editor keeps navigation/layout refactors independent from profile data changes. */
 @Composable
 internal fun ProfileEditorDialog(username: String, userId: Long, onDismiss: () -> Unit) {
+    val colors=IosTheme.colors
+    // Material inputs/dialogs need the same palette as the surrounding IosTheme cards.
+    val scheme=remember(colors) {
+        val onAccent=if(colors.accent.luminance()>0.179f) Color.Black else Color.White
+        (if(colors.isDark) darkColorScheme() else lightColorScheme()).copy(
+            primary=colors.accent,onPrimary=onAccent,
+            secondary=colors.accent,onSecondary=onAccent,
+            secondaryContainer=colors.fieldBackground.compositeOver(colors.card),onSecondaryContainer=colors.label,
+            background=colors.groupedBackground,onBackground=colors.label,
+            surface=colors.card,onSurface=colors.label,
+            surfaceVariant=colors.card,onSurfaceVariant=colors.secondaryLabel.compositeOver(colors.card),
+            surfaceContainerHigh=colors.card,surfaceTint=Color.Transparent,
+            outline=colors.secondaryLabel.compositeOver(colors.card),outlineVariant=colors.separator.compositeOver(colors.card),
+            error=colors.destructive,
+        )
+    }
+    MaterialTheme(colorScheme=scheme) {
+        CompositionLocalProvider(
+            LocalContentColor provides colors.label,
+            LocalTextStyle provides IosTheme.type.body,
+            LocalTextSelectionColors provides TextSelectionColors(colors.accent,colors.accent.copy(alpha=0.35f)),
+        ) { ProfileEditorContent(username,userId,onDismiss) }
+    }
+}
+
+@Composable
+private fun ProfileEditorContent(username: String, userId: Long, onDismiss: () -> Unit) {
     val model: ProfileEditorViewModel = viewModel(key="native-profile-editor-$userId")
     val state by model.state.collectAsStateWithLifecycle()
     val context=LocalContext.current
+    val emojiUrls = rememberProfileEmojis()
     var confirmClose by remember { mutableStateOf(false) }
     var confirmReload by remember { mutableStateOf(false) }
     var picker by remember { mutableStateOf<Pair<String,List<ProfileChoice>>?>(null) }
@@ -99,10 +140,12 @@ internal fun ProfileEditorDialog(username: String, userId: Long, onDismiss: () -
                         ProfileSelection("头衔",data.titles.find{it.value==value("title")}?.label ?: value("title").ifEmpty{"无"},enabled("title")) { choices("title",data.titles) }
                         ProfileSelection("资质",data.flairs.find{it.value==value("flair_group_id")}?.label ?: "无",enabled("flair_group_id")) { choices("flair_group_id",data.flairs) }
                         val status=runCatching { Json.parseToJsonElement(value("status")).jsonObject }.getOrNull()
-                        ProfileSelection("自定义状态",status?.text("description")?.ifEmpty{"未设置"} ?: "未设置",enabled("status")) { statusDialog=true }
+                        ProfileSelection("自定义状态",status?.text("description")?.ifEmpty{"未设置"} ?: "未设置",enabled("status"),leading={
+                            status?.text("emoji")?.takeIf { it.isNotBlank() }?.let { ProfileStatusEmoji(it,emojiUrls) }
+                        }) { statusDialog=true }
                     }
                     ProfileSection("自我介绍") {
-                        ProfileBioEditor(value("bio_raw"),enabled("bio_raw"),onUpload={uploadField="bio_raw";upload.launch("image/*")}) { model.edit("bio_raw",it) }
+                        ProfileBioEditor(value("bio_raw"),enabled("bio_raw"),emojiUrls,onUpload={uploadField="bio_raw";upload.launch("image/*")}) { model.edit("bio_raw",it) }
                     }
                     ProfileSection("个人信息") {
                         ProfileSelection("时区",value("timezone"),enabled("timezone")) { picker="timezone" to ZoneId.getAvailableZoneIds().sorted().map{ProfileChoice(it,it)} }
@@ -152,12 +195,17 @@ internal fun ProfileEditorDialog(username: String, userId: Long, onDismiss: () -
     if(confirmClose) AlertDialog(onDismissRequest={confirmClose=false},title={Text("放弃未保存的修改？")},text={Text("网页资料仍保持原样。")},confirmButton={TextButton(onClick={confirmClose=false;model.close();onDismiss()}){Text("放弃修改")}},dismissButton={TextButton(onClick={confirmClose=false}){Text("继续编辑")}})
     if(confirmReload) AlertDialog(onDismissRequest={confirmReload=false},title={Text("重新载入网页资料？")},text={Text("本次未保存的修改会被替换。")},confirmButton={TextButton(onClick={confirmReload=false;model.reload()}){Text("重新载入")}},dismissButton={TextButton(onClick={confirmReload=false}){Text("取消")}})
     if(state.conflicts.isNotEmpty()) AlertDialog(onDismissRequest={},title={Text("网页资料已有更新")},text={Text("以下内容在两端都被修改：\n"+state.conflicts.joinToString("、"){ProfileFields.labels[it].orEmpty()})},confirmButton={TextButton(onClick=model::keepEdits){Text("保留本次修改")}},dismissButton={TextButton(onClick=model::acceptRemote){Text("采用网页版本")}})
-    if(statusDialog) ProfileStatusDialog(state.values["status"].orEmpty(),onDismiss={statusDialog=false}) { model.edit("status",it);statusDialog=false }
+    if(statusDialog) ProfileStatusDialog(state.values["status"].orEmpty(),emojiUrls,onDismiss={statusDialog=false}) { model.edit("status",it);statusDialog=false }
     if(birthdayDialog) ProfileBirthdayDialog(state.values["date_of_birth"].orEmpty(),onDismiss={birthdayDialog=false}) {model.edit("date_of_birth",it);birthdayDialog=false}
     if(topicDialog) ProfileTopicDialog(state,model,onDismiss={topicDialog=false}) {model.edit("featured_topic",it);topicDialog=false}
 }
 
 private fun profileImage(url:String?):String? = url?.takeIf(String::isNotBlank)?.replace("{size}","288")?.let { if(it.startsWith("//")) "https:$it" else if(it.startsWith("/")) org.linuxdo.android.Config.BASE_URL+it else it }
+
+// The old job-search preset used a Unicode label rather than Discourse's shortcode.
+private fun profileStatusEmojiCode(value:String):String = value.trim().trim(':').let {
+    if(it=="magnifying_glass_tilted_left") "mag" else it
+}
 
 @Composable private fun ProfileSection(title:String,content:@Composable ColumnScope.()->Unit) {
     Column(verticalArrangement=Arrangement.spacedBy(8.dp)) {
@@ -170,8 +218,9 @@ private fun profileImage(url:String?):String? = url?.takeIf(String::isNotBlank)?
     OutlinedTextField(value=value,onValueChange=onChange,label={Text(label)},enabled=enabled,modifier=Modifier.fillMaxWidth(),singleLine=true)
 }
 
-@Composable private fun ProfileSelection(label:String,value:String,enabled:Boolean,onClick:()->Unit) {
+@Composable private fun ProfileSelection(label:String,value:String,enabled:Boolean,leading:(@Composable ()->Unit)?=null,onClick:()->Unit) {
     Row(Modifier.fillMaxWidth().heightIn(min=48.dp).clickable(enabled=enabled,onClick=onClick),verticalAlignment=Alignment.CenterVertically) {
+        leading?.invoke()
         Column(Modifier.weight(1f)) { Text(label,color=IosTheme.colors.label);Text(value,style=IosTheme.type.footnote,color=IosTheme.colors.secondaryLabel) }
         Text("›",color=IosTheme.colors.secondaryLabel)
     }
@@ -209,7 +258,7 @@ private fun profileImage(url:String?):String? = url?.takeIf(String::isNotBlank)?
     }
 }
 
-@Composable private fun ProfileBioEditor(raw:String,enabled:Boolean,onUpload:()->Unit,onChange:(String)->Unit) {
+@Composable private fun ProfileBioEditor(raw:String,enabled:Boolean,emojiUrls:Map<String,String>,onUpload:()->Unit,onChange:(String)->Unit) {
     var text by remember { mutableStateOf(TextFieldValue(raw)) }
     var emojis by remember { mutableStateOf(false) }
     LaunchedEffect(raw) { if(raw!=text.text) text=TextFieldValue(raw,TextRange(raw.length)) }
@@ -224,7 +273,47 @@ private fun profileImage(url:String?):String? = url?.takeIf(String::isNotBlank)?
         TextButton(onClick=onUpload,enabled=enabled){Text("图片")}
     }
     OutlinedTextField(value=text,onValueChange={text=it;onChange(it.text)},enabled=enabled,modifier=Modifier.fillMaxWidth().heightIn(min=160.dp),minLines=4,label={Text("支持 Markdown 和表情")})
+    HorizontalDivider(color=IosTheme.colors.separator)
+    Text("预览",style=IosTheme.type.footnote,color=IosTheme.colors.secondaryLabel)
+    ProfileBioPreview(raw,emojiUrls)
     if(emojis) ProfileEmojiDialog(onDismiss={emojis=false}) { insert(":$it:");emojis=false }
+}
+
+@Composable private fun ProfileBioPreview(raw:String,emojiUrls:Map<String,String>) {
+    var blocks by remember(raw,emojiUrls) { mutableStateOf<List<CookedBlock>?>(null) }
+    var error by remember(raw,emojiUrls) { mutableStateOf<String?>(null) }
+    var retry by remember { mutableIntStateOf(0) }
+    var image by remember { mutableStateOf<Pair<List<ImageViewerItem>,Int>?>(null) }
+    LaunchedEffect(raw,emojiUrls,retry) {
+        error=null
+        try { blocks=withContext(Dispatchers.Default) { profileBioPreview(raw,emojiUrls) } }
+        catch(e:CancellationException) { throw e }
+        catch(_:Exception) { error="预览暂时无法显示" }
+    }
+    Column(Modifier.fillMaxWidth().heightIn(min=48.dp).padding(vertical=8.dp),verticalArrangement=Arrangement.spacedBy(10.dp)) {
+        when {
+            raw.isBlank() -> Text("填写自我介绍后可在这里预览",color=IosTheme.colors.secondaryLabel)
+            error!=null -> { Text(error!!); TextButton(onClick={retry++}){Text("重试")} }
+            blocks==null -> LinearProgressIndicator(Modifier.fillMaxWidth())
+            else -> CookedContent(blocks!!,onPicture={images,index -> image=images to index})
+        }
+    }
+    image?.let { (images,index) -> ImageViewer(images=images,initialIndex=index,onDismiss={image=null}) }
+}
+
+@Composable private fun rememberProfileEmojis():Map<String,String> {
+    val app=LocalContext.current.applicationContext as App
+    val urls by produceState<Map<String,String>>(emptyMap(),app) { value=app.container.topicRepository.emojiUrls() }
+    return urls
+}
+
+@Composable private fun ProfileStatusEmoji(name:String,urls:Map<String,String>) {
+    val code=profileStatusEmojiCode(name)
+    val url=urls[code] ?: "${org.linuxdo.android.Config.BASE_URL}/images/emoji/twemoji/$code.png?v=15"
+    var failed by remember(url) { mutableStateOf(false) }
+    if(failed) Text(":$code:",style=IosTheme.type.footnote,modifier=Modifier.widthIn(max=120.dp).padding(end=10.dp))
+    else AsyncImage(model=rememberAnimatedImageRequest(url) ?: url,contentDescription="状态表情 :$code:",
+        modifier=Modifier.padding(end=10.dp).size(28.dp),contentScale=ContentScale.Fit,onError={failed=true})
 }
 
 @Composable private fun ProfileEmojiDialog(onDismiss:()->Unit,onChoose:(String)->Unit) {
@@ -247,19 +336,23 @@ private fun profileImage(url:String?):String? = url?.takeIf(String::isNotBlank)?
     part?.let { p -> ProfileChoiceDialog(if(p=="month") "月份" else "日期",(1..if(p=="month")12 else days).map{ProfileChoice(it.toString(),it.toString())},if(p=="month")month.toString() else day.toString(),onDismiss={part=null}) {if(p=="month")month=it.toInt() else day=it.toInt();part=null} }
 }
 
-@Composable private fun ProfileStatusDialog(value:String,onDismiss:()->Unit,onSave:(String)->Unit) {
+@Composable private fun ProfileStatusDialog(value:String,emojiUrls:Map<String,String>,onDismiss:()->Unit,onSave:(String)->Unit) {
     val initial=remember {runCatching{Json.parseToJsonElement(value).jsonObject}.getOrNull()}
     var description by remember { mutableStateOf(initial?.text("description").orEmpty()) }
-    var emoji by remember { mutableStateOf(initial?.text("emoji").orEmpty().ifEmpty{"slightly_smiling_face"}) }
+    var emoji by remember { mutableStateOf(profileStatusEmojiCode(initial?.text("emoji").orEmpty()).ifEmpty{"slightly_smiling_face"}) }
     val format=DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm")
     var expiry by remember {mutableStateOf(initial?.text("ends_at")?.takeIf{it.isNotBlank()}?.let{runCatching{Instant.parse(it).atZone(ZoneId.systemDefault()).format(format)}.getOrNull()}.orEmpty())}
     var error by remember {mutableStateOf<String?>(null)}
     var emojis by remember {mutableStateOf(false)}
     AlertDialog(onDismissRequest=onDismiss,title={Text("自定义状态")},text={Column(Modifier.verticalScroll(rememberScrollState()),verticalArrangement=Arrangement.spacedBy(10.dp)) {
+        Row(Modifier.fillMaxWidth().padding(vertical=8.dp),verticalAlignment=Alignment.CenterVertically) {
+            ProfileStatusEmoji(emoji,emojiUrls)
+            Text(description.ifBlank { "状态预览" },color=IosTheme.colors.label)
+        }
         ProfileField("状态文字",description,true){description=it}
-        ProfileField("表情名称",emoji,true){emoji=it.trim().trim(':')}
+        ProfileField("表情名称",emoji,true){emoji=profileStatusEmojiCode(it)}
         TextButton(onClick={emojis=true}){Text("选择表情")}
-        Row(Modifier.horizontalScroll(rememberScrollState())) {listOf("微笑" to "slightly_smiling_face","工作" to "briefcase","度假" to "palm_tree","找工作" to "magnifying_glass_tilted_left").forEach{(label,code)->TextButton(onClick={emoji=code}){Text(label)}}}
+        Row(Modifier.horizontalScroll(rememberScrollState())) {listOf("微笑" to "slightly_smiling_face","工作" to "briefcase","度假" to "palm_tree","找工作" to "mag").forEach{(label,code)->TextButton(onClick={emoji=code}){ProfileStatusEmoji(code,emojiUrls);Text(label)}}}
         ProfileField("结束时间（留空长期保留）",expiry,true){expiry=it}
         Text("格式：yyyy-MM-dd HH:mm，使用本机时区",style=IosTheme.type.footnote)
         Row {TextButton(onClick={expiry=""}){Text("长期")};TextButton(onClick={expiry=LocalDateTime.now().plusHours(1).format(format)}){Text("1 小时")};TextButton(onClick={expiry=LocalDate.now().plusDays(1).atStartOfDay().format(format)}){Text("今天")}}
