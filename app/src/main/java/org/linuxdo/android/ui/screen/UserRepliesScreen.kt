@@ -208,6 +208,7 @@ private fun UserReplyCard(
     item: UserReplyItem,
     onClick: () -> Unit,
     onOpenUser: ((String) -> Unit)? = null,
+    fallbackAvatarUrl: String? = null,
 ) {
     Column(
         modifier = Modifier
@@ -221,7 +222,7 @@ private fun UserReplyCard(
             verticalAlignment = Alignment.CenterVertically,
         ) {
             AsyncImage(
-                model = item.avatarUrl,
+                model = item.avatarUrl?.takeIf { it.isNotBlank() } ?: fallbackAvatarUrl,
                 contentDescription = item.username,
                 contentScale = ContentScale.Crop,
                 modifier = Modifier
@@ -353,6 +354,9 @@ fun UserProfileScreen(
     val coroutineScope = rememberCoroutineScope()
     val repo = (context.applicationContext as? App)?.container?.topicRepository
     var userCard by remember(username) { mutableStateOf<UserCardData?>(repo?.getCachedUserCard(username)) }
+    // 回应、Boost 和已解决接口不带操作者头像，复用主页资料，随异步资料更新一起补齐。
+    val profileAvatarUrl = avatarUrlOf(userCard?.avatarTemplate, userCard?.animatedAvatar,
+        size = 64, username = username) ?: initialAvatarUrl ?: initialStaticAvatarUrl
     var selectedProfileTab by androidx.compose.runtime.key("profile-tab-by-name") {
         rememberSaveable(username) { mutableStateOf(UserProfileTab.Summary) }
     }
@@ -697,6 +701,8 @@ fun UserProfileScreen(
                             item = item,
                             onClick = { onOpenTopic(item.topicId, item.title, item.postNumber) },
                             onOpenUser = onOpenUser,
+                            // 投票/动态可能显示其他作者，不能给他们套用主页用户的头像。
+                            fallbackAvatarUrl = profileAvatarUrl.takeIf { item.username.equals(username, ignoreCase = true) },
                         )
                     }
                     if (error != null && items.isNotEmpty()) {
