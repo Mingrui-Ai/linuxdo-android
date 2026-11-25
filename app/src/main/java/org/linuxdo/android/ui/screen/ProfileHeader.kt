@@ -27,6 +27,8 @@ import androidx.compose.ui.unit.sp
 import coil.compose.AsyncImage
 import org.linuxdo.android.Config
 import org.linuxdo.android.data.*
+import org.linuxdo.android.data.ProfileDisplayField.*
+import org.linuxdo.android.ui.rememberProfileDisplayPreferences
 import org.linuxdo.android.ui.design.*
 
 data class ProfileMenuAction(val label: String, val icon: ImageVector, val onClick: () -> Unit, val enabled: Boolean = true)
@@ -42,6 +44,7 @@ internal fun ProfileHeader(
     onBack: (() -> Unit)?,
     onSwitchAccount: (() -> Unit)?,
     onEditProfile: (() -> Unit)?,
+    onOpenDisplaySettings: () -> Unit,
     onChat: (() -> Unit)?,
     onPrivateMessage: (() -> Unit)?,
     menuActions: List<ProfileMenuAction>,
@@ -56,7 +59,9 @@ internal fun ProfileHeader(
     onOpenNetwork: (Boolean) -> Unit,
     onOpenWebsite: (String) -> Unit,
     onOpenTopic: (Long, String, Int?) -> Unit,
+    onOpenUser: ((String) -> Unit)?,
 ) {
+    val display = rememberProfileDisplayPreferences()
     val colors = IosTheme.colors
     val context = LocalContext.current
     var showMenu by remember(username) { mutableStateOf(false) }
@@ -72,7 +77,7 @@ internal fun ProfileHeader(
 
     Column(Modifier.fillMaxWidth().background(surface)) {
         BoxWithConstraints(Modifier.fillMaxWidth()) {
-            val background = card?.profileBackgroundUrl ?: card?.cardBackgroundUrl
+            val background = (card?.profileBackgroundUrl ?: card?.cardBackgroundUrl).takeIf { display[Background] }
             val coverHeight = profileCoverHeight(maxWidth)
             val topInset = with(LocalDensity.current) {
                 WindowInsets.systemBars.union(WindowInsets.displayCutout).getTop(this).toDp()
@@ -127,6 +132,7 @@ internal fun ProfileHeader(
                                 actions = menuActions + listOfNotNull(
                                     onSwitchAccount?.let { ProfileMenuAction("切换账号", Icons.Default.Person, it) },
                                     onEditProfile?.let { ProfileMenuAction("编辑个人资料", Icons.Default.Edit, it) },
+                                    ProfileMenuAction("主页显示设置", Icons.Default.Settings, onOpenDisplaySettings),
                                     onPrivateMessage?.let { ProfileMenuAction("私信", Icons.Default.Email, it) },
                                     onChat?.let { ProfileMenuAction("私聊", Icons.Default.Send, it) },
                                     ProfileMenuAction("分享个人主页", Icons.Default.Share, onClick = {
@@ -161,7 +167,7 @@ internal fun ProfileHeader(
                 Text(card?.cleanDisplayName ?: username, fontSize = 24.sp, fontWeight = FontWeight.Bold,
                     color = colors.label, maxLines = 1, overflow = TextOverflow.Ellipsis,
                     modifier = Modifier.weight(1f, false))
-                card?.trustLevel?.let { level ->
+                card?.trustLevel?.takeIf { display[Level] }?.let { level ->
                     Box(Modifier.heightIn(min = 32.dp).then(if (onOpenLevel != null)
                         Modifier.clickable(onClickLabel = "等级与积分", onClick = onOpenLevel) else Modifier),
                         contentAlignment = Alignment.Center) { LevelBadge(level) }
@@ -174,17 +180,17 @@ internal fun ProfileHeader(
                     Text("@$username", color = colors.secondaryLabel, fontSize = 12.sp,
                         maxLines = 1, overflow = TextOverflow.Ellipsis)
                 }
-                Box(Modifier.align(Alignment.CenterVertically)) {
+                if (display[Badges] || (display[CommunityScore] && onOpenCommunityScore != null)) Box(Modifier.align(Alignment.CenterVertically)) {
                     ProfileAchievements(badges, badgesLoading, onOpenBadges, communityScore,
                         communityScoreLoading, needsAuthorization, onOpenCommunityScore)
                 }
             }
-            profileDisplayTitle(card?.title, card?.trustLevel)?.let {
+            profileDisplayTitle(card?.title, card?.trustLevel)?.takeIf { display[Title] }?.let {
                 Text(it, style = IosTheme.type.caption, color = colors.secondaryLabel)
             }
-            Spacer(Modifier.height(8.dp))
             ProfileDetails(card, badges, badgesLoading, onOpenBadges,
-                loading = card == null, showAchievements = false, onOpenNetwork = onOpenNetwork)
+                loading = card == null, showAchievements = false, onOpenNetwork = onOpenNetwork,
+                modifier = Modifier.padding(top = 8.dp), onOpenUser = onOpenUser)
             ProfilePublicDetails(card, onOpenWebsite, onOpenTopic)
             Spacer(Modifier.height(12.dp))
         }

@@ -3788,6 +3788,21 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                     loading = false,
                 )
 
+                // Keep the lightweight card immediate, then load the inviter from the full profile.
+                if (container.profileDisplayStore.settings.value[org.linuxdo.android.data.ProfileDisplayField.Inviter]) {
+                    val complete = try { repository.fetchUserProfile(target) }
+                    catch (cancelled: CancellationException) { throw cancelled }
+                    catch (_: Exception) { null }
+                    if (complete != null && _userCard.value.user?.username?.equals(target, ignoreCase = true) == true) {
+                        val current = _userCard.value.user ?: complete
+                        _userCard.value = _userCard.value.copy(user = current.copy(
+                            invitedBy = complete.invitedBy, email = complete.email,
+                            gamificationScore = complete.gamificationScore,
+                            profileBackgroundUploadUrl = complete.profileBackgroundUploadUrl,
+                        ))
+                    }
+                }
+
                 if (effectiveUser.animatedAvatar.isNullOrBlank()) {
                     val enriched = runCatching { repository.enrichUserCardAvatar(target, effectiveUser) }.getOrNull()
                     if (!enriched?.animatedAvatar.isNullOrBlank() &&

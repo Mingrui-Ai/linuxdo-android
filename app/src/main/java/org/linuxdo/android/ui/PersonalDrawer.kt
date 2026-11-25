@@ -104,7 +104,7 @@ internal fun rememberDrawerProfile(username: String?, accountId: Long, open: Boo
         repository.getCachedUserCard(username)?.let { card = it }
         if (refreshedAt > 0L && android.os.SystemClock.elapsedRealtime() - refreshedAt < 60_000L) return@LaunchedEffect
         try {
-            val loaded = repository.fetchUserCard(username, forceRefresh = true)
+            val loaded = repository.fetchUserProfile(username)
             currentCoroutineContext().ensureActive()
             if (loaded.username.equals(username, ignoreCase = true)) {
                 card = loaded
@@ -176,6 +176,7 @@ internal fun PersonalDrawerContent(
     onLoadCategories: () -> Unit,
     onLoadTags: () -> Unit,
     onAction: (PersonalDrawerAction) -> Unit,
+    onOpenUser: (String) -> Unit,
     onAccounts: () -> Unit,
     onCommunityScore: () -> Unit,
     onToggleTheme: () -> Unit,
@@ -204,12 +205,12 @@ internal fun PersonalDrawerContent(
                                 .semantics { contentDescription = "切换账号" }) { AccountSwitchIcon(colors.accent) }
                         },
                     )
-                    Spacer(Modifier.height(12.dp))
                     ProfileDetails(card, badges.items, badges.loading,
                         onOpenBadges = { onAction(PersonalDrawerAction.Badges) },
                         communityScore = communityScore.score, communityScoreLoading = communityScore.loading,
                         needsAuthorization = communityScore.needsAuthorization, onOpenCommunityScore = onCommunityScore,
-                        loading = card == null, active = visible)
+                        loading = card == null, active = visible, modifier = Modifier.padding(top = 12.dp),
+                        onOpenUser = onOpenUser)
                 } else {
                     Row(verticalAlignment = Alignment.CenterVertically,
                         horizontalArrangement = Arrangement.spacedBy(12.dp)) {

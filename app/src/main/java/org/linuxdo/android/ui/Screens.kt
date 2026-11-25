@@ -56,6 +56,9 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Switch
+import androidx.compose.material3.Icon
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Person
 import androidx.compose.material3.SwitchDefaults
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -1155,6 +1158,12 @@ fun SettingsScreen(
                 ) { SettingAppearanceIcon(tint = Color(0xFF5856D6)) }
                 IosDivider()
                 SettingsEntryRow(
+                    title = SettingsPage.ProfileDisplay.title,
+                    badgeColor = Color(0xFFE8F3FF),
+                    onClick = { onOpenPage(SettingsPage.ProfileDisplay) },
+                ) { Icon(Icons.Default.Person, null, tint = Color(0xFF007AFF), modifier = Modifier.size(18.dp)) }
+                IosDivider()
+                SettingsEntryRow(
                     title = SettingsPage.Reading.title,
                     badgeColor = Color(0xFFFFF4E5),
                     value = when (feedDisplayMode) {
@@ -1192,6 +1201,11 @@ fun SettingsScreen(
                     onClick = { onOpenPage(SettingsPage.Network) },
                 ) { SettingDohIcon(tint = Color(0xFF34C759)) }
             }
+        }
+
+        if (page == SettingsPage.ProfileDisplay) item("profile-display") {
+            Spacer(Modifier.height(12.dp))
+            ProfileDisplaySettings()
         }
 
         // ── 1. 外观 ──

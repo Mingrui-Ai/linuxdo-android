@@ -23,6 +23,8 @@ import coil.compose.AsyncImage
 import java.time.Instant
 import kotlinx.coroutines.delay
 import org.linuxdo.android.App
+import org.linuxdo.android.data.ProfileDisplayField
+import org.linuxdo.android.ui.rememberProfileDisplayPreferences
 import org.linuxdo.android.data.ProfileStatus
 import org.linuxdo.android.data.normalizeProfileStatusEmoji
 import org.linuxdo.android.data.profileWebsiteUrl
@@ -43,11 +45,13 @@ internal fun ProfileAvatar(
     avatarClickLabel: String = "查看 @$username 的详细主页",
     onImageLoaded: ((coil.memory.MemoryCache.Key?) -> Unit)? = null,
 ) {
-    var now by remember(status) { mutableStateOf(Instant.now()) }
-    LaunchedEffect(status) {
-        while (status?.isVisible(Instant.now()) == true) {
+    val display = rememberProfileDisplayPreferences()
+    val visibleStatus = status.takeIf { display[ProfileDisplayField.Status] }
+    var now by remember(visibleStatus) { mutableStateOf(Instant.now()) }
+    LaunchedEffect(visibleStatus) {
+        while (visibleStatus?.isVisible(Instant.now()) == true) {
             now = Instant.now()
-            val remaining = status.endsAt?.let { runCatching {
+            val remaining = visibleStatus.endsAt?.let { runCatching {
                 java.time.Duration.between(now, Instant.parse(it)).toMillis()
             }.getOrNull() } ?: 60_000L
             delay(remaining.coerceIn(1L, 60_000L))
@@ -59,8 +63,8 @@ internal fun ProfileAvatar(
             .then(if (onOpenProfile != null) Modifier.clickable(role = Role.Button,
                 onClickLabel = avatarClickLabel, onClick = onOpenProfile) else Modifier),
             cornerRadius = size / 2, onImageLoaded = onImageLoaded)
-        if (status?.isVisible(now) == true) {
-            var expanded by remember(username, status) { mutableStateOf(false) }
+        if (visibleStatus?.isVisible(now) == true) {
+            var expanded by remember(username, visibleStatus) { mutableStateOf(false) }
             Box(Modifier.align(Alignment.TopEnd).offset(x = 10.dp, y = (-10).dp)) {
                 Box(Modifier.size(44.dp).clip(CircleShape).semantics { contentDescription = "@$username 的状态" }
                     .clickable(role = Role.Button,
@@ -68,12 +72,12 @@ internal fun ProfileAvatar(
                     contentAlignment = Alignment.Center) {
                     Box(Modifier.size(28.dp).background(IosTheme.colors.card, CircleShape)
                         .border(1.dp, IosTheme.colors.separator, CircleShape), contentAlignment = Alignment.Center) {
-                        ProfileStatusEmoji(status.emoji)
+                        ProfileStatusEmoji(visibleStatus.emoji)
                     }
                 }
                 DropdownMenu(expanded, onDismissRequest = { expanded = false },
                     containerColor = IosTheme.colors.card, tonalElevation = 0.dp) {
-                    Text(status.description, style = IosTheme.type.body, color = IosTheme.colors.label,
+                    Text(visibleStatus.description, style = IosTheme.type.body, color = IosTheme.colors.label,
                         modifier = Modifier.widthIn(max = 260.dp).padding(horizontal = 16.dp, vertical = 8.dp))
                 }
             }

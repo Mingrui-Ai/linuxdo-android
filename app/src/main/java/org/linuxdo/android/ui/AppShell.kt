@@ -1024,6 +1024,10 @@ private fun MainNavigation(state: UiState, viewModel: MainViewModel, lifecycle: 
                 PersonalDrawerContent(state.username, drawerAccount, drawerProfile, drawerScore, drawerBadges, drawerVisible, categories, tagsState,
                     onLoadCategories = { viewModel.loadCategories() }, onLoadTags = { viewModel.loadTags() },
                     onAction = onDrawerAction,
+                    onOpenUser = { name ->
+                        stack.push(Route.UserProfile(name))
+                        drawerScope.launch { drawerState.close() }
+                    },
                     onAccounts = { viewModel.refreshAccounts(); showDrawerAccounts = true },
                     onCommunityScore = { viewModel.loadCdkScore(userInitiated = true); showDrawerScore = true },
                     onToggleTheme = { viewModel.setThemeMode(if (drawerDark) ThemeMode.Light else ThemeMode.Dark) },
@@ -1605,6 +1609,7 @@ private fun MainNavigation(state: UiState, viewModel: MainViewModel, lifecycle: 
                                         onOpenWebsite = { globalBrowserUrl = it },
                                         onOpenConnect = { showConnectSheet = true },
                                         onEditProfile = { globalBrowserUrl = "${Config.BASE_URL}/my/preferences/profile" },
+                                        onOpenDisplaySettings = { stack.push(Route.SettingsDetail(org.linuxdo.android.ui.nav.SettingsPage.ProfileDisplay)) },
                                         cdkScore = cdkScoreState.score.takeIf { cdkScoreState.username.equals(profileUsername, ignoreCase = true) },
                                         cdkScoreLoading = drawerScore.loading,
                                         cdkScoreError = drawerScore.error,
@@ -1628,6 +1633,7 @@ private fun MainNavigation(state: UiState, viewModel: MainViewModel, lifecycle: 
                                         onChat = { target -> viewModel.openChatWithUser(target) { stack.push(it) } },
                                         onComposePrivateMessage = { privateMessageRecipient = it },
                                         onSetFollowing = viewModel::setProfileFollowing,
+                                        onOpenDisplaySettings = { stack.push(Route.SettingsDetail(org.linuxdo.android.ui.nav.SettingsPage.ProfileDisplay)) },
                                         isBlocked = profileRoute.username.lowercase() in blockedUsernameSet,
                                         onToggleBlock = viewModel::toggleProfileBlacklist,
                                         onBack = { stack.pop() },

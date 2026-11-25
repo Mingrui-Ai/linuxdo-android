@@ -16,6 +16,8 @@ import androidx.compose.ui.unit.dp
 import coil.compose.AsyncImage
 import org.linuxdo.android.App
 import org.linuxdo.android.data.AvatarCache
+import org.linuxdo.android.data.ProfileDisplayField
+import org.linuxdo.android.ui.rememberProfileDisplayPreferences
 import org.linuxdo.android.data.UserCardData
 import org.linuxdo.android.data.avatarUrlOf
 import org.linuxdo.android.ui.CdkScoreUiState
@@ -36,14 +38,15 @@ fun UserCardBottomSheet(
     onOpenCommunityScore: (() -> Unit)? = null,
 ) {
     val accountId = (LocalContext.current.applicationContext as App).container.sessionStore.currentUserId()
+    val display = rememberProfileDisplayPreferences()
     val user = state.user
-    PrefetchProfileCover(user)
+    if (display[ProfileDisplayField.Background]) PrefetchProfileCover(user)
     val badges = rememberDrawerBadges(user?.username, accountId, user != null)
     ModalBottomSheet(onDismissRequest = onDismiss,
         sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true),
         containerColor = IosTheme.colors.card) {
         Box(Modifier.fillMaxWidth()) {
-            user?.cardBackgroundUrl?.let { background ->
+            user?.cardBackgroundUrl?.takeIf { display[ProfileDisplayField.Background] }?.let { background ->
                 val request = rememberAnimatedImageRequest(background)
                 AsyncImage(model = request ?: background, contentDescription = null, contentScale = ContentScale.Crop,
                     modifier = Modifier.matchParentSize())
@@ -61,7 +64,7 @@ fun UserCardBottomSheet(
                         communityScoreLoading = communityScore?.loading == true,
                         needsAuthorization = communityScore?.needsAuthorization == true,
                         onOpenCommunityScore = onOpenCommunityScore, loading = state.loading,
-                        onOpenNetwork = { onOpenNetwork(user.username, it) })
+                        onOpenNetwork = { onOpenNetwork(user.username, it) }, onOpenUser = onOpenProfile)
                     state.error?.let { Text(it, style = IosTheme.type.caption, color = IosTheme.colors.secondaryLabel) }
                     Spacer(Modifier.height(4.dp))
                 }

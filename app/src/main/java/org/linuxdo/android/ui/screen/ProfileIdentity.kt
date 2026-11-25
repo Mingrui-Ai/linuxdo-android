@@ -16,6 +16,8 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import org.linuxdo.android.data.ProfileDisplayField.*
+import org.linuxdo.android.ui.rememberProfileDisplayPreferences
 import org.linuxdo.android.data.UserBadgeItem
 import org.linuxdo.android.data.UserCardData
 import org.linuxdo.android.data.visibleFollowCount
@@ -38,6 +40,7 @@ internal fun ProfileIdentity(
     onOpenLevel: (() -> Unit)? = null,
     trailing: @Composable (() -> Unit)? = null,
 ) {
+    val display = rememberProfileDisplayPreferences()
     val colors = IosTheme.colors
     val openProfile = if (onOpenProfile != null) Modifier.clickable(role = Role.Button,
         onClickLabel = "查看 @$username 的详细主页", onClick = onOpenProfile) else Modifier
@@ -49,7 +52,7 @@ internal fun ProfileIdentity(
                 Text(displayName, style = IosTheme.type.largeTitle, color = colors.label,
                     maxLines = 1, overflow = TextOverflow.Ellipsis,
                     modifier = Modifier.weight(1f, false).then(openProfile))
-                level?.let {
+                level?.takeIf { display[Level] }?.let {
                     Box(Modifier.heightIn(min = 32.dp).then(if (onOpenLevel != null)
                         Modifier.clickable(role = Role.Button, onClickLabel = "等级与积分", onClick = onOpenLevel)
                         else Modifier), contentAlignment = Alignment.Center) { LevelBadge(it) }
@@ -57,7 +60,7 @@ internal fun ProfileIdentity(
             }
             Text("@$username", style = IosTheme.type.caption, color = colors.secondaryLabel,
                 maxLines = 1, overflow = TextOverflow.Ellipsis)
-            org.linuxdo.android.data.profileDisplayTitle(title, level)?.let {
+            org.linuxdo.android.data.profileDisplayTitle(title, level)?.takeIf { display[Title] }?.let {
                 Text(it, style = IosTheme.type.caption, color = colors.secondaryLabel,
                     maxLines = 1, overflow = TextOverflow.Ellipsis)
             }
@@ -82,39 +85,73 @@ internal fun ProfileDetails(
     active: Boolean = true,
     showAchievements: Boolean = true,
     onOpenNetwork: ((Boolean) -> Unit)? = null,
+    modifier: Modifier = Modifier,
+    onOpenUser: ((String) -> Unit)? = null,
 ) {
+    val display = rememberProfileDisplayPreferences()
+    val viewerId = (androidx.compose.ui.platform.LocalContext.current.applicationContext as org.linuxdo.android.App)
+        .container.sessionStore.currentUserId()
+    val inviter = card?.invitedBy?.takeIf { display[Inviter] && it.username.isNotBlank() }
+    val email = org.linuxdo.android.data.visibleProfileEmail(card, viewerId).takeIf { display[Email] }
+    val points = card?.gamificationScore.takeIf { display[Points] }
+    val extraVisible = inviter != null || email != null || points != null
+    val achievementsVisible = showAchievements && (display[Badges] ||
+        (display[CommunityScore] && onOpenCommunityScore != null))
+    val countsVisible = display[FollowCounts] && onOpenNetwork != null &&
+        (visibleFollowCount(card?.totalFollowing, card?.canSeeFollowing) != null ||
+            visibleFollowCount(card?.totalFollowers, card?.canSeeFollowers) != null)
+    val metadataVisible = display[JoinedAt] || display[LastActive] || countsVisible
+    if (!achievementsVisible && !display[Bio] && !metadataVisible && !extraVisible) return
     val colors = IosTheme.colors
     var showBio by remember(card?.username) { mutableStateOf(false) }
     var now by remember { mutableStateOf(java.time.Instant.now()) }
-    LaunchedEffect(active) {
-        while (active) {
+    LaunchedEffect(active, display[LastActive]) {
+        while (active && display[LastActive]) {
             now = java.time.Instant.now()
             kotlinx.coroutines.delay(60_000L)
         }
     }
-    Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(7.dp)) {
-        if (showAchievements) {
+    Column(modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(7.dp)) {
+        if (achievementsVisible) {
             ProfileAchievements(badges, badgesLoading, onOpenBadges, communityScore,
                 communityScoreLoading, needsAuthorization, onOpenCommunityScore)
         }
-        UserBioText(card?.bioExcerpt, if (loading) "正在加载资料…" else "还没有填写个人简介",
+        if (display[Bio]) UserBioText(card?.bioExcerpt, if (loading) "正在加载资料…" else "还没有填写个人简介",
             IosTheme.type.body.copy(fontSize = 13.sp), colors.label, maxLines = 2,
             emptyColor = colors.secondaryLabel, loadImages = active,
             modifier = Modifier.fillMaxWidth().then(if (!card?.bioExcerpt.isNullOrBlank())
                 Modifier.clickable(onClickLabel = "查看完整简介") { showBio = true } else Modifier))
-        FlowRow(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(12.dp),
+        if (metadataVisible) FlowRow(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(12.dp),
             verticalArrangement = Arrangement.spacedBy(3.dp)) {
-            Text("加入时间 ${profileJoinDate(card?.createdAt)}", style = IosTheme.type.caption, color = colors.secondaryLabel,
+            if (display[JoinedAt]) Text("加入时间 ${profileJoinDate(card?.createdAt)}", style = IosTheme.type.caption, color = colors.secondaryLabel,
                 modifier = Modifier.align(Alignment.CenterVertically))
-            Text("最近活跃 ${if (card?.lastSeenAt.isNullOrBlank()) if (loading) "…" else "未公开" else RelativeTime.format(card?.lastSeenAt, now)}",
+            if (display[LastActive]) Text("最近活跃 ${if (card?.lastSeenAt.isNullOrBlank()) if (loading) "…" else "未公开" else RelativeTime.format(card?.lastSeenAt, now)}",
                 style = IosTheme.type.caption, color = colors.secondaryLabel,
                 modifier = Modifier.align(Alignment.CenterVertically))
-            if (onOpenNetwork != null) {
+            if (countsVisible && onOpenNetwork != null) {
                 ProfileFollowCounts(card, onOpenNetwork, Modifier.align(Alignment.CenterVertically))
             }
         }
+        if (extraVisible) Column(verticalArrangement = Arrangement.spacedBy(3.dp)) {
+            if (inviter != null || points != null) FlowRow(
+                horizontalArrangement = Arrangement.spacedBy(12.dp), verticalArrangement = Arrangement.spacedBy(3.dp),
+            ) {
+                inviter?.let { person ->
+                    Text("邀请人 @${person.username}", style = IosTheme.type.caption,
+                        color = if (onOpenUser != null) colors.accent else colors.secondaryLabel,
+                        modifier = Modifier.heightIn(min = 32.dp).wrapContentHeight().then(if (onOpenUser != null)
+                            Modifier.clickable(role = Role.Button, onClickLabel = "查看邀请人 @${person.username}") {
+                                onOpenUser(person.username)
+                            } else Modifier))
+                }
+                points?.let { Text("点数 $it", style = IosTheme.type.caption, color = colors.secondaryLabel,
+                    modifier = Modifier.heightIn(min = 32.dp).wrapContentHeight()) }
+            }
+            email?.let { Text("电子邮件 $it", style = IosTheme.type.caption,
+                color = colors.secondaryLabel, modifier = Modifier.fillMaxWidth()) }
+        }
     }
-    if (showBio) AlertDialog(onDismissRequest = { showBio = false }, title = { Text("个人简介") },
+    if (showBio && display[Bio]) AlertDialog(onDismissRequest = { showBio = false }, title = { Text("个人简介") },
         text = { UserBioText(card?.bioExcerpt, "还没有填写个人简介", IosTheme.type.body, colors.label,
             maxLines = Int.MAX_VALUE, modifier = Modifier.heightIn(max = 360.dp).verticalScroll(rememberScrollState())) },
         confirmButton = { TextButton(onClick = { showBio = false }) { Text("完成") } }, containerColor = colors.card)
@@ -153,12 +190,14 @@ internal fun ProfileAchievements(
     needsAuthorization: Boolean = false,
     onOpenCommunityScore: (() -> Unit)? = null,
 ) {
+    val display = rememberProfileDisplayPreferences()
+    if (!display[Badges] && !(display[CommunityScore] && onOpenCommunityScore != null)) return
     FlowRow(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
         // CDK 只提供当前授权账号的分数，他人资料不显示此字段。
-        if (onOpenCommunityScore != null) {
+        if (display[CommunityScore] && onOpenCommunityScore != null) {
             ProfileCommunityScore(communityScore, onOpenCommunityScore, communityScoreLoading, needsAuthorization)
         }
-        ProfileBadgePreview(badges, badgesLoading, onOpenBadges)
+        if (display[Badges]) ProfileBadgePreview(badges, badgesLoading, onOpenBadges)
     }
 }
 

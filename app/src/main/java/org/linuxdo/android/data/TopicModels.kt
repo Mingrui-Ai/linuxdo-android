@@ -1111,6 +1111,8 @@ fun trustLevelTitle(level: Int?): String = when (level) {
 
 @Serializable
 data class UserCardData(
+    @SerialName("invited_by") val invitedBy: ProfileInviter? = null,
+    val email: String? = null,
     val title: String? = null,
     val status: ProfileStatus? = null,
     val website: String? = null,
@@ -2151,7 +2153,10 @@ data class UserSummaryData(
     val topicCount: Int = 0,
     val postCount: Int = 0,
     val timeRead: Int = 0,
-    val bookmarkCount: Int = 0,
+    val bookmarkCount: Int? = null,
+    val recentTimeRead: Int? = null,
+    val solvedCount: Int? = null,
+    val canSeeSummaryStats: Boolean = true,
     val topicsEntered: Int = 0,
     val topTopics: List<SummaryTopicItem> = emptyList(),
     val topReplies: List<SummaryReplyItem> = emptyList(),
