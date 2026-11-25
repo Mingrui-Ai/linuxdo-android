@@ -31,6 +31,7 @@ sealed interface Route : Serializable {
     data object Chat : Route
     data class ChatRoom(val channelId: Long, val title: String) : Route
     data class FollowList(val username: String) : Route
+    data class ProfileNetwork(val username: String, val followers: Boolean) : Route
     data class UserBadges(val username: String) : Route
     data object Blacklist : Route
     data class UserProfile(

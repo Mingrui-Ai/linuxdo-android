@@ -1729,6 +1729,18 @@ class TopicRepository(
             return existingCached
         }
         val root = objectRequest("/u/${encode(username)}/card.json", burst = true)
+        return cacheUserCardResponse(username, root)
+    }
+
+    /** 详细主页直接读取完整资料；card.json 不包含个人主页背景。 */
+    suspend fun fetchUserProfile(username: String): UserCardData {
+        val root = objectRequest("/u/${encode(username)}.json", burst = true)
+        return cacheUserCardResponse(username, root)
+    }
+
+    private fun cacheUserCardResponse(username: String, root: JsonObject): UserCardData {
+        val key = username.lowercase().trim().removePrefix("@")
+        val existingCached = userCardCache[key]
         val user = root["user"] as? JsonObject ?: root
         val card = json.decodeFromJsonElement<UserCardData>(user)
         saveCachedGamificationScore(card.username.ifBlank { username }, card.gamificationScore)
@@ -1748,6 +1760,9 @@ class TopicRepository(
         // 若之前已有缓存的统计数据，保留之，防止刷新时指标闪烁归零
         val resolved = card.copy(
             animatedAvatar = candidateAnim,
+            // 轻量卡片未返回此字段时保留完整主页缓存；明确返回 null 则表示已移除。
+            profileBackgroundUploadUrl = if ("profile_background_upload_url" in user)
+                card.profileBackgroundUploadUrl else existingCached?.profileBackgroundUploadUrl,
             following = isFollowedInJson,
             topicCount = if (card.topicCount > 0) card.topicCount else (existingCached?.topicCount ?: 0),
             postCount = if (card.postCount > 0) card.postCount else (existingCached?.postCount ?: 0),
@@ -1902,6 +1917,9 @@ class TopicRepository(
         saveCachedFollowing(username, list)
         return list
     }
+
+    suspend fun fetchProfileNetwork(username: String, followers: Boolean): List<FollowUser> =
+        fetchFollowList(username, if (followers) "followers" else "following")
 
     private suspend fun fetchFollowList(username: String, listName: String, present: Boolean = true): List<FollowUser> {
         val result = json.parseToJsonElement(request("/u/${encode(username)}/follow/$listName", present = present)) as? JsonArray

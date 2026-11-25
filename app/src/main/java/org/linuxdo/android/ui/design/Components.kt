@@ -161,6 +161,7 @@ fun UserAvatar(
     modifier: Modifier = Modifier,
     cornerRadius: Dp = 4.dp,
     contentScale: ContentScale = ContentScale.Crop,
+    onImageLoaded: ((coil.memory.MemoryCache.Key?) -> Unit)? = null,
 ) {
     val staticBaseUrl = fallbackUrl?.takeIf { it.isNotBlank() } ?: avatarUrl?.takeIf { it.isNotBlank() }
     val animatedOverlayUrl = avatarUrl?.takeIf { it.isNotBlank() && it != staticBaseUrl }
@@ -211,6 +212,7 @@ fun UserAvatar(
                 contentScale = contentScale,
                 onSuccess = {
                     baseReady = true
+                    onImageLoaded?.invoke(it.result.memoryCacheKey)
                 },
                 onError = { state ->
                     if (isTransientImageError(state.result.throwable) && baseRetryAttempt < IMAGE_AUTO_RETRY_LIMIT) {
@@ -234,6 +236,7 @@ fun UserAvatar(
                 contentScale = contentScale,
                 onSuccess = {
                     animReady = true
+                    it.result.memoryCacheKey?.let { key -> onImageLoaded?.invoke(key) }
                 },
                 onError = {
                     animFailed = true

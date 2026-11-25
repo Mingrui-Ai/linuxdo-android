@@ -11,12 +11,14 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import org.linuxdo.android.data.UserBadgeItem
 import org.linuxdo.android.data.UserCardData
+import org.linuxdo.android.data.visibleFollowCount
 import org.linuxdo.android.ui.design.*
 import org.linuxdo.android.ui.format.RelativeTime
 
@@ -30,6 +32,8 @@ internal fun ProfileIdentity(
     staticAvatarUrl: String?,
     modifier: Modifier = Modifier,
     avatarSize: Dp = 56.dp,
+    status: org.linuxdo.android.data.ProfileStatus? = null,
+    title: String? = null,
     onOpenProfile: (() -> Unit)? = null,
     onOpenLevel: (() -> Unit)? = null,
     trailing: @Composable (() -> Unit)? = null,
@@ -39,8 +43,7 @@ internal fun ProfileIdentity(
         onClickLabel = "查看 @$username 的详细主页", onClick = onOpenProfile) else Modifier
     Row(modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-        UserAvatar(avatarUrl, staticAvatarUrl, username, Modifier.size(avatarSize).then(openProfile),
-            cornerRadius = avatarSize / 2)
+        ProfileAvatar(username, avatarUrl, staticAvatarUrl, status, avatarSize, onOpenProfile = onOpenProfile)
         Column(Modifier.weight(1f)) {
             Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                 Text(displayName, style = IosTheme.type.largeTitle, color = colors.label,
@@ -54,6 +57,10 @@ internal fun ProfileIdentity(
             }
             Text("@$username", style = IosTheme.type.caption, color = colors.secondaryLabel,
                 maxLines = 1, overflow = TextOverflow.Ellipsis)
+            org.linuxdo.android.data.profileDisplayTitle(title, level)?.let {
+                Text(it, style = IosTheme.type.caption, color = colors.secondaryLabel,
+                    maxLines = 1, overflow = TextOverflow.Ellipsis)
+            }
         }
         trailing?.invoke()
     }
@@ -74,6 +81,7 @@ internal fun ProfileDetails(
     loading: Boolean = false,
     active: Boolean = true,
     showAchievements: Boolean = true,
+    onOpenNetwork: ((Boolean) -> Unit)? = null,
 ) {
     val colors = IosTheme.colors
     var showBio by remember(card?.username) { mutableStateOf(false) }
@@ -96,15 +104,42 @@ internal fun ProfileDetails(
                 Modifier.clickable(onClickLabel = "查看完整简介") { showBio = true } else Modifier))
         FlowRow(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(12.dp),
             verticalArrangement = Arrangement.spacedBy(3.dp)) {
-            Text("加入时间 ${profileJoinDate(card?.createdAt)}", style = IosTheme.type.caption, color = colors.secondaryLabel)
+            Text("加入时间 ${profileJoinDate(card?.createdAt)}", style = IosTheme.type.caption, color = colors.secondaryLabel,
+                modifier = Modifier.align(Alignment.CenterVertically))
             Text("最近活跃 ${if (card?.lastSeenAt.isNullOrBlank()) if (loading) "…" else "未公开" else RelativeTime.format(card?.lastSeenAt, now)}",
-                style = IosTheme.type.caption, color = colors.secondaryLabel)
+                style = IosTheme.type.caption, color = colors.secondaryLabel,
+                modifier = Modifier.align(Alignment.CenterVertically))
+            if (onOpenNetwork != null) {
+                ProfileFollowCounts(card, onOpenNetwork, Modifier.align(Alignment.CenterVertically))
+            }
         }
     }
     if (showBio) AlertDialog(onDismissRequest = { showBio = false }, title = { Text("个人简介") },
         text = { UserBioText(card?.bioExcerpt, "还没有填写个人简介", IosTheme.type.body, colors.label,
             maxLines = Int.MAX_VALUE, modifier = Modifier.heightIn(max = 360.dp).verticalScroll(rememberScrollState())) },
         confirmButton = { TextButton(onClick = { showBio = false }) { Text("完成") } }, containerColor = colors.card)
+}
+
+/** 关注与粉丝作为一组紧随最近活跃，空间不足时整组换行。 */
+@Composable
+private fun ProfileFollowCounts(card: UserCardData?, onOpenNetwork: (Boolean) -> Unit, modifier: Modifier = Modifier) {
+    val following = visibleFollowCount(card?.totalFollowing, card?.canSeeFollowing)
+    val followers = visibleFollowCount(card?.totalFollowers, card?.canSeeFollowers)
+    if (following == null && followers == null) return
+    Row(modifier, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+        listOf(false to following, true to followers).forEach { (isFollowers, count) ->
+            if (count != null) Row(Modifier.heightIn(min = 32.dp)
+                .clickable(role = Role.Button, onClickLabel = if (isFollowers) "查看粉丝" else "查看关注") {
+                    onOpenNetwork(isFollowers)
+                }, verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                Text(count.toString(), style = IosTheme.type.caption, fontWeight = FontWeight.SemiBold,
+                    color = IosTheme.colors.label, maxLines = 1)
+                Text(if (isFollowers) "粉丝" else "关注", style = IosTheme.type.caption,
+                    color = IosTheme.colors.secondaryLabel, maxLines = 1)
+            }
+        }
+    }
 }
 
 @OptIn(ExperimentalLayoutApi::class)

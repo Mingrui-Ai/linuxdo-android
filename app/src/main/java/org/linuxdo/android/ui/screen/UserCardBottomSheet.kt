@@ -31,11 +31,13 @@ fun UserCardBottomSheet(
     onDismiss: () -> Unit,
     onOpenProfile: (String) -> Unit,
     onOpenBadges: (String) -> Unit,
+    onOpenNetwork: (String, Boolean) -> Unit,
     communityScore: CdkScoreUiState? = null,
     onOpenCommunityScore: (() -> Unit)? = null,
 ) {
     val accountId = (LocalContext.current.applicationContext as App).container.sessionStore.currentUserId()
     val user = state.user
+    PrefetchProfileCover(user)
     val badges = rememberDrawerBadges(user?.username, accountId, user != null)
     ModalBottomSheet(onDismissRequest = onDismiss,
         sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true),
@@ -58,7 +60,8 @@ fun UserCardBottomSheet(
                         communityScore = communityScore?.score,
                         communityScoreLoading = communityScore?.loading == true,
                         needsAuthorization = communityScore?.needsAuthorization == true,
-                        onOpenCommunityScore = onOpenCommunityScore, loading = state.loading)
+                        onOpenCommunityScore = onOpenCommunityScore, loading = state.loading,
+                        onOpenNetwork = { onOpenNetwork(user.username, it) })
                     state.error?.let { Text(it, style = IosTheme.type.caption, color = IosTheme.colors.secondaryLabel) }
                     Spacer(Modifier.height(4.dp))
                 }
@@ -81,5 +84,6 @@ internal fun CompactUserIdentityHeader(
 ) {
     ProfileIdentity(user.username, user.cleanDisplayName, user.trustLevel,
         avatarUrlOf(user.avatarTemplate, user.animatedAvatar ?: AvatarCache.get(user.username), 160, user.username),
-        avatarUrlOf(user.avatarTemplate, size = 160), modifier = modifier, onOpenProfile = onOpenProfile)
+        avatarUrlOf(user.avatarTemplate, size = 160), modifier = modifier, onOpenProfile = onOpenProfile,
+        status = user.status, title = user.title)
 }
