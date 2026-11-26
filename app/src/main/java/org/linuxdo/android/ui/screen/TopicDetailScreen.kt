@@ -6071,6 +6071,14 @@ private fun SandboxedWebPreview(
     allowTouchIntercept: Boolean,
     modifier: Modifier = Modifier,
 ) {
+    val externalApp = org.linuxdo.android.data.externalMiniAppUrl(url)
+    if (externalApp != null) {
+        val context = LocalContext.current
+        Box(modifier, contentAlignment = Alignment.Center) {
+            TextButton(onClick = { openExternal(context, externalApp) }) { Text("在浏览器中打开小程序") }
+        }
+        return
+    }
     if (shouldOpenInAppBrowser(url)) {
         SandboxedGeckoPreview(
             url = url,
@@ -6142,6 +6150,11 @@ private fun SandboxedWebPreview(
                             view: WebView?,
                             request: android.webkit.WebResourceRequest?,
                         ): Boolean {
+                            val externalApp = org.linuxdo.android.data.externalMiniAppUrl(request?.url?.toString())
+                            if (externalApp != null) {
+                                if (request?.isForMainFrame == true) openExternal(ctx, externalApp)
+                                return true
+                            }
                             val reqScheme = request?.url?.scheme?.lowercase()
                             return reqScheme != "http" && reqScheme != "https"
                         }
@@ -6264,8 +6277,14 @@ private fun SandboxedGeckoPreview(
                 geckoView.alpha = 1f
             },
             onExternalRequest = { targetUri ->
-                val scheme = runCatching { Uri.parse(targetUri).scheme?.lowercase() }.getOrNull()
-                scheme != "http" && scheme != "https"
+                val externalApp = org.linuxdo.android.data.externalMiniAppUrl(targetUri)
+                if (externalApp != null) {
+                    openExternal(context, externalApp)
+                    true
+                } else {
+                    val scheme = runCatching { Uri.parse(targetUri).scheme?.lowercase() }.getOrNull()
+                    scheme != "http" && scheme != "https"
+                }
             },
         )
         geckoView.alpha = 0f
@@ -6478,14 +6497,17 @@ private fun OneboxCard(onebox: CookedBlock.Onebox) {
                 ) {
                     if (isMiniAppOnebox) {
                         Text(
-                            text = "进入小程序 ›",
+                            text = if (org.linuxdo.android.data.externalMiniAppUrl(onebox.url) != null) "浏览器打开 ›" else "进入小程序 ›",
                             style = IosTheme.type.caption,
                             fontWeight = FontWeight.SemiBold,
                             color = Color(0xFF07C160),
                             modifier = Modifier
                                 .clip(RoundedCornerShape(6.dp))
                                 .background(Color(0xFF07C160).copy(alpha = 0.14f))
-                                .clickable { openUrl(onebox.url) }
+                                .clickable {
+                                    val externalApp = org.linuxdo.android.data.externalMiniAppUrl(onebox.url)
+                                    if (externalApp != null) openExternal(context, externalApp) else openUrl(onebox.url)
+                                }
                                 .padding(horizontal = 10.dp, vertical = 4.dp),
                         )
                     } else {

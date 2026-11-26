@@ -1008,7 +1008,11 @@ private fun MainNavigation(state: UiState, viewModel: MainViewModel, lifecycle: 
                 }, "分享个人主页"))
                 is PersonalDrawerAction.CategoryTopics -> stack.push(Route.CategoryTopics(action.category.id, action.category.slug, action.category.name))
                 is PersonalDrawerAction.TagTopics -> stack.push(Route.TagTopics(action.tag))
-                is PersonalDrawerAction.Web -> globalBrowserUrl = action.url
+                is PersonalDrawerAction.Web -> {
+                    val externalApp = org.linuxdo.android.data.externalMiniAppUrl(action.url)
+                    if (externalApp != null) org.linuxdo.android.ui.screen.openExternal(context, externalApp)
+                    else globalBrowserUrl = action.url
+                }
             }
         }
     }
@@ -1167,7 +1171,6 @@ private fun MainNavigation(state: UiState, viewModel: MainViewModel, lifecycle: 
                                 onNavigateToHistory = { stack.push(Route.BrowsingHistory) },
                                 onNavigateToConnect = { showConnectSheet = true },
                                 onNavigateToChat = openChat,
-                                onNavigateToApps = { globalBrowserUrl = org.linuxdo.android.ui.screen.LINUXDO_APPS_PLAZA_URL },
                                 onNavigateToLdcStore = { globalBrowserUrl = org.linuxdo.android.ui.screen.ProfileWebApp.Store.url },
                                 onNavigateToLdcMail = { globalBrowserUrl = org.linuxdo.android.ui.screen.ProfileWebApp.Mail.url },
                                     onNavigateToBookmarks = {
@@ -1458,7 +1461,6 @@ private fun MainNavigation(state: UiState, viewModel: MainViewModel, lifecycle: 
                                     onNavigateToHistory = { stack.push(Route.BrowsingHistory) },
                                     onNavigateToConnect = { showConnectSheet = true },
                                     onNavigateToChat = openChat,
-                                onNavigateToApps = { globalBrowserUrl = org.linuxdo.android.ui.screen.LINUXDO_APPS_PLAZA_URL },
                                 onNavigateToLdcStore = { globalBrowserUrl = org.linuxdo.android.ui.screen.ProfileWebApp.Store.url },
                                 onNavigateToLdcMail = { globalBrowserUrl = org.linuxdo.android.ui.screen.ProfileWebApp.Mail.url },
                                     onNavigateToBookmarks = {
@@ -1552,7 +1554,6 @@ private fun MainNavigation(state: UiState, viewModel: MainViewModel, lifecycle: 
                                     onNavigateToHistory = { stack.push(Route.BrowsingHistory) },
                                     onNavigateToConnect = { showConnectSheet = true },
                                     onNavigateToChat = openChat,
-                                onNavigateToApps = { globalBrowserUrl = org.linuxdo.android.ui.screen.LINUXDO_APPS_PLAZA_URL },
                                 onNavigateToLdcStore = { globalBrowserUrl = org.linuxdo.android.ui.screen.ProfileWebApp.Store.url },
                                 onNavigateToLdcMail = { globalBrowserUrl = org.linuxdo.android.ui.screen.ProfileWebApp.Mail.url },
                                     onNavigateToBookmarks = {
@@ -1799,7 +1800,6 @@ private fun MainNavigation(state: UiState, viewModel: MainViewModel, lifecycle: 
                                     onNavigateToHistory = { stack.push(Route.BrowsingHistory) },
                                     onNavigateToConnect = { showConnectSheet = true },
                                     onNavigateToChat = openChat,
-                                onNavigateToApps = { globalBrowserUrl = org.linuxdo.android.ui.screen.LINUXDO_APPS_PLAZA_URL },
                                 onNavigateToLdcStore = { globalBrowserUrl = org.linuxdo.android.ui.screen.ProfileWebApp.Store.url },
                                 onNavigateToLdcMail = { globalBrowserUrl = org.linuxdo.android.ui.screen.ProfileWebApp.Mail.url },
                                     onNavigateToBookmarks = {
@@ -2087,7 +2087,9 @@ private fun MainNavigation(state: UiState, viewModel: MainViewModel, lifecycle: 
         LaunchedEffect(requestedMiniAppUrl, browsing) {
             if (browsing && !requestedMiniAppUrl.isNullOrBlank()) {
                 org.linuxdo.android.ui.screen.MiniAppSessionPool.clearRequest()
-                globalBrowserUrl = requestedMiniAppUrl
+                val externalApp = org.linuxdo.android.data.externalMiniAppUrl(requestedMiniAppUrl)
+                if (externalApp != null) org.linuxdo.android.ui.screen.openExternal(context, externalApp)
+                else globalBrowserUrl = requestedMiniAppUrl
             }
         }
 
@@ -2111,7 +2113,7 @@ private fun MainNavigation(state: UiState, viewModel: MainViewModel, lifecycle: 
                         val consumed = viewModel.consumeClipboardTarget(context, target.first)
                         val linkToOpen = consumed ?: target.second
                         if (linkToOpen.isMiniApp) {
-                            globalBrowserUrl = linkToOpen.miniAppUrl
+                            linkToOpen.miniAppUrl?.let { org.linuxdo.android.ui.screen.openExternal(context, it) }
                         } else {
                             selected = MainTab.Latest
                             val latestStack = stacks.getValue(MainTab.Latest)

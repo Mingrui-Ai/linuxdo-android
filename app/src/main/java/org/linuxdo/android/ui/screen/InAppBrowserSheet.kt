@@ -1224,7 +1224,8 @@ fun miniAppBadgeLabelForUrl(rawUrl: String?): String? {
 
 fun isInAppMiniAppUrl(rawUrl: String?): Boolean = miniAppBadgeLabelForUrl(rawUrl) != null
 
-fun shouldOpenInAppBrowser(rawUrl: String?): Boolean = normalizeInAppTargetUrl(rawUrl) != null
+fun shouldOpenInAppBrowser(rawUrl: String?): Boolean =
+    org.linuxdo.android.data.externalMiniAppUrl(rawUrl) == null && normalizeInAppTargetUrl(rawUrl) != null
 
 fun isLinuxDoMiniAppUrl(rawUrl: String?): Boolean {
     if (!isTrustedForumUrl(rawUrl)) return false
@@ -1684,15 +1685,12 @@ object MiniAppSessionPool {
             onExternalRequest = { targetUri ->
                 val target = targetUri.toUri()
                 val scheme = target.scheme?.lowercase().orEmpty()
-                val targetAppId = MiniAppEntry.idFromUrl(targetUri)
-                if (!oneWayAuth && isolatedH5ContextId(targetUri, accountId) != null) {
+                val externalApp = org.linuxdo.android.data.externalMiniAppUrl(targetUri)
+                if (externalApp != null) {
+                    openExternal(appContext, externalApp)
+                    true
+                } else if (!oneWayAuth && isolatedH5ContextId(targetUri, accountId) != null) {
                     requestOpen(targetUri)
-                    true
-                } else if (isAppsPlazaUrl(targetUri) || (targetAppId != null && targetAppId != MiniAppEntry.idFromUrl(holder.entryUrl))) {
-                    requestOpen(miniAppPublicUrl(targetUri))
-                    true
-                } else if (targetAppId != null && target.getQueryParameter("embed_mode") != "true") {
-                    holder.session.loadUri(miniAppLaunchUrl(targetUri))
                     true
                 } else if (scheme !in setOf("http", "https")) {
                     openExternal(appContext, targetUri)
@@ -1812,6 +1810,16 @@ fun InAppBrowserSheet(
     injectCss: String? = null,
     preferNativeMail: Boolean = false,
 ) {
+    val context = LocalContext.current
+    val externalApp = org.linuxdo.android.data.externalMiniAppUrl(url)
+    if (externalApp != null) {
+        // 先结束宿主弹层再交给系统；不创建广场界面或浏览器会话。
+        LaunchedEffect(externalApp) {
+            onDismiss()
+            openExternal(context, externalApp)
+        }
+        return
+    }
     val initialNormalizedUrl = remember(url) { normalizeInAppTargetUrl(url) ?: url }
     val entry = initialNormalizedUrl.toHttpUrlOrNull()
     if (preferNativeMail && ProfileWebApp.fromUrl(initialNormalizedUrl) == ProfileWebApp.Mail &&
@@ -1819,33 +1827,14 @@ fun InAppBrowserSheet(
         NativeMailboxSheet(onDismiss)
         return
     }
-    val context = LocalContext.current
     val clipboard = LocalClipboardManager.current
     var activeTargetUrl by remember(initialNormalizedUrl) { mutableStateOf(initialNormalizedUrl) }
     var targetTitle by remember(initialNormalizedUrl) { mutableStateOf(initialTitle) }
-    var returnToLauncher by remember(url) { mutableStateOf(isAppsPlazaUrl(url)) }
     var actionSheetVisible by remember(activeTargetUrl) { mutableStateOf(false) }
     var keepFloatingOnExit by remember(activeTargetUrl) { mutableStateOf(false) }
-    val launcherState = rememberSaveableStateHolder()
-
-    if (isAppsPlazaUrl(activeTargetUrl)) {
-        launcherState.SaveableStateProvider("mini_app_launcher") {
-            MiniAppLauncher(onDismiss = onDismiss, onOpen = { entry ->
-                returnToLauncher = true
-                targetTitle = entry.name
-                activeTargetUrl = entry.url
-            }, onVerify = {
-                returnToLauncher = true
-                targetTitle = "安全验证"
-                activeTargetUrl = "${Config.BASE_URL}/challenge"
-            })
-        }
-        return
-    }
-
     val closeApp: () -> Unit = {
         actionSheetVisible = false
-        if (returnToLauncher) activeTargetUrl = LINUXDO_APPS_PLAZA_URL else onDismiss()
+        onDismiss()
     }
 
     val uri = remember(activeTargetUrl) { runCatching { activeTargetUrl.toUri() }.getOrNull() }
@@ -3459,7 +3448,8 @@ private fun NativeMailReader(body: NativeMailBody, modifier: Modifier) {
 
 fun openExternal(context: android.content.Context, url: String) {
     runCatching {
-        val intent = Intent(Intent.ACTION_VIEW, url.toUri()).apply {
+        val target = org.linuxdo.android.data.externalMiniAppUrl(url) ?: url
+        val intent = Intent(Intent.ACTION_VIEW, target.toUri()).apply {
             addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
         }
         context.startActivity(intent)
