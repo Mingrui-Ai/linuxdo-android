@@ -8,6 +8,7 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -22,8 +23,6 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Check
-import androidx.compose.material.icons.filled.Close
-import androidx.compose.material.icons.filled.Refresh
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.safeDrawingPadding
@@ -35,6 +34,8 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
+import androidx.compose.material3.pulltorefresh.PullToRefreshBox
+import androidx.compose.material3.pulltorefresh.rememberPullToRefreshState
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -115,7 +116,7 @@ fun ConnectWebSheet(
                 .background(Color(0xFF0F0F10))
                 .safeDrawingPadding(),
         ) {
-            // 顶栏: 返回 + 品牌 + 刷新 + 关闭
+            // 顶栏保留返回，内容在顶部下拉刷新。
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -148,7 +149,6 @@ fun ConnectWebSheet(
                     color = Color.White,
                 )
                 val currentCachedAt = if (selectedTab == 0) state.cachedAt else ldcState.cachedAt
-                val isRefreshing = if (selectedTab == 0) state.loading else ldcState.loading
                 if (currentCachedAt > 0L) {
                     Text(
                         text = "更新于 " + java.text.SimpleDateFormat("HH:mm", java.util.Locale.getDefault()).format(java.util.Date(currentCachedAt)),
@@ -158,22 +158,6 @@ fun ConnectWebSheet(
                     )
                 }
                 Spacer(Modifier.weight(1f))
-                IconButton(
-                    onClick = {
-                        if (selectedTab == 0) onRefresh() else onRefreshLdc()
-                    },
-                    enabled = !isRefreshing,
-                    modifier = Modifier.size(36.dp),
-                ) {
-                    if (isRefreshing) {
-                        IosActivityIndicator(diameter = 16.dp, color = Color(0xFF007AFF))
-                    } else {
-                        Icon(Icons.Default.Refresh, contentDescription = "刷新", tint = Color(0xFF9E9E9E))
-                    }
-                }
-                IconButton(onClick = onDismiss, modifier = Modifier.size(36.dp)) {
-                    Icon(Icons.Default.Close, contentDescription = "关闭", tint = Color(0xFF9E9E9E))
-                }
             }
 
             // 选项卡切换: [ 升级进度 ]  [ 我的积分 ]
@@ -242,13 +226,11 @@ fun ConnectWebSheet(
             }
 
             if (selectedTab == 0) {
-                Column(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .weight(1f)
-                        .verticalScroll(rememberScrollState())
-                        .padding(horizontal = 16.dp, vertical = 8.dp),
-                    verticalArrangement = Arrangement.spacedBy(14.dp),
+                ConnectRefreshContent(
+                    refreshing = state.loading,
+                    onRefresh = onRefresh,
+                    indicatorColor = Color(0xFF00BA7C),
+                    modifier = Modifier.weight(1f),
                 ) {
                     when {
                         state.loading && state.report == null -> {
@@ -283,13 +265,11 @@ fun ConnectWebSheet(
                     Spacer(Modifier.height(16.dp))
                 }
             } else {
-                Column(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .weight(1f)
-                        .verticalScroll(rememberScrollState())
-                        .padding(horizontal = 16.dp, vertical = 8.dp),
-                    verticalArrangement = Arrangement.spacedBy(14.dp),
+                ConnectRefreshContent(
+                    refreshing = ldcState.loading,
+                    onRefresh = onRefreshLdc,
+                    indicatorColor = Color(0xFF007AFF),
+                    modifier = Modifier.weight(1f),
                 ) {
                     when {
                         ldcState.loading && ldcState.userInfo == null -> {
@@ -325,6 +305,40 @@ fun ConnectWebSheet(
                 }
             }
         }
+    }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun ConnectRefreshContent(
+    refreshing: Boolean,
+    onRefresh: () -> Unit,
+    indicatorColor: Color,
+    modifier: Modifier = Modifier,
+    content: @Composable ColumnScope.() -> Unit,
+) {
+    val pullState = rememberPullToRefreshState()
+    PullToRefreshBox(
+        isRefreshing = refreshing,
+        state = pullState,
+        onRefresh = { if (!refreshing) onRefresh() },
+        modifier = modifier.fillMaxWidth(),
+        indicator = {
+            if (refreshing || pullState.distanceFraction > 0f) {
+                Box(Modifier.align(Alignment.TopCenter).padding(top = 10.dp)) {
+                    IosActivityIndicator(diameter = 22.dp, color = indicatorColor)
+                }
+            }
+        },
+    ) {
+        // 满高滚动容器让短内容、加载及错误页也能在顶部接住下拉手势。
+        Column(
+            modifier = Modifier.fillMaxSize()
+                .verticalScroll(rememberScrollState())
+                .padding(horizontal = 16.dp, vertical = 8.dp),
+            verticalArrangement = Arrangement.spacedBy(14.dp),
+            content = content,
+        )
     }
 }
 
