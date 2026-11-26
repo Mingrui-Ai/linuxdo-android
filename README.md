@@ -110,7 +110,7 @@ macOS / Linux 可使用 `sh ./gradlew :app:assembleDebug` 编译，生成路径�
 
 每次发布递增 `versionCode` / `versionName`，创建 `enhanced-v版本号` 标签，使用原正式签名构建正式包。稳定 Release 附带正式 APK、`version.json`、校验值、公开签名证书及许可证文件。清单中的 `packages` 仅列出 `org.linuxdo.android.enhanced` 的 APK 地址与 SHA-256，顶层保留相同正式包信息，不引用未公开的测试包；附件全部上传并核验后再公开发布并设为 Latest。应用优先读取最新公开 Release 的清单，失败时读取同仓库 Releases API 的精确文件名与摘要，草稿 Release 不会触发更新。
 
-测试版仅用于本地调试和指定设备的覆盖安装，继续沿用原测试包名及签名以保留数据；需要更新测试设备时单独构建安装，不通过公开 Release 分发。
+测试版名称统一为“LinuxDo 增强版 Debug”，普通 Debug 与性能测试构建均使用此名称，桌面、系统应用信息、常驻通知和应用内版本信息同步区分；正式版仍为“LinuxDo 增强版”。测试版仅用于本地调试和指定设备的覆盖安装，继续沿用原测试包名及签名以保留数据；需要更新测试设备时单独构建安装，不通过公开 Release 分发。
 
 ### 正式版签名构建
 

@@ -2804,7 +2804,7 @@ fun SettingsScreen(
                     }
                     Spacer(Modifier.width(12.dp))
                     Text(
-                        "LinuxDo 增强版",
+                        context.getString(org.linuxdo.android.R.string.app_name),
                         style = IosTheme.type.body.copy(fontSize = 16.sp, fontWeight = FontWeight.Medium),
                         modifier = Modifier.weight(1f),
                     )
