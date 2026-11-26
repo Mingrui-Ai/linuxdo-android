@@ -223,7 +223,7 @@ fun TopicListScreen(
     sortAscending: Boolean = false,
     onSortChange: (TopicSortOrder) -> Unit = {},
     sortEnabled: Boolean = true,
-    floatingBallEnabled: Boolean = true,
+    floatingBallEnabled: Boolean = false,
     floatingBallActions: List<FloatingAction> = FloatingAction.DEFAULT_ACTIONS,
     floatingBallXRatio: Float = 0.95f,
     floatingBallYRatio: Float = 1.0f,

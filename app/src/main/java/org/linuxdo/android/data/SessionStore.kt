@@ -1088,13 +1088,13 @@ class SessionStore(context: Context) : org.linuxdo.android.net.DohConfigProvider
     }
 
     fun isFloatingBallEnabled(): Boolean =
-        plainPrefs.getBoolean(KEY_FLOATING_BALL_ENABLED, true)
+        plainPrefs.getBoolean(KEY_FLOATING_BALL_ENABLED, false)
 
     fun setFloatingBallEnabled(enabled: Boolean) {
         plainPrefs.edit().putBoolean(KEY_FLOATING_BALL_ENABLED, enabled).apply()
     }
 
-    fun getSkinPresetId(): String = plainPrefs.getString(KEY_SKIN_PRESET, "spongebob") ?: "spongebob"
+    fun getSkinPresetId(): String = plainPrefs.getString(KEY_SKIN_PRESET, "classic") ?: "classic"
 
     fun setSkinPresetId(id: String) {
         plainPrefs.edit().putString(KEY_SKIN_PRESET, id).apply()

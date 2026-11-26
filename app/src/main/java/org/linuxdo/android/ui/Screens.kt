@@ -915,7 +915,7 @@ fun SettingsScreen(
     onThemeMode: (ThemeMode) -> Unit,
     page: SettingsPage? = null,
     onOpenPage: (SettingsPage) -> Unit = {},
-    floatingBallEnabled: Boolean = true,
+    floatingBallEnabled: Boolean = false,
     onFloatingBallEnabled: (Boolean) -> Unit = {},
     floatingBallActions: List<FloatingAction> = FloatingAction.DEFAULT_ACTIONS,
     onFloatingBallActions: (List<FloatingAction>) -> Unit = {},
