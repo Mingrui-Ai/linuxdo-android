@@ -1,6 +1,6 @@
 <div align="center">
 
-<img src="./docs/images/hero-banner.png" alt="LinuxDo 增强版 1.2.0" width="100%" />
+<img src="./.github/assets/hero-banner.png" alt="LinuxDo 增强版 1.2.0" width="100%" />
 
 <br />
 
@@ -45,11 +45,11 @@
   <tr>
     <td align="center" width="50%">
       <strong>多维筛选 · 动态排序 · 快捷手势</strong><br /><br />
-      <img src="./docs/images/demo-home-filter.gif" width="290" alt="首页多维筛选与排序演示" />
+      <img src="./.github/assets/demo-home-filter.gif" width="290" alt="首页多维筛选与排序演示" />
     </td>
     <td align="center" width="50%">
       <strong>进帖自动跟踪 · 顶栏三按钮 · 帖内搜索</strong><br /><br />
-      <img src="./docs/images/demo-topic-reading.gif" width="290" alt="读帖自动跟踪与顶栏三按钮演示" />
+      <img src="./.github/assets/demo-topic-reading.gif" width="290" alt="读帖自动跟踪与顶栏三按钮演示" />
     </td>
   </tr>
 </table>
@@ -60,16 +60,16 @@
 ## 📱 界面一览
 
 ### 首页筛选与快捷手势
-<img src="./docs/images/showcase-home-filter.png" alt="首页多维筛选与右滑免打扰" width="100%" />
+<img src="./.github/assets/showcase-home-filter.png" alt="首页多维筛选与右滑免打扰" width="100%" />
 
 ### 清爽读帖与自动跟踪
-<img src="./docs/images/showcase-topic-reading.png" alt="清爽读帖与顶栏三按钮" width="100%" />
+<img src="./.github/assets/showcase-topic-reading.png" alt="清爽读帖与顶栏三按钮" width="100%" />
 
 ### 个人侧栏 · 详细主页 · 实时消息
-<img src="./docs/images/showcase-profile-chat.png" alt="个人侧栏、详细主页与实时消息" width="100%" />
+<img src="./.github/assets/showcase-profile-chat.png" alt="个人侧栏、详细主页与实时消息" width="100%" />
 
 ### 浅色 & 深色自适应
-<img src="./docs/images/showcase-dark-mode.png" alt="浅色与深色模式对比" width="100%" />
+<img src="./.github/assets/showcase-dark-mode.png" alt="浅色与深色模式对比" width="100%" />
 
 ---
 
