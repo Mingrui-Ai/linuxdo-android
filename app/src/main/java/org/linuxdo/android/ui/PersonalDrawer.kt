@@ -345,20 +345,20 @@ private fun DrawerProfileDetails(
     Column(Modifier.fillMaxWidth().padding(top = 12.dp), verticalArrangement = Arrangement.spacedBy(7.dp)) {
         FlowRow(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(12.dp),
             verticalArrangement = Arrangement.spacedBy(3.dp)) {
-            Text("最后活跃 ${if (card?.lastSeenAt.isNullOrBlank()) if (card == null) "…" else "未公开" else RelativeTime.format(card?.lastSeenAt, now)}",
-                style = IosTheme.type.caption, color = colors.secondaryLabel,
-                modifier = Modifier.align(Alignment.CenterVertically))
-            ProfileFollowCounts(card, onOpenNetwork = { onAction(PersonalDrawerAction.Network(it)) },
-                modifier = Modifier.align(Alignment.CenterVertically), showUnavailable = true)
-        }
-        FlowRow(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(12.dp),
-            verticalArrangement = Arrangement.spacedBy(3.dp)) {
-            Box(Modifier.align(Alignment.CenterVertically)) {
-                ProfileBadgePreview(badges.items, badges.loading) { onAction(PersonalDrawerAction.Badges) }
-            }
             Text("点数 ${card?.gamificationScore?.toString() ?: if (card == null) "…" else "—"}",
                 style = IosTheme.type.caption, color = colors.secondaryLabel,
                 modifier = Modifier.heightIn(min = 32.dp).align(Alignment.CenterVertically).wrapContentHeight())
+            Box(Modifier.align(Alignment.CenterVertically)) {
+                ProfileBadgePreview(badges.items, badges.loading) { onAction(PersonalDrawerAction.Badges) }
+            }
+        }
+        FlowRow(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(12.dp),
+            verticalArrangement = Arrangement.spacedBy(3.dp)) {
+            ProfileFollowCounts(card, onOpenNetwork = { onAction(PersonalDrawerAction.Network(it)) },
+                modifier = Modifier.align(Alignment.CenterVertically), showUnavailable = true)
+            Text("最后活跃 ${if (card?.lastSeenAt.isNullOrBlank()) if (card == null) "…" else "未公开" else RelativeTime.format(card?.lastSeenAt, now)}",
+                style = IosTheme.type.caption, color = colors.secondaryLabel,
+                modifier = Modifier.align(Alignment.CenterVertically))
         }
     }
 }
