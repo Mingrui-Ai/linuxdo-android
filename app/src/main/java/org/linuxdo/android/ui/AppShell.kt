@@ -867,6 +867,7 @@ private fun MainNavigation(state: UiState, viewModel: MainViewModel, lifecycle: 
     var showConnectSheet by rememberSaveable { mutableStateOf(false) }
     var privateMessageRecipient by rememberSaveable { mutableStateOf<String?>(null) }
     var globalBrowserUrl by rememberSaveable { mutableStateOf<String?>(null) }
+    val miniAppHomePullEnabled = rememberMiniAppHomePullEnabled()
     var browserAccountId by remember { mutableStateOf(savedTopicsUserId) }
     LaunchedEffect(savedTopicsUserId, accountState.switching) {
         if (browserAccountId != savedTopicsUserId || accountState.switching) {
@@ -1138,6 +1139,13 @@ private fun MainNavigation(state: UiState, viewModel: MainViewModel, lifecycle: 
                                 homeLeading = { PersonalDrawerAvatar(state.username, drawerAccount, ::openPersonalDrawer) },
                                 showHeaderActions = true,
                                 currentFeed = state.homeFeed,
+                                miniAppHomePullEnabled = miniAppHomePullEnabled && !isKeyboardOpen,
+                                onOpenMiniApps = {
+                                    if (browsing && listForeground && !isKeyboardOpen &&
+                                        selected == MainTab.Latest && stack.current == Route.TopicList) {
+                                        globalBrowserUrl = org.linuxdo.android.ui.screen.LINUXDO_APPS_PLAZA_URL
+                                    }
+                                },
                                 feedStates = feedStates,
                                 onFeedSelect = viewModel::switchHomeFeed,
                                 onPreloadFeed = viewModel::preloadHomeFeed,

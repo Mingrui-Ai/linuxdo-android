@@ -46,7 +46,7 @@ enum class SettingsPage(val title: String) {
     Appearance("外观"),
     ProfileDisplay("主页显示设置"),
     Reading("阅读与浏览"),
-    MiniApps("小程序打开方式"),
+    MiniApps("小程序与应用广场"),
     FloatingBall("辅助悬浮球"),
     Notifications("通知与保活"),
     Network("网络与代理"),
