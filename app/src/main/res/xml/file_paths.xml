@@ -1,9 +1,7 @@
 <?xml version="1.0" encoding="utf-8"?>
 <paths>
     <!--
-      仅开放安装包与用户主动生成的分享图片；文件位于缓存目录，
-      分享时通过临时只读 URI 授权交给目标应用。
+      仅开放安装包缓存目录，安装时通过临时只读 URI 授权交给系统安装器。
     -->
     <cache-path name="apk" path="apk/" />
-    <cache-path name="shared_posts" path="shared-posts/" />
 </paths>

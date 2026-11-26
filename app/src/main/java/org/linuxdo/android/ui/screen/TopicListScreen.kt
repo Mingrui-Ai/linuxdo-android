@@ -106,6 +106,7 @@ import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.draw.drawWithContent
 import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.input.pointer.pointerInput
@@ -251,7 +252,6 @@ fun TopicListScreen(
     onCreateTopic: (() -> Unit)? = null,
     onBookmarkTopic: ((Topic, (String) -> Unit) -> Unit)? = null,
     onFlagTopic: ((Topic, Int, String?, () -> Unit, (String) -> Unit) -> Unit)? = null,
-    onSaveTopic: ((Topic) -> Unit)? = null,
     sortOrder: TopicSortOrder = TopicSortOrder.Default,
     sortAscending: Boolean = false,
     onSortChange: (TopicSortOrder) -> Unit = {},
@@ -602,7 +602,6 @@ fun TopicListScreen(
                     onCopyLink = copyTopicLink,
                     onBookmark = bookmarkTopicAction,
                     onFlag = flagTopicAction,
-                    onSave = onSaveTopic,
                     showTopicUnreadDot = showTopicUnreadDot,
                     topicUnreadDotPosition = topicUnreadDotPosition,
                 )
@@ -643,7 +642,12 @@ fun TopicListScreen(
                     onCopyLink = { copyTopicLink(item.topic) },
                     onBookmark = bookmarkTopicAction?.let { fn -> { fn(item.topic) } },
                     onFlag = flagTopicAction?.let { fn -> { fn(item.topic) } },
-                    onSave = onSaveTopic?.let { fn -> { fn(item.topic) } },
+                    onSwipeMute = if (useHomeFilterHeader && onSetNotificationLevel != null && item.bookmarkId == null) {
+                        {
+                            onSetNotificationLevel(item.topic, TopicNotificationLevel.Muted)
+                            showNotice("已设为免打扰")
+                        }
+                    } else null,
                     onOpenUser = onOpenUser,
                     onClick = { if (onOpenItem != null) onOpenItem(item) else onOpenTopic(item.topic) },
                     feedGraphicMode = isGraphic,
@@ -1238,7 +1242,6 @@ private fun NotificationLevelMenu(
     onCopyLink: (() -> Unit)? = null,
     onBookmark: (() -> Unit)? = null,
     onFlag: (() -> Unit)? = null,
-    onSave: (() -> Unit)? = null,
     previewTopic: Topic? = null,
     previewCategory: Category? = null,
     onOpenTopic: (() -> Unit)? = null,
@@ -1247,7 +1250,7 @@ private fun NotificationLevelMenu(
     val previewLoader = org.linuxdo.android.ui.LocalTopicPreviewLoader.current
     if (previewTopic != null && onOpenTopic != null && previewLoader != null) {
         TopicPreviewDialog(previewTopic, previewCategory, previewLoader, onDismiss, onOpenTopic,
-            currentLevel, updating, onPick, onCopyLink, onBookmark, onFlag, onSave)
+            currentLevel, updating, onPick, onCopyLink, onBookmark, onFlag)
         return
     }
     DropdownMenu(
@@ -1284,26 +1287,9 @@ private fun NotificationLevelMenu(
                 )
             }
         }
-        val hasExtraActions = onSave != null || onCopyLink != null || onBookmark != null || onFlag != null
+        val hasExtraActions = onCopyLink != null || onBookmark != null || onFlag != null
         if (onPick != null && hasExtraActions) {
             IosDivider()
-        }
-        if (onSave != null) {
-            DropdownMenuItem(
-                text = {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Box(Modifier.size(17.dp), contentAlignment = Alignment.Center) {
-                            Text("▱", color = IosTheme.colors.secondaryLabel, fontSize = 15.sp)
-                        }
-                        Spacer(Modifier.width(8.dp))
-                        Text("添加暂存", color = IosTheme.colors.label)
-                    }
-                },
-                onClick = {
-                    onDismiss()
-                    onSave()
-                },
-            )
         }
         if (onCopyLink != null) {
             DropdownMenuItem(
@@ -1367,13 +1353,11 @@ private fun TopicPreviewDialog(
     onCopy: (() -> Unit)?,
     onBookmark: (() -> Unit)?,
     onFlag: (() -> Unit)?,
-    onSave: (() -> Unit)?,
 ) {
     var detail by remember(topic.id) { mutableStateOf<org.linuxdo.android.data.TopicDetail?>(null) }
     var loading by remember(topic.id) { mutableStateOf(true) }
     var failed by remember(topic.id) { mutableStateOf(false) }
     var retry by remember(topic.id) { mutableIntStateOf(0) }
-    var sharePost by remember { mutableStateOf<org.linuxdo.android.data.Post?>(null) }
 
     LaunchedEffect(topic.id, retry) {
         loading = true
@@ -1410,55 +1394,17 @@ private fun TopicPreviewDialog(
                 contentPadding = PaddingValues(start = 20.dp, end = 20.dp, top = 20.dp, bottom = 10.dp),
                 verticalArrangement = Arrangement.spacedBy(12.dp)
             ) {
-                // 1. 大标题 (单击也可跳转) 与 右上角“暂存话题”胶囊按钮
+                // 1. 大标题 (单击也可跳转)
                 item {
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                        verticalAlignment = Alignment.Top
-                    ) {
-                        Text(
-                            text = detail?.title ?: topic.title,
-                            style = IosTheme.type.title3.copy(fontWeight = FontWeight.Bold, fontSize = 21.sp),
-                            color = IosTheme.colors.label,
-                            lineHeight = 28.sp,
-                            modifier = Modifier
-                                .weight(1f)
-                                .padding(end = 10.dp)
-                                .clickable { onDismiss(); onOpen() }
-                        )
-                        if (onSave != null) {
-                            var localSaved by remember(topic.id) { mutableStateOf(false) }
-                            val saveBg = if (localSaved) IosTheme.colors.accent.copy(alpha = 0.22f)
-                                else IosTheme.colors.accent.copy(alpha = if (IosTheme.colors.isDark) 0.16f else 0.08f)
-                            Row(
-                                modifier = Modifier
-                                    .padding(top = 2.dp)
-                                    .clip(RoundedCornerShape(10.dp))
-                                    .background(saveBg)
-                                    .clickable {
-                                        localSaved = !localSaved
-                                        onSave()
-                                    }
-                                    .padding(horizontal = 10.dp, vertical = 6.dp),
-                                verticalAlignment = Alignment.CenterVertically
-                            ) {
-                                PostActionIcon(
-                                    action = PostAction.Bookmark,
-                                    selected = localSaved,
-                                    tint = IosTheme.colors.accent,
-                                    modifier = Modifier.size(15.dp)
-                                )
-                                Spacer(Modifier.width(4.dp))
-                                Text(
-                                    text = if (localSaved) "已暂存" else "暂存话题",
-                                    style = IosTheme.type.caption,
-                                    fontWeight = FontWeight.SemiBold,
-                                    color = IosTheme.colors.accent
-                                )
-                            }
-                        }
-                    }
+                    Text(
+                        text = detail?.title ?: topic.title,
+                        style = IosTheme.type.title3.copy(fontWeight = FontWeight.Bold, fontSize = 21.sp),
+                        color = IosTheme.colors.label,
+                        lineHeight = 28.sp,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clickable { onDismiss(); onOpen() }
+                    )
                 }
 
                 // 2. 作者信息行 (头像 · 名字 · 分类色块 · 分类名 · 时间)
@@ -1680,42 +1626,6 @@ private fun TopicPreviewDialog(
 
                 Spacer(Modifier.weight(1f))
 
-                // 分享卡片按钮（即使详情正文尚在加载，也可先用话题基础信息秒开链接分享）
-                val fallbackSharePost = remember(topic.id, topic.title, topic.createdAt, topic.excerpt) {
-                    val firstPosterUser = topic.posters.firstOrNull()?.user
-                    org.linuxdo.android.data.Post(
-                        id = -topic.id,
-                        username = firstPosterUser?.username.orEmpty(),
-                        name = firstPosterUser?.name?.takeIf { it.isNotBlank() } ?: firstPosterUser?.username ?: "社区用户",
-                        avatarTemplate = firstPosterUser?.avatarTemplate,
-                        postNumber = 1,
-                        createdAt = topic.createdAt,
-                        cooked = getTopicRealExcerpt(topic).orEmpty(),
-                        topicId = topic.id,
-                        blurb = topic.excerpt.orEmpty(),
-                    )
-                }
-                val shareTarget = first ?: fallbackSharePost
-                Box(
-                    modifier = Modifier
-                        .size(38.dp)
-                        .clip(CircleShape)
-                        .background(IosTheme.colors.groupedBackground)
-                        .clickable {
-                            sharePost = shareTarget
-                        },
-                    contentAlignment = Alignment.Center
-                ) {
-                    PostActionIcon(
-                        PostAction.Share,
-                        false,
-                        tint = IosTheme.colors.label,
-                        modifier = Modifier.size(18.dp)
-                    )
-                }
-
-                Spacer(Modifier.width(10.dp))
-
                 // “查看详情”胶囊按钮
                 androidx.compose.material3.Button(
                     onClick = { onDismiss(); onOpen() },
@@ -1734,13 +1644,6 @@ private fun TopicPreviewDialog(
                     }
                 }
             }
-        }
-    }
-
-    // 预览弹窗内部可直接弹出长图分享 Sheet
-    sharePost?.let { post ->
-        PostShareSheet(post, detail?.title ?: topic.title, topic.id) {
-            sharePost = null
         }
     }
 }
@@ -1793,7 +1696,6 @@ fun PinnedGroupCard(
     onCopyLink: ((Topic) -> Unit)? = null,
     onBookmark: ((Topic) -> Unit)? = null,
     onFlag: ((Topic) -> Unit)? = null,
-    onSave: ((Topic) -> Unit)? = null,
     isHighlighted: Boolean = false,
     showTopicUnreadDot: Boolean = true,
     topicUnreadDotPosition: TopicUnreadDotPosition = TopicUnreadDotPosition.Avatar,
@@ -1802,7 +1704,7 @@ fun PinnedGroupCard(
     val rowBackground = topicRowBackground(isHighlighted)
     var menuTopicId by remember { mutableStateOf<Long?>(null) }
     val hasAnyLongPress = org.linuxdo.android.ui.LocalTopicPreviewLoader.current != null ||
-        onSetNotificationLevel != null || onCopyLink != null || onBookmark != null || onFlag != null || onSave != null
+        onSetNotificationLevel != null || onCopyLink != null || onBookmark != null || onFlag != null
     Column(
         Modifier
             .fillMaxWidth()
@@ -1888,7 +1790,6 @@ fun PinnedGroupCard(
                     onCopyLink = onCopyLink?.let { fn -> { fn(entry.topic) } },
                     onBookmark = onBookmark?.let { fn -> { fn(entry.topic) } },
                     onFlag = onFlag?.let { fn -> { fn(entry.topic) } },
-                    onSave = onSave?.let { fn -> { fn(entry.topic) } },
                 )
             }
         }
@@ -2124,7 +2025,7 @@ fun TopicRow(
     onCopyLink: (() -> Unit)? = null,
     onBookmark: (() -> Unit)? = null,
     onFlag: (() -> Unit)? = null,
-    onSave: (() -> Unit)? = null,
+    onSwipeMute: (() -> Unit)? = null,
     onOpenUser: (String, String?, String?, String?) -> Unit = { _, _, _, _ -> },
     onClick: () -> Unit,
     feedGraphicMode: Boolean = true,
@@ -2133,10 +2034,10 @@ fun TopicRow(
     topicUnreadDotPosition: TopicUnreadDotPosition = TopicUnreadDotPosition.Avatar,
 ) {
     var showLevelMenu by remember { mutableStateOf(false) }
-    var showShareSheet by remember { mutableStateOf(false) }
     val hasAnyLongPress = org.linuxdo.android.ui.LocalTopicPreviewLoader.current != null ||
-        onSetNotificationLevel != null || onCopyLink != null || onBookmark != null || onFlag != null || onSave != null
+        onSetNotificationLevel != null || onCopyLink != null || onBookmark != null || onFlag != null
     val topic = item.topic
+    val newReplyCount = topic.newReplyCount(item.notificationLevel)
     val showsThumbnail = feedDisplayMode == "no_excerpt" || feedDisplayMode == "small_image" || feedDisplayMode == "graphic"
     val thumbnailUrl = if (showsThumbnail) {
         val coverImageUrl = ExcerptCache.peekCoverImage(topic.id)
@@ -2187,18 +2088,130 @@ fun TopicRow(
             append(raw.substring(cursor))
         }
     }
-    Box(Modifier.fillMaxWidth()) {
+    val density = LocalDensity.current
+    val swipeScope = rememberCoroutineScope()
+    val maxSwipePx = remember(density) { with(density) { 96.dp.toPx() } }
+    val revealThresholdPx = remember(density) { with(density) { 44.dp.toPx() } }
+    val edgeGuardPx = remember(density) { with(density) { 28.dp.toPx() } }
+    var swipeOffsetX by remember(topic.id) { mutableFloatStateOf(0f) }
+    var swipeSettleJob by remember(topic.id) { mutableStateOf<Job?>(null) }
+    fun settleSwipeTo(target: Float) {
+        swipeSettleJob?.cancel()
+        swipeSettleJob = swipeScope.launch {
+            animate(
+                initialValue = swipeOffsetX,
+                targetValue = target,
+                animationSpec = spring(dampingRatio = Spring.DampingRatioNoBouncy, stiffness = Spring.StiffnessMedium),
+            ) { value, _ -> swipeOffsetX = value }
+        }
+    }
+    LaunchedEffect(item.notificationLevelUpdating, topic.id) {
+        if (item.notificationLevelUpdating && swipeOffsetX > 0f) settleSwipeTo(0f)
+    }
+    val swipeModifier = if (onSwipeMute != null) {
+        Modifier.pointerInput(topic.id, maxSwipePx, revealThresholdPx, item.notificationLevelUpdating) {
+            awaitEachGesture {
+                val down = awaitFirstDown(requireUnconsumed = false)
+                if (item.notificationLevelUpdating) return@awaitEachGesture
+                // 左边缘留给系统返回/侧栏手势，避免冲突
+                if (down.position.x < edgeGuardPx && swipeOffsetX <= 0f) return@awaitEachGesture
+                var totalDx = 0f
+                var totalDy = 0f
+                var lockedHorizontal = false
+                val startOffset = swipeOffsetX
+                while (true) {
+                    val event = awaitPointerEvent()
+                    val change = event.changes.firstOrNull { it.id == down.id } ?: break
+                    if (!change.pressed) {
+                        if (lockedHorizontal) {
+                            val target = if (swipeOffsetX >= revealThresholdPx) maxSwipePx else 0f
+                            settleSwipeTo(target)
+                        }
+                        break
+                    }
+                    val delta = change.positionChange()
+                    totalDx += delta.x
+                    totalDy += delta.y
+                    if (!lockedHorizontal) {
+                        val absX = abs(totalDx)
+                        val absY = abs(totalDy)
+                        if (absY > viewConfiguration.touchSlop && absY > absX) {
+                            break
+                        }
+                        if (absX > viewConfiguration.touchSlop && absX > absY * 1.25f) {
+                            val canDrag = (startOffset > 0f) || (totalDx > 0f)
+                            if (!canDrag) break
+                            lockedHorizontal = true
+                            swipeSettleJob?.cancel()
+                        }
+                    }
+                    if (lockedHorizontal) {
+                        change.consume()
+                        swipeOffsetX = (startOffset + totalDx).coerceIn(0f, maxSwipePx * 1.15f)
+                    }
+                }
+            }
+        }
+    } else Modifier
+    Box(
+        Modifier
+            .fillMaxWidth()
+            .clipToBounds()
+            .then(swipeModifier),
+    ) {
+        if (onSwipeMute != null && swipeOffsetX > 0.5f) {
+            Box(
+                modifier = Modifier
+                    .matchParentSize()
+                    .background(Color(0xFFFF3B30)),
+                contentAlignment = Alignment.CenterStart,
+            ) {
+                Box(
+                    modifier = Modifier
+                        .width(96.dp)
+                        .fillMaxHeight()
+                        .clickable(enabled = !item.notificationLevelUpdating) {
+                            settleSwipeTo(0f)
+                            onSwipeMute()
+                        },
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Column(
+                        horizontalAlignment = Alignment.CenterHorizontally,
+                        verticalArrangement = Arrangement.spacedBy(4.dp),
+                    ) {
+                        TopicNotificationIcon(
+                            level = TopicNotificationLevel.Muted,
+                            modifier = Modifier.size(20.dp),
+                            tint = Color.White,
+                        )
+                        Text(
+                            text = "免打扰",
+                            style = IosTheme.type.caption.copy(fontSize = 12.sp, fontWeight = FontWeight.SemiBold),
+                            color = Color.White,
+                            maxLines = 1,
+                        )
+                    }
+                }
+            }
+        }
         val isGraphic = feedDisplayMode == "graphic"
         val isNoExcerpt = feedDisplayMode == "no_excerpt"
         val isCardStyle = isGraphic || isNoExcerpt
         Column(
             Modifier
                 .fillMaxWidth()
+                .offset { IntOffset(swipeOffsetX.roundToInt(), 0) }
                 .background(if (isHighlighted) IosTheme.colors.card.copy(alpha = 0.85f) else IosTheme.colors.card)
                 .combinedClickable(
-                    onClick = onClick,
+                    onClick = {
+                        if (swipeOffsetX > 1f) settleSwipeTo(0f) else onClick()
+                    },
                     onLongClick = if (hasAnyLongPress && !item.notificationLevelUpdating) {
-                        { showLevelMenu = true }
+                        {
+                            if (swipeOffsetX > 1f) settleSwipeTo(0f)
+                            else showLevelMenu = true
+                        }
                     } else null,
                 )
                 .padding(
@@ -2284,7 +2297,6 @@ fun TopicRow(
                     onCopyLink = onCopyLink,
                     onBookmark = onBookmark,
                     onFlag = onFlag,
-                    onSave = onSave,
                 )
 
                 // 2. 标题（紧随作者行，精致克制主标题，契合主流App信息流）
@@ -2323,10 +2335,10 @@ fun TopicRow(
                     Spacer(Modifier.height(11.dp))
                 }
 
-                // 4. 底部互动栏（左侧：评论 / 浏览 / 活跃时间；右侧：快捷分享）
+                // 4. 底部互动栏（左侧：评论 / 浏览 / 活跃时间；右侧：新回复数）
                 TopicCardMetaBar(
                     topic = topic,
-                    onShare = { showShareSheet = true },
+                    newReplyCount = newReplyCount,
                     compact = false,
                 )
             } else if (isGraphic) {
@@ -2417,7 +2429,6 @@ fun TopicRow(
                     onCopyLink = onCopyLink,
                     onBookmark = onBookmark,
                     onFlag = onFlag,
-                    onSave = onSave,
                 )
 
                 // 3. 正文两行摘录 (严格保证两行知乎排版结构，固定最小高度防抖)
@@ -2483,11 +2494,11 @@ fun TopicRow(
                     )
                 }
 
-                // 5. 底部互动栏（左侧：评论 / 浏览 / 发布时间；右侧：快捷分享）
+                // 5. 底部互动栏（左侧：评论 / 浏览 / 发布时间；右侧：新回复数）
                 Spacer(Modifier.height(10.dp))
                 TopicCardMetaBar(
                     topic = topic,
-                    onShare = { showShareSheet = true },
+                    newReplyCount = newReplyCount,
                     compact = false,
                 )
             } else {
@@ -2582,7 +2593,6 @@ fun TopicRow(
                     onCopyLink = onCopyLink,
                     onBookmark = onBookmark,
                     onFlag = onFlag,
-                    onSave = onSave,
                 )
 
                 Spacer(Modifier.height(6.dp))
@@ -2666,37 +2676,15 @@ fun TopicRow(
 
                 Spacer(Modifier.height(7.dp))
 
-                // 4. 底部紧凑互动行（左侧：评论 / 浏览 / 时间；右侧：标签与快捷分享）
+                // 4. 底部紧凑互动行（左侧：评论 / 浏览 / 时间；右侧：标签与新回复数）
                 TopicCardMetaBar(
                     topic = topic,
-                    onShare = { showShareSheet = true },
+                    newReplyCount = newReplyCount,
                     compact = true,
                     trailingTags = topic.tags.take(2),
                 )
             }
         }
-    }
-
-    if (showShareSheet) {
-        val sharePost = remember(topic.id, item.authorUsername, item.authorName, item.displayName, item.avatarUrl, item.staticAvatarUrl, realExcerpt) {
-            org.linuxdo.android.data.Post(
-                id = -topic.id,
-                username = item.authorUsername.orEmpty(),
-                name = item.authorName?.takeIf { it.isNotBlank() } ?: item.displayName,
-                avatarTemplate = item.avatarUrl ?: item.staticAvatarUrl,
-                postNumber = item.targetPostNumber ?: 1,
-                createdAt = topic.createdAt,
-                cooked = (realExcerpt ?: getTopicRealExcerpt(topic)).orEmpty(),
-                topicId = topic.id,
-                blurb = topic.excerpt.orEmpty(),
-            )
-        }
-        PostShareSheet(
-            post = sharePost,
-            title = topic.title,
-            topicId = topic.id,
-            onDismiss = { showShareSheet = false },
-        )
     }
 }
 
@@ -2821,12 +2809,12 @@ private fun TagChip(tag: String) {
  * 列表卡片统一底部互动栏：
  * - 左侧定宽槽位显示：评论数、浏览数、活跃时间（每个指标使用定宽容器 + `tnum` 等宽数字，
  *   确保不管数字是 1 位还是 4 位，上下相邻卡片的三个图标永远严格垂直对齐在同一直线上，且间距舒展不拥挤）；
- * - 右侧居右显示：空心圆润转发分享按钮（带防误触热区，右边缘与卡片右上角分类胶囊平齐）。
+ * - 右侧居右显示：跟踪/关注话题的新增未读回复数（主题色胶囊显著标出）。
  */
 @Composable
 private fun TopicCardMetaBar(
     topic: Topic,
-    onShare: () -> Unit,
+    newReplyCount: Int = 0,
     compact: Boolean = false,
     trailingTags: List<String> = emptyList(),
 ) {
@@ -2894,25 +2882,37 @@ private fun TopicCardMetaBar(
         Spacer(Modifier.weight(1f))
 
         if (trailingTags.isNotEmpty()) {
-            trailingTags.forEach { tag ->
+            trailingTags.forEachIndexed { index, tag ->
                 TagChip(tag)
-                Spacer(Modifier.width(6.dp))
+                if (index < trailingTags.lastIndex || newReplyCount > 0) {
+                    Spacer(Modifier.width(6.dp))
+                }
             }
         }
 
-        // 4. 居右快捷分享按钮
-        Box(
-            modifier = Modifier
-                .offset(x = 5.dp)
-                .clip(RoundedCornerShape(8.dp))
-                .clickable(onClick = onShare)
-                .padding(horizontal = 6.dp, vertical = 4.dp),
-            contentAlignment = Alignment.Center,
-        ) {
-            TopicShareGlyph(
-                color = iconColor,
-                iconSize = if (compact) 15.dp else 16.5.dp,
-            )
+        // 4. 居右新回复数徽标（仅在跟踪/关注且存在未读新回复时显示，主题色显著标出）
+        if (newReplyCount > 0) {
+            val badgeText = if (newReplyCount > 99) "99+" else "+$newReplyCount"
+            Box(
+                modifier = Modifier
+                    .defaultMinSize(minWidth = if (compact) 26.dp else 28.dp)
+                    .clip(RoundedCornerShape(999.dp))
+                    .background(IosTheme.colors.accent)
+                    .padding(horizontal = if (compact) 7.dp else 8.dp, vertical = if (compact) 2.dp else 2.5.dp),
+                contentAlignment = Alignment.Center,
+            ) {
+                Text(
+                    text = badgeText,
+                    style = IosTheme.type.caption.copy(
+                        fontSize = if (compact) 11.sp else 11.5.sp,
+                        lineHeight = if (compact) 13.sp else 14.sp,
+                        fontWeight = FontWeight.Bold,
+                        fontFeatureSettings = "tnum",
+                    ),
+                    color = Color.White,
+                    maxLines = 1,
+                )
+            }
         }
     }
 }
@@ -2986,33 +2986,6 @@ private fun ClockGlyph(color: Color, iconSize: Dp = 13.5.dp) {
             drawCircle(color, radius = 9f, center = Offset(12f, 12f), style = Stroke(2.0f))
             drawLine(color, Offset(12f, 7.5f), Offset(12f, 12f), strokeWidth = 2.0f, cap = StrokeCap.Round)
             drawLine(color, Offset(12f, 12f), Offset(15.5f, 12f), strokeWidth = 2.0f, cap = StrokeCap.Round)
-        }
-    }
-}
-
-private val topicShareGlyphPath by lazy {
-    Path().apply {
-        moveTo(3.5f, 19.5f)
-        cubicTo(4.2f, 11.5f, 7.8f, 8.2f, 13.5f, 8.2f)
-        lineTo(13.5f, 4.2f)
-        lineTo(20.8f, 11.2f)
-        lineTo(13.5f, 18.2f)
-        lineTo(13.5f, 14.0f)
-        cubicTo(9.2f, 14.0f, 6.2f, 15.6f, 3.5f, 19.5f)
-        close()
-    }
-}
-
-/** 列表居右分享图标（空心圆润右弯转发箭头，契合主流社区 App 卡片底栏风格）。 */
-@Composable
-private fun TopicShareGlyph(color: Color, iconSize: Dp = 16.dp) {
-    Canvas(Modifier.size(iconSize)) {
-        scale(size.width / 24f, size.height / 24f, pivot = Offset.Zero) {
-            drawPath(
-                path = topicShareGlyphPath,
-                color = color,
-                style = Stroke(width = 1.9f, cap = StrokeCap.Round, join = StrokeJoin.Round),
-            )
         }
     }
 }
@@ -3436,8 +3409,12 @@ private fun notificationLevelColor(level: TopicNotificationLevel): Color = when 
 }
 
 @Composable
-internal fun TopicNotificationIcon(level: TopicNotificationLevel, modifier: Modifier = Modifier) {
-    val color = notificationLevelColor(level)
+internal fun TopicNotificationIcon(
+    level: TopicNotificationLevel,
+    modifier: Modifier = Modifier,
+    tint: Color? = null,
+) {
+    val color = tint ?: notificationLevelColor(level)
     Canvas(modifier.size(18.dp)) {
         scale(size.width / 24f, size.height / 24f, Offset.Zero) {
             val bell = Path().apply {

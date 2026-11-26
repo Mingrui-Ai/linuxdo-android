@@ -18,8 +18,6 @@ import android.text.Spanned
 import android.widget.Toast
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
-import org.linuxdo.android.data.SavedTopic
-import org.linuxdo.android.data.SavedTopicStore
 import org.linuxdo.android.data.TopicReadingPosition
 import androidx.lifecycle.AndroidViewModel
 import androidx.core.content.edit
@@ -726,175 +724,6 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     private val browser = container.browser
     private val userApiKeyAuthService = container.userApiKeyAuthService
     val diagnostics = container.diagnostics
-
-    private val savedTopicStore = SavedTopicStore(application)
-    private val savedTopicWriteGate = Mutex()
-    private val _savedTopics = MutableStateFlow<List<SavedTopic>>(emptyList())
-    val savedTopics = _savedTopics.asStateFlow()
-    private val _savedTopicsUserId = MutableStateFlow(0L)
-    val savedTopicsUserId = _savedTopicsUserId.asStateFlow()
-    private val _savedTopicsBusy = MutableStateFlow(false)
-    val savedTopicsBusy = _savedTopicsBusy.asStateFlow()
-    private val _savedTopicsNotice = MutableStateFlow<String?>(null)
-    val savedTopicsNotice = _savedTopicsNotice.asStateFlow()
-    private val _canUndoSavedTopics = MutableStateFlow(false)
-    val canUndoSavedTopics = _canUndoSavedTopics.asStateFlow()
-    private var removedSavedTopics: List<SavedTopic> = emptyList()
-    private val topicReadingPositions = mutableMapOf<Long, TopicReadingPosition>()
-
-    private fun publishSavedTopics(entries: List<SavedTopic>) {
-        _savedTopics.value = entries.sortedWith(compareByDescending<SavedTopic> { it.pinned }.thenByDescending { it.savedAt })
-    }
-
-    private fun changeSavedTopics(
-        userId: Long,
-        operation: suspend () -> List<SavedTopic>,
-        onSuccess: () -> Unit = {},
-    ) {
-        if (userId <= 0L || userId != _savedTopicsUserId.value || _savedTopicsBusy.value) return
-        val generation = accountScopeGeneration
-        _savedTopicsBusy.value = true
-        viewModelScope.launch {
-            try {
-                // 锁内发布：避免排在后面的旧结果覆盖较新的列表。
-                val published = savedTopicWriteGate.withLock {
-                    val updated = withContext(Dispatchers.IO) { operation() }
-                    val sameScope = generation == accountScopeGeneration && userId == _savedTopicsUserId.value
-                    if (sameScope) publishSavedTopics(updated)
-                    sameScope
-                }
-                if (published) onSuccess()
-            } catch (error: CancellationException) {
-                throw error
-            } catch (error: Exception) {
-                if (generation == accountScopeGeneration) _savedTopicsNotice.value = error.message ?: "暂存操作失败，请重试"
-            } finally {
-                if (generation == accountScopeGeneration) _savedTopicsBusy.value = false
-            }
-        }
-    }
-
-    fun saveTopic(userId: Long, topicId: Long) {
-        val detail = _details.value[topicId] ?: return
-        val topic = detail.topic ?: return
-        val entry = SavedTopic(
-            topicId = topicId, title = topic.title, savedAt = System.currentTimeMillis(),
-            categoryName = detail.category?.name, categoryColor = detail.category?.color,
-            totalPosts = maxOf(topic.postsCount, topic.postStream.stream.size, 1),
-            position = topicReadingPositions[topicId] ?: TopicReadingPosition(),
-        )
-        changeSavedTopics(userId, { savedTopicStore.add(userId, entry) }) {
-            removedSavedTopics = emptyList()
-            _canUndoSavedTopics.value = false
-            _savedTopicsNotice.value = "已加入暂存"
-        }
-    }
-
-    /** 列表长按加入暂存：没有阅读视口，按服务端已读楼层恢复。 */
-    fun saveTopicFromList(topic: Topic) {
-        val userId = _savedTopicsUserId.value
-        if (userId <= 0L) return
-        if (_savedTopics.value.any { it.topicId == topic.id }) {
-            _savedTopicsNotice.value = "已在暂存中"
-            return
-        }
-        val category = repository.cachedCategoryMap()[topic.categoryId]
-        val lastRead = topic.lastReadPostNumber?.takeIf { it > 1 }
-        val entry = SavedTopic(
-            topicId = topic.id, title = topic.title, savedAt = System.currentTimeMillis(),
-            categoryName = category?.name, categoryColor = category?.color,
-            totalPosts = maxOf(topic.postsCount, topic.highestPostNumber ?: 0, 1),
-            position = topicReadingPositions[topic.id]
-                ?: lastRead?.let { TopicReadingPosition(postNumber = it, atTop = false) }
-                ?: TopicReadingPosition(),
-        )
-        changeSavedTopics(userId, { savedTopicStore.add(userId, entry) }) {
-            removedSavedTopics = emptyList()
-            _canUndoSavedTopics.value = false
-            _savedTopicsNotice.value = "已加入暂存"
-        }
-    }
-
-    fun updateSavedTopicPosition(userId: Long, topicId: Long, position: TopicReadingPosition) {
-        if (userId <= 0L || userId != _savedTopicsUserId.value) return
-        if (topicReadingPositions.put(topicId, position) == position) return
-        if (_savedTopics.value.none { it.topicId == topicId }) return
-        val generation = accountScopeGeneration
-        val totalPosts = _details.value[topicId]?.topic?.postsCount ?: 0
-        viewModelScope.launch {
-            try {
-                savedTopicWriteGate.withLock {
-                    val updated = withContext(Dispatchers.IO) { savedTopicStore.updatePosition(userId, topicId, position, totalPosts) }
-                    if (generation == accountScopeGeneration && userId == _savedTopicsUserId.value) publishSavedTopics(updated)
-                }
-            } catch (error: CancellationException) {
-                throw error
-            } catch (error: Exception) {
-                diagnostics.log("暂存阅读位置保存失败: ${error.message}")
-            }
-        }
-    }
-
-    /** 复用列表静默探测和话题实时消息的数据，不额外发请求。 */
-    private fun syncSavedTopicTotals(totals: Map<Long, Int>) {
-        val userId = _savedTopicsUserId.value
-        if (userId <= 0L || totals.isEmpty()) return
-        val changed = _savedTopics.value.any { entry ->
-            totals[entry.topicId]?.let { it > 0 && it != entry.totalPosts } == true
-        }
-        if (!changed) return
-        val generation = accountScopeGeneration
-        viewModelScope.launch {
-            try {
-                savedTopicWriteGate.withLock {
-                    val updated = withContext(Dispatchers.IO) { savedTopicStore.updateTotals(userId, totals) }
-                    if (generation == accountScopeGeneration && userId == _savedTopicsUserId.value) publishSavedTopics(updated)
-                }
-            } catch (error: CancellationException) {
-                throw error
-            } catch (error: Exception) {
-                diagnostics.log("暂存楼层数同步失败: ${error.message}")
-            }
-        }
-    }
-
-    fun removeSavedTopic(userId: Long, topicId: Long) {
-        val removed = _savedTopics.value.filter { it.topicId == topicId }.map { it.copy(position = topicReadingPositions[it.topicId] ?: it.position) }
-        changeSavedTopics(userId, { savedTopicStore.remove(userId, topicId) }) {
-            removedSavedTopics = removed
-            _canUndoSavedTopics.value = removed.isNotEmpty()
-            _savedTopicsNotice.value = "已移除暂存"
-        }
-    }
-
-    fun clearSavedTopics(userId: Long) {
-        val removed = _savedTopics.value.map { it.copy(position = topicReadingPositions[it.topicId] ?: it.position) }
-        changeSavedTopics(userId, { savedTopicStore.clear(userId) }) {
-            removedSavedTopics = removed
-            _canUndoSavedTopics.value = removed.isNotEmpty()
-            _savedTopicsNotice.value = "已清空全部暂存"
-        }
-    }
-
-    fun undoSavedTopics(userId: Long) {
-        val removed = removedSavedTopics.map { it.copy(position = topicReadingPositions[it.topicId] ?: it.position) }
-        if (removed.isEmpty()) return
-        changeSavedTopics(userId, { savedTopicStore.restore(userId, removed) }) {
-            removedSavedTopics = emptyList()
-            _canUndoSavedTopics.value = false
-            _savedTopicsNotice.value = "已撤销"
-        }
-    }
-
-    fun pinSavedTopic(userId: Long, topicId: Long) {
-        changeSavedTopics(userId, { savedTopicStore.togglePin(userId, topicId) })
-    }
-
-    fun clearSavedTopicsNotice() {
-        _savedTopicsNotice.value = null
-        _canUndoSavedTopics.value = false
-        removedSavedTopics = emptyList()
-    }
 
     private val initialHomeFeed = HomeFeedType.Latest
     private val _feedStates = MutableStateFlow<Map<HomeFeedType, TopicListUiState>>(emptyMap())
@@ -3957,13 +3786,6 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     suspend fun createPrivateMessage(targetUsernames: List<String>, title: String, raw: String): Long =
         repository.createPrivateMessage(targetUsernames, title, raw)
 
-    suspend fun loadPostMarkdown(topicId: Long, postNumber: Int): String {
-        val generation = store.sessionGeneration
-        val raw = repository.fetchPostMarkdown(topicId, postNumber)
-        if (generation != store.sessionGeneration) throw CancellationException("会话已切换")
-        return raw
-    }
-
     suspend fun loadPostRevision(postId: Long, revision: Int?): org.linuxdo.android.data.PostRevision {
         val generation = store.sessionGeneration
         val result = repository.fetchPostRevision(postId, revision)
@@ -4708,6 +4530,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             if (effectivePostNumber != null) {
                 refreshTopic(id, silent = true, includeLatestPosts = false)
             }
+            autoTrackTopicIfNeeded(id, current.topic.details.notificationLevel)
             return
         }
 
@@ -4799,6 +4622,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                     if (requestPostNumber != null && resolvedTarget != null && resolvedTarget.postNumber != requestPostNumber) {
                         setNoticeMessage(id, "第 $requestPostNumber 楼不可用，已定位到第 ${resolvedTarget.postNumber} 楼")
                     }
+                    autoTrackTopicIfNeeded(id, topic.details.notificationLevel)
                     val scopeGeneration = accountScopeGeneration
                     viewModelScope.launch {
                         val resolvedCategory = runCatching { repository.categoryById(topic.categoryId) }.getOrNull()
@@ -6827,7 +6651,22 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
-    fun setTopicNotificationLevel(topicId: Long, level: TopicNotificationLevel) {
+    /**
+     * 点击进入话题时自动切换为「跟踪」：
+     * - 仅对当前处于「常规 (Regular)」状态的话题生效；
+     * - 已经是「跟踪」「关注」或手动设为「免打扰」的话题保持原状态，不覆盖用户设置；
+     * - 静默提交，不弹出 toast/横幅打扰阅读。
+     */
+    private fun autoTrackTopicIfNeeded(topicId: Long, currentDetailLevel: Int?) {
+        if (_state.value.username == null || topicId <= 0L) return
+        val effective = currentDetailLevel?.let(TopicNotificationLevel::fromCode)
+            ?: store.getTopicNotificationLevel(topicId)?.let(TopicNotificationLevel::fromCode)
+            ?: TopicNotificationLevel.Regular
+        if (effective != TopicNotificationLevel.Regular) return
+        setTopicNotificationLevel(topicId, TopicNotificationLevel.Tracking, silent = true)
+    }
+
+    fun setTopicNotificationLevel(topicId: Long, level: TopicNotificationLevel, silent: Boolean = false) {
         if (_state.value.username == null || pageJobs["notification:$topicId"]?.isActive == true) return
         val detailLevel = _details.value[topicId]?.topic?.details?.notificationLevel
         val snapshot = NotificationLevelSnapshot(detailLevel, _state.value.homeFeed, _state.value.latest, _feedStates.value,
@@ -6845,12 +6684,16 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             try {
                 repository.setTopicNotificationLevel(topicId, level.code)
                 confirmed = true
-                setNoticeMessage(topicId, "通知级别已设为「${level.title}」")
+                if (!silent) {
+                    setNoticeMessage(topicId, "通知级别已设为「${level.title}」")
+                }
             } catch (error: CancellationException) {
                 throw error
             } catch (error: Exception) {
-                Toast.makeText(getApplication(), error.message ?: "通知级别设置失败，已恢复原状态", Toast.LENGTH_LONG).show()
-                handlePageFailure(error) {}
+                if (!silent) {
+                    Toast.makeText(getApplication(), error.message ?: "通知级别设置失败，已恢复原状态", Toast.LENGTH_LONG).show()
+                    handlePageFailure(error) {}
+                }
             } finally {
                 if (confirmed) {
                     updateNotificationLevel(topicId, level, changing = false)
@@ -7314,7 +7157,6 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     private fun updateListCounters(fresh: List<TopicListItem>) {
         val byId = fresh.associate { it.topic.id to it.topic }
-        syncSavedTopicTotals(byId.mapValues { it.value.postsCount })
         mapTopicLists { list ->
             list.copy(items = mergeTopicCounters(list.items, byId),
                 pendingPage = list.pendingPage?.let { it.copy(items = mergeTopicCounters(it.items, byId)) })
@@ -7322,7 +7164,6 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     private fun updateListPostCount(topicId: Long, count: Int, highestPostNumber: Int? = null) {
-        syncSavedTopicTotals(mapOf(topicId to count))
         fun update(items: List<TopicListItem>) = items.map { item ->
             if (item.topic.id != topicId) item else item.copy(topic = item.topic.copy(postsCount = count,
                 highestPostNumber = highestPostNumber ?: item.topic.highestPostNumber.takeIf { count <= item.topic.postsCount }))
@@ -8147,12 +7988,10 @@ fun openTopicSearch(topicId: Long, title: String) {
         val generation = accountScopeGeneration
         viewModelScope.launch {
             try {
-                val saved = savedTopicWriteGate.withLock { withContext(Dispatchers.IO) {
+                withContext(Dispatchers.IO) {
                     container.historyStore.updateMetadata(userId, value.topicId, value.title, category?.name, category?.color)
-                    savedTopicStore.updateMetadata(userId, value.topicId, value.title, category?.name, category?.color)
-                } }
+                }
                 if (generation == accountScopeGeneration && userId == store.currentUserId()) {
-                    publishSavedTopics(saved)
                     _history.update { it.copy(entries = container.historyStore.syncedEntries(userId)) }
                 }
             } catch (error: CancellationException) { throw error }
@@ -9476,12 +9315,6 @@ fun openTopicSearch(topicId: Long, title: String) {
     }
 
     private fun restoreAccountScopedLocalState(userId: Long) {
-        _savedTopicsUserId.value = userId
-        publishSavedTopics(runCatching { savedTopicStore.entries(userId) }.getOrElse {
-            diagnostics.log("暂存列表读取失败: ${it.message}")
-            _savedTopicsNotice.value = "暂存列表读取失败，请重新打开应用后重试"
-            emptyList()
-        })
         _history.value = HistoryUiState(entries = container.historyStore.syncedEntries())
         val blocked = repository.getBlockedUsers(userId)
         _blockedUsers.value = blocked
@@ -9521,11 +9354,6 @@ fun openTopicSearch(topicId: Long, title: String) {
         metadataTagJob?.cancel()
         _metadataEditor.value = TopicMetadataEditorUiState()
         _metadataUpdated.value = null
-        _savedTopicsUserId.value = 0L
-        _savedTopics.value = emptyList()
-        _savedTopicsBusy.value = false
-        clearSavedTopicsNotice()
-        topicReadingPositions.clear()
         topicLiveJob?.cancel()
         topicLiveId = null
         topicLiveSessions.clear()

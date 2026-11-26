@@ -433,6 +433,7 @@ data class Topic(
     val posters: List<Poster> = emptyList(),
     @SerialName("notification_level") val notificationLevel: Int? = null,
     @SerialName("highest_post_number") val highestPostNumber: Int? = null,
+    @SerialName("unread_posts") val unreadPosts: Int? = null,
 ) {
     /**
      * 列表要显示的"总回复数",口径与网页端一致。
@@ -442,6 +443,24 @@ data class Topic(
      * 取两者较大值兜住个别端点不下发 posts_count 的情况。
      */
     val totalReplies: Int get() = (postsCount - 1).coerceAtLeast(replyCount).coerceAtLeast(0)
+
+    /**
+     * 跟踪/关注话题的新增未读回复数，对齐 Discourse 网页端逻辑：
+     * - 仅在跟踪 (2) 或关注 (3) 状态下显示；
+     * - 结合服务端 unread_posts 与已读游标 (last_read_post_number) 实时计算剩余未读回复数。
+     */
+    fun newReplyCount(effectiveLevel: TopicNotificationLevel? = null): Int {
+        val level = effectiveLevel ?: notificationLevel?.let(TopicNotificationLevel::fromCode)
+        if (level != TopicNotificationLevel.Tracking && level != TopicNotificationLevel.Watching) return 0
+        val highest = maxOf(highestPostNumber ?: 0, postsCount)
+        val lastRead = lastReadPostNumber?.takeIf { it > 0 }
+        val unreadFromServer = unreadPosts?.coerceAtLeast(0)
+        if (lastRead != null && highest > 0) {
+            val remaining = (highest - lastRead).coerceAtLeast(0)
+            return if (unreadFromServer != null) minOf(unreadFromServer, remaining) else remaining
+        }
+        return unreadFromServer ?: 0
+    }
 }
 
 /** Discourse 列表接口随话题下发的服务端缩略图。 */
@@ -963,7 +982,8 @@ internal fun mergeTopicCounters(items: List<TopicListItem>, fresh: Map<Long, Top
         val source = fresh[item.topic.id] ?: return@map item
         val topic = item.topic.copy(postsCount = source.postsCount, replyCount = source.replyCount,
             views = source.views, lastPostedAt = source.lastPostedAt,
-            highestPostNumber = source.highestPostNumber ?: item.topic.highestPostNumber.takeIf { source.postsCount <= item.topic.postsCount })
+            highestPostNumber = source.highestPostNumber ?: item.topic.highestPostNumber.takeIf { source.postsCount <= item.topic.postsCount },
+            unreadPosts = source.unreadPosts ?: item.topic.unreadPosts)
         if (topic == item.topic) item else item.copy(topic = topic).also { changed = true }
     }
     return if (changed) merged else items
@@ -971,7 +991,13 @@ internal fun mergeTopicCounters(items: List<TopicListItem>, fresh: Map<Long, Top
 
 internal fun mergeConfirmedTopicRead(topic: Topic, confirmedPosts: Set<Int>): Topic {
     val highest = confirmedPosts.maxOrNull() ?: return topic
-    return topic.copy(unseen = false, lastReadPostNumber = maxOf(topic.lastReadPostNumber ?: 0, highest))
+    val newLastRead = maxOf(topic.lastReadPostNumber ?: 0, highest)
+    val highestFloor = maxOf(topic.highestPostNumber ?: 0, topic.postsCount)
+    val updatedUnread = if (highestFloor > 0) {
+        val remaining = (highestFloor - newLastRead).coerceAtLeast(0)
+        topic.unreadPosts?.let { minOf(it, remaining) } ?: remaining
+    } else topic.unreadPosts
+    return topic.copy(unseen = false, lastReadPostNumber = newLastRead, unreadPosts = updatedUnread)
 }
 
 /** 服务端草稿条目（兼容创建新话题草稿与话题回复草稿）。 */

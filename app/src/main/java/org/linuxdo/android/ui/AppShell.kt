@@ -83,6 +83,8 @@ import androidx.compose.material3.rememberDrawerState
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.ui.semantics.clearAndSetSemantics
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import org.linuxdo.android.ui.screen.PostAction
 import org.linuxdo.android.ui.screen.PostActionIcon
 import androidx.activity.compose.BackHandler
@@ -799,18 +801,6 @@ private fun MainNavigation(state: UiState, viewModel: MainViewModel, lifecycle: 
     val feedDisplayMode by viewModel.feedDisplayMode.collectAsStateWithLifecycle()
     val blockedUsers by viewModel.blockedUsers.collectAsStateWithLifecycle()
     val blockedUsernameSet = remember(blockedUsers) { blockedUsers.map { it.username.lowercase() }.toSet() }
-    val savedTopics by viewModel.savedTopics.collectAsStateWithLifecycle()
-    val savedTopicsUserId by viewModel.savedTopicsUserId.collectAsStateWithLifecycle()
-    val savedTopicsBusy by viewModel.savedTopicsBusy.collectAsStateWithLifecycle()
-    val savedTopicsNotice by viewModel.savedTopicsNotice.collectAsStateWithLifecycle()
-    val canUndoSavedTopics by viewModel.canUndoSavedTopics.collectAsStateWithLifecycle()
-    var showSavedTopics by rememberSaveable { mutableStateOf(false) }
-    LaunchedEffect(savedTopicsNotice) {
-        if (savedTopicsNotice != null) {
-            delay(if (canUndoSavedTopics) 6_000L else 3_000L)
-            viewModel.clearSavedTopicsNotice()
-        }
-    }
 
     LaunchedEffect(pendingNotificationTarget) {
         val target = pendingNotificationTarget ?: return@LaunchedEffect
@@ -870,23 +860,20 @@ private fun MainNavigation(state: UiState, viewModel: MainViewModel, lifecycle: 
             drawerState.snapTo(DrawerValue.Closed)
         }
     }
-    LaunchedEffect(browsing, savedTopicsUserId) {
-        if (!browsing || savedTopicsUserId <= 0L) showSavedTopics = false
-    }
     var detailOverlay by rememberSaveable { mutableStateOf(false) }
     var showConnectSheet by rememberSaveable { mutableStateOf(false) }
     var privateMessageRecipient by rememberSaveable { mutableStateOf<String?>(null) }
     var globalBrowserUrl by rememberSaveable { mutableStateOf<String?>(null) }
     val miniAppHomePullEnabled = rememberMiniAppHomePullEnabled()
-    var browserAccountId by remember { mutableStateOf(savedTopicsUserId) }
-    LaunchedEffect(savedTopicsUserId, accountState.switching) {
-        if (browserAccountId != savedTopicsUserId || accountState.switching) {
+    var browserAccountId by remember { mutableStateOf(accountState.activeUserId) }
+    LaunchedEffect(accountState.activeUserId, accountState.switching) {
+        if (browserAccountId != accountState.activeUserId || accountState.switching) {
             globalBrowserUrl = null
             org.linuxdo.android.ui.screen.MiniAppSessionPool.destroyCurrent()
         }
-        browserAccountId = savedTopicsUserId
+        browserAccountId = accountState.activeUserId
     }
-    val contentObscured = topicCreator.open || composer.open || detailOverlay || showSavedTopics || topicSearch.open || metadataEditor.open ||
+    val contentObscured = topicCreator.open || composer.open || detailOverlay || topicSearch.open || metadataEditor.open ||
         showConnectSheet || globalBrowserUrl != null || privateMessageRecipient != null || accountState.switching ||
         userCard.loading || userCard.user != null || userCard.error != null || drawerVisible || showDrawerAccounts || showDrawerScore
     val visibleRoute = stack.current
@@ -1068,7 +1055,7 @@ private fun MainNavigation(state: UiState, viewModel: MainViewModel, lifecycle: 
                 ) {
                 key(selected) {
                     IosNavHost(stack,
-                        interactive = browsing && !topicCreator.open && !showSavedTopics && !topicSearch.open && !metadataEditor.open &&
+                        interactive = browsing && !topicCreator.open && !topicSearch.open && !metadataEditor.open &&
                             !drawerVisible && !showDrawerAccounts && !showDrawerScore,
                         listBars = listBars.takeIf { browsing && listForeground && !isDetailRoute && !isKeyboardOpen },
                         contentWindowInsets = { route ->
@@ -1098,7 +1085,7 @@ private fun MainNavigation(state: UiState, viewModel: MainViewModel, lifecycle: 
                                         topicEntryLoaded = true
                                         viewModel.loadTopic(route.topicId, postNumber = route.postNumber,
                                             resumePostNumber = resumePostNumber,
-                                            restoredPosition = route.savedPosition ?: route.postNumber?.let {
+                                            restoredPosition = route.postNumber?.let {
                                                 org.linuxdo.android.data.TopicReadingPosition(postNumber = it, atTop = it == 1,
                                                     descending = details[route.topicId]?.descending ?: false)
                                             })
@@ -1150,7 +1137,6 @@ private fun MainNavigation(state: UiState, viewModel: MainViewModel, lifecycle: 
                                 topicUnreadDotPosition = topicUnreadDotPosition,
                                 blockedUsernameSet = blockedUsernameSet,
                                 miniAppHomePullEnabled = miniAppHomePullEnabled,
-                                savedTopicsUserId = savedTopicsUserId,
                                 floatingBallEnabled = floatingBallEnabled,
                                 floatingBallActions = floatingBallActions,
                                 floatingBallXRatio = floatingBallXRatio,
@@ -1188,13 +1174,10 @@ private fun MainNavigation(state: UiState, viewModel: MainViewModel, lifecycle: 
                                         viewModel.leaveTopic(route.topicId)
                                     }
                                 }
+                                val detailState = details[route.topicId] ?: DetailUiState(loading = true)
                                 TopicDetailScreen(
                                     title = route.title,
-                                    state = details[route.topicId] ?: DetailUiState(loading = true),
-                                    initialPosition = route.savedPosition,
-                                    onReadingPosition = { viewModel.updateSavedTopicPosition(savedTopicsUserId, route.topicId, it) },
-                                    savedTopicCount = savedTopics.size,
-                                    onOpenSavedTopics = { showSavedTopics = true },
+                                    state = detailState,
                                     onBack = { stack.pop() },
                                     onOpenCategory = { category ->
                                         stack.push(Route.CategoryTopics(category.id, category.slug, category.name))
@@ -1239,95 +1222,56 @@ private fun MainNavigation(state: UiState, viewModel: MainViewModel, lifecycle: 
                                     onOpenTag = { tag -> stack.push(Route.TagTopics(tag)) },
                                     active = isForeground,
                                     trailing = {
-                                        var more by remember { mutableStateOf(false) }
-                                        val shareActions = org.linuxdo.android.ui.screen.LocalTopicShareActions.current
-                                        Box {
-                                            TextButton(onClick = { more = true }, modifier = Modifier.width(44.dp)) {
-                                                Text("⋯", color = IosTheme.colors.accent, fontSize = 22.sp)
-                                            }
-                                            androidx.compose.material3.DropdownMenu(
-                                                expanded = more, onDismissRequest = { more = false },
-                                                containerColor = if (IosTheme.colors.isDark) IosTheme.colors.card else Color.White,
-                                                tonalElevation = 0.dp,
-                                                modifier = Modifier.background(if (IosTheme.colors.isDark) IosTheme.colors.card else Color.White),
+                                        Row(
+                                            verticalAlignment = Alignment.CenterVertically,
+                                            horizontalArrangement = Arrangement.spacedBy(2.dp),
+                                        ) {
+                                            Box(
+                                                modifier = Modifier
+                                                    .size(40.dp)
+                                                    .clip(CircleShape)
+                                                    .clickable {
+                                                        viewModel.openTopicSearch(
+                                                            route.topicId,
+                                                            detailState.topic?.title ?: route.title,
+                                                        )
+                                                    }
+                                                    .semantics { contentDescription = "搜索" },
+                                                contentAlignment = Alignment.Center,
                                             ) {
-                                                val isSaved = savedTopics.any { it.topicId == route.topicId }
-                                                androidx.compose.material3.DropdownMenuItem(
-                                                    text = {
-                                                        Row(verticalAlignment = Alignment.CenterVertically) {
-                                                            PostActionIcon(PostAction.Bookmark, isSaved, modifier = Modifier.size(18.dp))
-                                                            Spacer(Modifier.width(8.dp))
-                                                            Text(
-                                                                text = if (isSaved) "已暂存" else "话题暂存",
-                                                                color = if (isSaved) IosTheme.colors.accent else IosTheme.colors.label,
-                                                            )
-                                                        }
-                                                    },
-                                                    enabled = savedTopicsUserId > 0L && !savedTopicsBusy && details[route.topicId]?.topic != null,
-                                                    onClick = {
-                                                        more = false
-                                                        if (isSaved) showSavedTopics = true else viewModel.saveTopic(savedTopicsUserId, route.topicId)
-                                                    },
+                                                PostActionIcon(
+                                                    action = PostAction.Search,
+                                                    selected = false,
+                                                    tint = IosTheme.colors.label,
+                                                    modifier = Modifier.size(20.dp),
                                                 )
-                                                if (details[route.topicId]?.topic?.details?.canEdit == true) {
-                                                    androidx.compose.material3.DropdownMenuItem(
-                                                        text = {
-                                                            Row(verticalAlignment = Alignment.CenterVertically) {
-                                                                PostActionIcon(PostAction.Edit, false, modifier = Modifier.size(18.dp))
-                                                                Spacer(Modifier.width(8.dp))
-                                                                Text("话题编辑", color = IosTheme.colors.label)
-                                                            }
-                                                        },
-                                                        onClick = {
-                                                            more = false
+                                            }
+                                            if (detailState.topic?.details?.canEdit == true) {
+                                                Box(
+                                                    modifier = Modifier
+                                                        .size(40.dp)
+                                                        .clip(CircleShape)
+                                                        .clickable {
                                                             viewModel.openTopicMetadataEditor(route.topicId)
-                                                        },
-                                                    )
-                                                }
-                                                androidx.compose.material3.DropdownMenuItem(
-                                                    text = {
-                                                        Row(verticalAlignment = Alignment.CenterVertically) {
-                                                            PostActionIcon(PostAction.Search, false, modifier = Modifier.size(18.dp))
-                                                            Spacer(Modifier.width(8.dp))
-                                                            Text("帖内搜索", color = IosTheme.colors.label)
                                                         }
-                                                    },
-                                                    onClick = {
-                                                        more = false
-                                                        viewModel.openTopicSearch(route.topicId, details[route.topicId]?.topic?.title ?: route.title)
-                                                    },
-                                                )
-                                                shareActions?.let { actions ->
-                                                    androidx.compose.material3.DropdownMenuItem(
-                                                        text = {
-                                                            Row(verticalAlignment = Alignment.CenterVertically) {
-                                                                PostActionIcon(PostAction.Share, false, modifier = Modifier.size(18.dp))
-                                                                Spacer(Modifier.width(8.dp))
-                                                                Text(if (actions.shareLoading) "正在生成分享图…" else "生成分享图", color = IosTheme.colors.label)
-                                                            }
-                                                        },
-                                                        enabled = !actions.shareLoading,
-                                                        onClick = {
-                                                            more = false
-                                                            actions.onShareImage()
-                                                        },
-                                                    )
-                                                    androidx.compose.material3.DropdownMenuItem(
-                                                        text = {
-                                                            Row(verticalAlignment = Alignment.CenterVertically) {
-                                                                PostActionIcon(PostAction.Markdown, false, modifier = Modifier.size(18.dp))
-                                                                Spacer(Modifier.width(8.dp))
-                                                                Text(if (actions.copyLoading) "正在复制…" else "复制 Markdown 原文", color = IosTheme.colors.label)
-                                                            }
-                                                        },
-                                                        enabled = !actions.copyLoading,
-                                                        onClick = {
-                                                            more = false
-                                                            actions.onCopyMarkdown()
-                                                        },
+                                                        .semantics { contentDescription = "编辑" },
+                                                    contentAlignment = Alignment.Center,
+                                                ) {
+                                                    PostActionIcon(
+                                                        action = PostAction.Edit,
+                                                        selected = false,
+                                                        tint = IosTheme.colors.label,
+                                                        modifier = Modifier.size(19.dp),
                                                     )
                                                 }
                                             }
+                                            org.linuxdo.android.ui.screen.TopicNotificationHeaderButton(
+                                                currentLevel = detailState.notificationLevel,
+                                                onSelectLevel = { viewModel.setTopicNotificationLevel(route.topicId, it) },
+                                                enabled = state.username != null &&
+                                                    detailState.topic != null &&
+                                                    !detailState.notificationLevelUpdating,
+                                            )
                                         }
                                     },
                                     onSelectOrder = { viewModel.setCommentOrder(route.topicId, it) },
@@ -1338,7 +1282,6 @@ private fun MainNavigation(state: UiState, viewModel: MainViewModel, lifecycle: 
                                     onOverlayActive = { detailOverlay = it },
                                     onSetFilterUser = { viewModel.setTopicAuthorFilter(route.topicId, it) },
                                     onVotePoll = { postId, pollName, optionIds -> viewModel.votePoll(route.topicId, postId, pollName, optionIds) },
-                                    onSetNotificationLevel = { viewModel.setTopicNotificationLevel(route.topicId, it) },
                                     signedIn = state.username != null,
                                     onToggleBookmark = { viewModel.toggleBookmark(route.topicId, it) },
                                     onOpenFlagDialog = { viewModel.openFlagDialog(route.topicId, it) },
@@ -1505,7 +1448,6 @@ private fun MainNavigation(state: UiState, viewModel: MainViewModel, lifecycle: 
                                     onFlagTopic = { topic, reasonId, message, onSuccess, onError ->
                                         viewModel.submitTopicFlagFromList(topic.id, reasonId, message, onSuccess, onError)
                                     },
-                                    onSaveTopic = if (savedTopicsUserId > 0L) viewModel::saveTopicFromList else null,
                                     sortOrder = (topicListSorts[TopicListKey.category(route.categoryId)] ?: TopicListSort()).order,
                                     sortAscending = (topicListSorts[TopicListKey.category(route.categoryId)] ?: TopicListSort()).ascending,
                                     onSortChange = { viewModel.setTopicSort(it, currentCategoryId = route.categoryId, currentCategorySlug = route.slug) },
@@ -1753,7 +1695,6 @@ private fun MainNavigation(state: UiState, viewModel: MainViewModel, lifecycle: 
                                     onFlagTopic = { topic, reasonId, message, onSuccess, onError ->
                                         viewModel.submitTopicFlagFromList(topic.id, reasonId, message, onSuccess, onError)
                                     },
-                                    onSaveTopic = if (savedTopicsUserId > 0L) viewModel::saveTopicFromList else null,
                                     sortEnabled = false,
                                     floatingBallEnabled = floatingBallEnabled,
                                     floatingBallActions = floatingBallActions,
@@ -1982,35 +1923,6 @@ private fun MainNavigation(state: UiState, viewModel: MainViewModel, lifecycle: 
             }
         }
         val shouldShowTabBar = browsing && isMainTabRoot && listBars.value && !contentObscured && !isKeyboardOpen
-        if (savedTopics.isNotEmpty() && !isDetailRoute && browsing && !contentObscured && !isKeyboardOpen) {
-            SavedTopicChip(
-                savedTopics.size, { showSavedTopics = true },
-                Modifier.align(Alignment.BottomStart).padding(start = 16.dp, bottom = if (shouldShowTabBar) 76.dp else 16.dp),
-            )
-        }
-        if (showSavedTopics) {
-            SavedTopicsSheet(
-                entries = savedTopics,
-                currentTopicId = (stack.current as? Route.TopicDetail)?.topicId,
-                busy = savedTopicsBusy, notice = savedTopicsNotice, canUndo = canUndoSavedTopics,
-                onOpen = { entry ->
-                    if ((stack.current as? Route.TopicDetail)?.topicId != entry.topicId) {
-                        stack.switchSavedTopic(Route.TopicDetail(entry.topicId, entry.title, entry.position.postNumber, entry.position))
-                    }
-                    showSavedTopics = false
-                },
-                onRemove = { viewModel.removeSavedTopic(savedTopicsUserId, it) },
-                onPin = { viewModel.pinSavedTopic(savedTopicsUserId, it) },
-                onClear = { viewModel.clearSavedTopics(savedTopicsUserId) },
-                onUndo = { viewModel.undoSavedTopics(savedTopicsUserId) },
-                onDismiss = { showSavedTopics = false },
-            )
-        } else if (savedTopicsNotice != null && browsing && !contentObscured) {
-            SavedTopicsNotice(
-                savedTopicsNotice!!, canUndoSavedTopics, { viewModel.undoSavedTopics(savedTopicsUserId) },
-                Modifier.align(Alignment.BottomCenter).padding(start = 16.dp, end = 16.dp, bottom = 100.dp),
-            )
-        }
         if (browsing && topicSearch.open) {
             TopicSearchSheet(topicSearch, { viewModel.updateTopicSearch(it) },
                 { viewModel.updateTopicSearch(topicSearch.query, it) }, viewModel::loadMoreTopicSearch,
@@ -2788,7 +2700,6 @@ private fun HomeTopicListRoute(
     topicUnreadDotPosition: TopicUnreadDotPosition,
     blockedUsernameSet: Set<String>,
     miniAppHomePullEnabled: Boolean,
-    savedTopicsUserId: Long,
     floatingBallEnabled: Boolean,
     floatingBallActions: List<org.linuxdo.android.data.FloatingAction>,
     floatingBallXRatio: Float,
@@ -2875,7 +2786,6 @@ private fun HomeTopicListRoute(
         onFlagTopic = { topic, reasonId, message, onSuccess, onError ->
             viewModel.submitTopicFlagFromList(topic.id, reasonId, message, onSuccess, onError)
         },
-        onSaveTopic = if (savedTopicsUserId > 0L) viewModel::saveTopicFromList else null,
         sortOrder = homeSort.order,
         sortAscending = homeSort.ascending,
         onSortChange = { viewModel.setTopicSort(it) },

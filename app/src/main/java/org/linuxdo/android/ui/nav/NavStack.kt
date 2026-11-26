@@ -13,7 +13,6 @@ sealed interface Route : Serializable {
         val topicId: Long,
         val title: String,
         val postNumber: Int? = null,
-        val savedPosition: org.linuxdo.android.data.TopicReadingPosition? = null,
     ) : Route
     data object CategoryList : Route
     data class CategoryTopics(val categoryId: Int, val slug: String, val name: String) : Route
@@ -92,12 +91,6 @@ class NavStack(root: Route) {
         } else {
             entries.dropLast(1) + entries.last().copy(route = route)
         }
-    }
-
-    fun switchSavedTopic(route: Route.TopicDetail) {
-        // 新条目 id 隔离 Compose 保存状态；切换暂存不会无限累积返回栈。
-        if (current is Route.TopicDetail) entries = entries.dropLast(1) + NavEntry(nextId++, route)
-        else push(route)
     }
 
     fun updateTopicTitle(topicId: Long, title: String) {

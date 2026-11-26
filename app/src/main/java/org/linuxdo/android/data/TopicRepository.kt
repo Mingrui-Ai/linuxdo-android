@@ -3060,11 +3060,6 @@ class TopicRepository(
     suspend fun fetchPostRaw(postId: Long): String =
         objectRequest("/posts/$postId.json").text("raw")
 
-    suspend fun fetchPostMarkdown(topicId: Long, postNumber: Int): String {
-        require(topicId > 0 && postNumber > 0)
-        return request("/raw/$topicId/$postNumber")
-    }
-
     suspend fun fetchPostRevision(postId: Long, revision: Int? = null): PostRevision {
         require(postId > 0 && (revision == null || revision > 0))
         val body = request("/posts/$postId/revisions/${revision?.toString() ?: "latest"}.json")
