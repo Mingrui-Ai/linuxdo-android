@@ -1009,9 +1009,7 @@ private fun MainNavigation(state: UiState, viewModel: MainViewModel, lifecycle: 
                 is PersonalDrawerAction.CategoryTopics -> stack.push(Route.CategoryTopics(action.category.id, action.category.slug, action.category.name))
                 is PersonalDrawerAction.TagTopics -> stack.push(Route.TagTopics(action.tag))
                 is PersonalDrawerAction.Web -> {
-                    val externalApp = org.linuxdo.android.data.externalMiniAppUrl(action.url)
-                    if (externalApp != null) org.linuxdo.android.ui.screen.openExternal(context, externalApp)
-                    else globalBrowserUrl = action.url
+                    globalBrowserUrl = action.url
                 }
             }
         }
@@ -2087,9 +2085,7 @@ private fun MainNavigation(state: UiState, viewModel: MainViewModel, lifecycle: 
         LaunchedEffect(requestedMiniAppUrl, browsing) {
             if (browsing && !requestedMiniAppUrl.isNullOrBlank()) {
                 org.linuxdo.android.ui.screen.MiniAppSessionPool.clearRequest()
-                val externalApp = org.linuxdo.android.data.externalMiniAppUrl(requestedMiniAppUrl)
-                if (externalApp != null) org.linuxdo.android.ui.screen.openExternal(context, externalApp)
-                else globalBrowserUrl = requestedMiniAppUrl
+                globalBrowserUrl = requestedMiniAppUrl
             }
         }
 
@@ -2113,7 +2109,7 @@ private fun MainNavigation(state: UiState, viewModel: MainViewModel, lifecycle: 
                         val consumed = viewModel.consumeClipboardTarget(context, target.first)
                         val linkToOpen = consumed ?: target.second
                         if (linkToOpen.isMiniApp) {
-                            linkToOpen.miniAppUrl?.let { org.linuxdo.android.ui.screen.openExternal(context, it) }
+                            linkToOpen.miniAppUrl?.let { globalBrowserUrl = it }
                         } else {
                             selected = MainTab.Latest
                             val latestStack = stacks.getValue(MainTab.Latest)

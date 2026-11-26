@@ -1004,6 +1004,7 @@ fun SettingsScreen(
 ) {
     val context = LocalContext.current
     var showSyncConfirmDialog by remember { mutableStateOf(false) }
+    val miniAppOpenMode = rememberMiniAppOpenMode()
     var showLogoutConfirmDialog by remember { mutableStateOf(false) }
     var showAutoRefreshIntervalDialog by remember { mutableStateOf(false) }
     var showNotificationScopeDialog by remember { mutableStateOf(false) }
@@ -1178,6 +1179,13 @@ fun SettingsScreen(
                 ) { SettingBookIcon(tint = Color(0xFFFF9500)) }
                 IosDivider()
                 SettingsEntryRow(
+                    title = SettingsPage.MiniApps.title,
+                    badgeColor = Color(0xFFE3F5E8),
+                    value = miniAppOpenMode.label,
+                    onClick = { onOpenPage(SettingsPage.MiniApps) },
+                ) { org.linuxdo.android.ui.screen.MiniAppTinyEmblem(modifier = Modifier.size(18.dp)) }
+                IosDivider()
+                SettingsEntryRow(
                     title = SettingsPage.FloatingBall.title,
                     badgeColor = Color(0xFFF3E5F5),
                     value = if (floatingBallEnabled) "已开启" else "已关闭",
@@ -1208,6 +1216,11 @@ fun SettingsScreen(
         if (page == SettingsPage.ProfileDisplay) item("profile-display") {
             Spacer(Modifier.height(12.dp))
             ProfileDisplaySettings()
+        }
+
+        if (page == SettingsPage.MiniApps) item("mini-apps") {
+            Spacer(Modifier.height(12.dp))
+            MiniAppSettings()
         }
 
         // ── 1. 外观 ──
