@@ -109,6 +109,8 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.drawWithContent
 import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.input.pointer.PointerEventPass
+import androidx.compose.ui.input.pointer.PointerType
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalContext
@@ -208,6 +210,8 @@ fun TopicListScreen(
     showHeaderActions: Boolean = false,
     homeLeading: @Composable () -> Unit = {},
     currentFeed: HomeFeedType? = null,
+    miniAppHomePullEnabled: Boolean = false,
+    onOpenMiniApps: (() -> Unit)? = null,
     feedStates: Map<HomeFeedType, TopicListUiState> = emptyMap(),
     onFeedSelect: ((HomeFeedType) -> Unit)? = null,
     onPreloadFeed: ((HomeFeedType) -> Unit)? = null,
@@ -504,6 +508,43 @@ fun TopicListScreen(
         },
     )
 
+    val miniAppPull = remember(listState, effectiveFeed) { MiniAppPullGesture() }
+    val miniAppPullEnabled = miniAppHomePullEnabled && onOpenMiniApps != null && currentFeed != null
+    val pullActionsEnabled = active && !effectiveState.initialLoading && !effectiveState.refreshing &&
+        !showSortDialog && flagTargetTopic == null && incomingFeed == null && pendingSettledFeed == null
+    // 保持修饰节点位置稳定，避免切换分类时移除节点打断后方的横滑处理器。
+    val observeMiniAppPull = Modifier.pointerInput(miniAppPull, listState, miniAppPullEnabled, pullActionsEnabled) {
+        try {
+            if (miniAppPullEnabled && pullActionsEnabled) {
+                awaitEachGesture {
+                    val down = awaitFirstDown(requireUnconsumed = false, pass = PointerEventPass.Initial)
+                    val edge = 24.dp.toPx()
+                    miniAppPull.begin(
+                        !listState.canScrollBackward && !listState.isScrollInProgress && !pullState.isAnimating &&
+                            down.type == PointerType.Touch && down.position.x in edge..(size.width - edge),
+                    )
+                    while (true) {
+                        // 先观察松手，再由原下拉刷新组件处理释放；不消费事件或改变滚动距离。
+                        val event = awaitPointerEvent(PointerEventPass.Initial)
+                        val change = event.changes.singleOrNull()
+                        if (change == null || change.id != down.id) {
+                            miniAppPull.cancel()
+                            break
+                        }
+                        val distance = change.position - down.position
+                        miniAppPull.move(distance.x, distance.y, viewConfiguration.touchSlop)
+                        if (!change.pressed) {
+                            miniAppPull.release()
+                            break
+                        }
+                    }
+                }
+            }
+        } finally {
+            miniAppPull.cancel()
+        }
+    }
+
     fun LazyListScope.renderFeedItems(
         pageState: TopicListUiState,
         pagePinnedGroups: List<List<TopicListItem>>,
@@ -595,13 +636,25 @@ fun TopicListScreen(
 
     PullToRefreshBox(
         isRefreshing = effectiveState.refreshing,
-        onRefresh = onRefresh,
+        onRefresh = {
+            if (!miniAppPullEnabled) {
+                onRefresh()
+            } else if (pullActionsEnabled) {
+                when (miniAppPull.finish(pullState.distanceFraction, !listState.canScrollBackward)) {
+                    MiniAppPullGesture.Action.Open -> onOpenMiniApps?.invoke()
+                    MiniAppPullGesture.Action.Refresh -> onRefresh()
+                    MiniAppPullGesture.Action.Ignore -> Unit
+                }
+            }
+        },
         state = pullState,
         modifier = modifier
             .onSizeChanged { containerWidthPx = it.width.toFloat() }
+            .then(observeMiniAppPull)
             .then(homeFeedSwipeModifier),
         indicator = {
             val fraction = pullState.distanceFraction
+            val showPullHint = miniAppPullEnabled && pullActionsEnabled && fraction >= 1f
             // 初始加载时列表中央已有加载指示，这里再叠一个下拉转圈就成了两个圈。
             if (!effectiveState.initialLoading && (effectiveState.refreshing || fraction > 0f)) {
                 Box(
@@ -612,7 +665,23 @@ fun TopicListScreen(
                             alpha = if (effectiveState.refreshing) 1f else min(1f, fraction * 1.4f)
                         },
                 ) {
-                    IosActivityIndicator(diameter = 22.dp)
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        modifier = if (showPullHint) Modifier
+                            .shadow(3.dp, RoundedCornerShape(20.dp))
+                            .background(IosTheme.colors.card, RoundedCornerShape(20.dp))
+                            .padding(horizontal = 14.dp, vertical = 10.dp) else Modifier,
+                    ) {
+                        IosActivityIndicator(diameter = if (showPullHint) 18.dp else 22.dp)
+                        if (showPullHint) {
+                            Text(
+                                if (miniAppPull.ready(fraction)) "松开进入应用广场" else "松开刷新",
+                                style = IosTheme.type.footnote,
+                                color = IosTheme.colors.label,
+                            )
+                        }
+                    }
                 }
             }
         },
@@ -703,7 +772,8 @@ fun TopicListScreen(
                 var lastApplyIncomingClickTime by remember { mutableLongStateOf(0L) }
 
                 AnimatedVisibility(
-                    visible = effectiveState.incomingTopicIds.isNotEmpty(),
+                    visible = effectiveState.incomingTopicIds.isNotEmpty() &&
+                        pullState.distanceFraction == 0f && !effectiveState.refreshing,
                     enter = fadeIn(tween(200)) + slideInVertically(tween(250)) { -it },
                     exit = fadeOut(tween(150)) + slideOutVertically(tween(200)) { -it },
                     modifier = Modifier

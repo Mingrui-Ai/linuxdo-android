@@ -33,7 +33,7 @@ fun EnhancedAboutDialog(onDismiss: () -> Unit) {
         containerColor = IosTheme.colors.card,
         titleContentColor = IosTheme.colors.label,
         textContentColor = IosTheme.colors.label,
-        title = { Text(if (thirdParty) "第三方许可证" else "LinuxDo 增强版 ${BuildConfig.VERSION_NAME}") },
+        title = { Text(if (thirdParty) "第三方许可证" else "${context.getString(org.linuxdo.android.R.string.app_name)} ${BuildConfig.VERSION_NAME}") },
         text = {
             LazyColumn(modifier = Modifier.heightIn(max = 440.dp)) {
                 items(paragraphs) { paragraph -> SelectionContainer { Text(paragraph + "\n") } }

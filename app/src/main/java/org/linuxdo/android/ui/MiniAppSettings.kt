@@ -12,6 +12,8 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.dp
 import org.linuxdo.android.App
 import org.linuxdo.android.data.MiniAppOpenMode
@@ -35,11 +37,42 @@ internal fun rememberMiniAppOpenMode(): MiniAppOpenMode {
 }
 
 @Composable
+internal fun rememberMiniAppHomePullEnabled(): Boolean {
+    val preferences = (LocalContext.current.applicationContext as App).container.preferences
+    val store = remember(preferences) { MiniAppPreferences(preferences) }
+    var enabled by remember(store) { mutableStateOf(store.homePullEnabled()) }
+    DisposableEffect(preferences, store) {
+        val listener = SharedPreferences.OnSharedPreferenceChangeListener { _, key ->
+            if (key == null || key == MiniAppPreferences.HOME_PULL_KEY) enabled = store.homePullEnabled()
+        }
+        preferences.registerOnSharedPreferenceChangeListener(listener)
+        enabled = store.homePullEnabled()
+        onDispose { preferences.unregisterOnSharedPreferenceChangeListener(listener) }
+    }
+    return enabled
+}
+
+@Composable
 internal fun MiniAppSettings() {
     val mode = rememberMiniAppOpenMode()
+    val homePullEnabled = rememberMiniAppHomePullEnabled()
     val preferences = (LocalContext.current.applicationContext as App).container.preferences
     val store = remember(preferences) { MiniAppPreferences(preferences) }
     Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+        IosGroupCard {
+            Row(Modifier.fillMaxWidth().padding(16.dp), verticalAlignment = Alignment.CenterVertically) {
+                Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                    Text("首页下拉进入应用广场", style = IosTheme.type.body, color = IosTheme.colors.label)
+                    Text("列表回到顶部后继续下拉，看到提示后松手进入；普通下拉仍刷新。默认关闭。",
+                        style = IosTheme.type.footnote, color = IosTheme.colors.secondaryLabel)
+                }
+                Spacer(Modifier.width(12.dp))
+                IosSwitch(homePullEnabled, store::setHomePullEnabled,
+                    Modifier.semantics { contentDescription = "首页下拉进入应用广场" })
+            }
+        }
+        Text("小程序打开方式", style = IosTheme.type.footnote, color = IosTheme.colors.secondaryLabel,
+            modifier = Modifier.padding(horizontal = 20.dp))
         IosGroupCard {
             Column(Modifier.selectableGroup()) {
                 MiniAppOpenMode.entries.forEachIndexed { index, option ->
