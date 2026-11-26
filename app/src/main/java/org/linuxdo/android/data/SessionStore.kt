@@ -1072,7 +1072,7 @@ class SessionStore(context: Context) : org.linuxdo.android.net.DohConfigProvider
                 root.keys().forEach { key ->
                     val value = root.optJSONObject(key) ?: return@forEach
                     val order = TopicSortOrder.fromName(value.optString("order"))
-                    put(key, TopicListSort(order, order != TopicSortOrder.Default && value.optBoolean("ascending")))
+                    put(key, TopicListSort(order, order.supportsAscending && value.optBoolean("ascending")))
                 }
             }
         }.getOrDefault(emptyMap())

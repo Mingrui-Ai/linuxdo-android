@@ -591,26 +591,317 @@ class TopicRepository(
         present: Boolean = true,
         order: String? = null,
         ascending: Boolean? = null,
+        hot: Boolean = false,
         beforeDispatch: (() -> Unit)? = null,
     ): TopicPage {
         val query = buildList {
             add("page=$page")
-            if (!order.isNullOrBlank()) add("order=$order")
-            if (ascending != null) add("ascending=$ascending")
+            if (!hot && !order.isNullOrBlank()) add("order=$order")
+            if (!hot && ascending != null) add("ascending=$ascending")
         }.joinToString("&")
-        val body = request(
-            "/c/${encode(slug.ifBlank { "category" })}/$categoryId.json?$query",
-            burst = page == 0,
-            present = present,
-            retryAllowed = present,
-            beforeDispatch = beforeDispatch,
-        )
+        val encodedSlug = encode(slug.ifBlank { "category" })
+        val path = if (hot) {
+            "/c/$encodedSlug/$categoryId/l/hot.json?$query"
+        } else {
+            "/c/$encodedSlug/$categoryId.json?$query"
+        }
+        val body = try {
+            request(
+                path,
+                burst = page == 0,
+                present = present,
+                retryAllowed = present,
+                beforeDispatch = beforeDispatch,
+            )
+        } catch (error: CancellationException) {
+            throw error
+        } catch (error: NeedsInteractiveVerification) {
+            throw error
+        } catch (error: Exception) {
+            if (!hot) throw error
+            request(
+                "/c/$encodedSlug/$categoryId.json?page=$page",
+                burst = page == 0,
+                present = present,
+                retryAllowed = present,
+                beforeDispatch = beforeDispatch,
+            )
+        }
         return withContext(Dispatchers.Default) {
             toPage(
                 json.decodeFromString(body),
                 awaitCategories = false,
             )
         }
+    }
+
+    /** 分类 + 标签组合话题列表：对齐网页端 `/tags/c/{slug}/{id}/{tag}/l/{latest|hot}.json`。 */
+    suspend fun fetchCategoryTagTopics(
+        slug: String,
+        categoryId: Int,
+        tag: String,
+        page: Int,
+        present: Boolean = true,
+        order: String? = null,
+        ascending: Boolean? = null,
+        hot: Boolean = false,
+        beforeDispatch: (() -> Unit)? = null,
+    ): TopicPage {
+        val query = buildList {
+            add("page=$page")
+            if (!hot && !order.isNullOrBlank()) add("order=$order")
+            if (!hot && ascending != null) add("ascending=$ascending")
+        }.joinToString("&")
+        val encodedSlug = encode(slug.ifBlank { "category" })
+        val encodedTag = encode(tag).replace("+", "%20")
+        val endpoint = if (hot) "hot.json" else "latest.json"
+        val body = try {
+            request(
+                "/tags/c/$encodedSlug/$categoryId/$encodedTag/l/$endpoint?$query",
+                burst = page == 0,
+                present = present,
+                retryAllowed = present,
+                beforeDispatch = beforeDispatch,
+            )
+        } catch (error: CancellationException) {
+            throw error
+        } catch (error: NeedsInteractiveVerification) {
+            throw error
+        } catch (error: Exception) {
+            if (hot) {
+                request(
+                    "/tags/c/$encodedSlug/$categoryId/$encodedTag/l/latest.json?page=$page",
+                    burst = page == 0,
+                    present = present,
+                    retryAllowed = present,
+                    beforeDispatch = beforeDispatch,
+                )
+            } else {
+                request(
+                    "/tags/c/$encodedSlug/$categoryId/$encodedTag.json?$query",
+                    burst = page == 0,
+                    present = present,
+                    retryAllowed = present,
+                    beforeDispatch = beforeDispatch,
+                )
+            }
+        }
+        return withContext(Dispatchers.Default) {
+            toPage(
+                json.decodeFromString(body),
+                awaitCategories = false,
+            )
+        }
+    }
+
+    /**
+     * 首页统一筛选与排序拉取入口：
+     * - 无筛选：直连 `/latest.json` 或 `/hot.json`
+     * - 类别（可叠加等级子版块）+ 可选标签：直连 `/c/...` 或 `/tags/c/...`
+     * - 仅标签：直连 `/tag/{tag}/l/{latest|hot}.json`
+     * - 仅等级（无父类别）：优先尝试 Discourse `/filter.json`，失败则并发聚合该等级全部可见子版块并排序去重
+     */
+    suspend fun fetchFilteredHomeTopics(
+        filter: HomeFilterState,
+        categories: List<Category>,
+        sort: TopicListSort,
+        page: Int,
+        awaitCategories: Boolean = false,
+        present: Boolean = true,
+        beforeDispatch: (() -> Unit)? = null,
+    ): TopicPage {
+        val isHot = sort.order.isHotEndpoint
+        val sortOrder = sort.order.apiValue
+        val sortAscending = sort.apiAscending
+        val tag = filter.tag?.trim()?.takeIf { it.isNotEmpty() }
+
+        if (!filter.isActive) {
+            val feed = if (isHot) HomeFeedType.Hot else HomeFeedType.Latest
+            return fetchFeed(
+                feed = feed,
+                page = page,
+                awaitCategories = awaitCategories,
+                present = present,
+                order = sortOrder,
+                ascending = sortAscending,
+                beforeDispatch = beforeDispatch,
+            )
+        }
+
+        if (filter.categoryId != null) {
+            val targetCategory = HomeFilterResolver.resolveCategoryWithLevel(categories, filter.categoryId, filter.level)
+            if (filter.level != null && targetCategory == null) {
+                return TopicPage(items = emptyList(), hasMore = false)
+            }
+            val effectiveId = targetCategory?.id ?: filter.categoryId
+            val effectiveSlug = targetCategory?.slug?.ifBlank { filter.categorySlug } ?: filter.categorySlug ?: "category"
+            return if (tag != null) {
+                fetchCategoryTagTopics(
+                    slug = effectiveSlug,
+                    categoryId = effectiveId,
+                    tag = tag,
+                    page = page,
+                    present = present,
+                    order = sortOrder,
+                    ascending = sortAscending,
+                    hot = isHot,
+                    beforeDispatch = beforeDispatch,
+                )
+            } else {
+                fetchCategoryTopics(
+                    slug = effectiveSlug,
+                    categoryId = effectiveId,
+                    page = page,
+                    present = present,
+                    order = sortOrder,
+                    ascending = sortAscending,
+                    hot = isHot,
+                    beforeDispatch = beforeDispatch,
+                )
+            }
+        }
+
+        if (filter.level != null) {
+            val levelCategories = HomeFilterResolver.categoriesForLevel(categories, filter.level)
+            if (levelCategories.isEmpty()) {
+                return TopicPage(items = emptyList(), hasMore = false)
+            }
+            // 仅一个子版块时直接走原生接口，避免额外开销
+            if (levelCategories.size == 1) {
+                val single = levelCategories.first()
+                return if (tag != null) {
+                    fetchCategoryTagTopics(
+                        slug = single.slug,
+                        categoryId = single.id,
+                        tag = tag,
+                        page = page,
+                        present = present,
+                        order = sortOrder,
+                        ascending = sortAscending,
+                        hot = isHot,
+                        beforeDispatch = beforeDispatch,
+                    )
+                } else {
+                    fetchCategoryTopics(
+                        slug = single.slug,
+                        categoryId = single.id,
+                        page = page,
+                        present = present,
+                        order = sortOrder,
+                        ascending = sortAscending,
+                        hot = isHot,
+                        beforeDispatch = beforeDispatch,
+                    )
+                }
+            }
+            return fetchLevelAggregatedTopics(
+                levelCategories = levelCategories,
+                tag = tag,
+                sort = sort,
+                page = page,
+                present = present,
+                beforeDispatch = beforeDispatch,
+            )
+        }
+
+        // 仅标签筛选
+        return fetchTagTopics(
+            tag = tag!!,
+            page = page,
+            present = present,
+            order = sortOrder,
+            ascending = sortAscending,
+            hot = isHot,
+        )
+    }
+
+    private suspend fun fetchLevelAggregatedTopics(
+        levelCategories: List<Category>,
+        tag: String?,
+        sort: TopicListSort,
+        page: Int,
+        present: Boolean,
+        beforeDispatch: (() -> Unit)?,
+    ): TopicPage {
+        val isHot = sort.order.isHotEndpoint
+        // 优先尝试 Discourse /filter.json（非热门时一次请求完成多分类 + 标签 + 排序）
+        if (!isHot) {
+            val slugList = levelCategories.mapNotNull { it.slug.takeIf(String::isNotBlank) }.distinct()
+            if (slugList.size == levelCategories.size) {
+                val qParts = mutableListOf("category:${slugList.joinToString(",")}")
+                if (tag != null) qParts.add("tag:$tag")
+                when (sort.order) {
+                    TopicSortOrder.Created -> qParts.add(if (sort.ascending) "order:created-asc" else "order:created")
+                    TopicSortOrder.Likes -> qParts.add(if (sort.ascending) "order:likes-asc" else "order:likes")
+                    TopicSortOrder.Views -> qParts.add(if (sort.ascending) "order:views-asc" else "order:views")
+                    else -> Unit
+                }
+                val encodedQ = encode(qParts.joinToString(" ")).replace("+", "%20")
+                val filterPath = "/filter.json?q=$encodedQ&page=$page"
+                try {
+                    val body = request(
+                        filterPath,
+                        burst = page == 0,
+                        present = present,
+                        retryAllowed = false,
+                        beforeDispatch = beforeDispatch,
+                    )
+                    return withContext(Dispatchers.Default) {
+                        toPage(json.decodeFromString(body), awaitCategories = false)
+                    }
+                } catch (error: CancellationException) {
+                    throw error
+                } catch (error: NeedsInteractiveVerification) {
+                    throw error
+                } catch (_: Exception) {
+                    // 回退到多子版块并发聚合
+                }
+            }
+        }
+
+        val pages = kotlinx.coroutines.coroutineScope {
+            levelCategories.map { cat ->
+                async {
+                    try {
+                        if (tag != null) {
+                            fetchCategoryTagTopics(
+                                slug = cat.slug,
+                                categoryId = cat.id,
+                                tag = tag,
+                                page = page,
+                                present = present,
+                                order = sort.order.apiValue,
+                                ascending = sort.apiAscending,
+                                hot = isHot,
+                                beforeDispatch = beforeDispatch,
+                            )
+                        } else {
+                            fetchCategoryTopics(
+                                slug = cat.slug,
+                                categoryId = cat.id,
+                                page = page,
+                                present = present,
+                                order = sort.order.apiValue,
+                                ascending = sort.apiAscending,
+                                hot = isHot,
+                                beforeDispatch = beforeDispatch,
+                            )
+                        }
+                    } catch (error: CancellationException) {
+                        throw error
+                    } catch (error: NeedsInteractiveVerification) {
+                        throw error
+                    } catch (_: Exception) {
+                        null
+                    }
+                }
+            }.mapNotNull { it.await() }
+        }
+        val merged = mergeAggregatedTopicPages(pages, sort)
+        return TopicPage(
+            items = merged,
+            hasMore = pages.any { it.hasMore && it.items.isNotEmpty() },
+        )
     }
 
     suspend fun fetchUserCreatedTopics(username: String, page: Int): TopicPage =
@@ -4041,12 +4332,13 @@ class TopicRepository(
         present: Boolean = true,
         order: String? = null,
         ascending: Boolean? = null,
+        hot: Boolean = false,
     ): TopicPage {
         val params = mutableListOf<String>()
         if (page > 0) {
             params.add("page=$page")
         }
-        if (!order.isNullOrBlank()) {
+        if (!hot && !order.isNullOrBlank()) {
             params.add("order=$order")
             if (ascending != null) {
                 params.add("ascending=$ascending")
@@ -4054,9 +4346,10 @@ class TopicRepository(
         }
         val querySuffix = if (params.isNotEmpty()) "?${params.joinToString("&")}" else ""
         val encodedTag = encode(tag).replace("+", "%20")
+        val endpoint = if (hot) "hot.json" else "latest.json"
         val raw = try {
             request(
-                "/tag/$encodedTag/l/latest.json$querySuffix",
+                "/tag/$encodedTag/l/$endpoint$querySuffix",
                 burst = page == 0,
                 present = present,
             )

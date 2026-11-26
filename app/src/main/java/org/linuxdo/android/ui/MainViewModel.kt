@@ -893,12 +893,15 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         removedSavedTopics = emptyList()
     }
 
-    private val initialHomeFeed = HomeFeedType.fromName(store.homeFeed())
+    private val initialHomeFeed = HomeFeedType.Latest
     private val _feedStates = MutableStateFlow<Map<HomeFeedType, TopicListUiState>>(emptyMap())
     val feedStates = _feedStates.asStateFlow()
+    private val _homeFilter = MutableStateFlow(org.linuxdo.android.data.HomeFilterState())
+    val homeFilter: StateFlow<org.linuxdo.android.data.HomeFilterState> = _homeFilter.asStateFlow()
     private val _topicListSorts = MutableStateFlow(store.getTopicListSorts())
     val topicListSorts = _topicListSorts.asStateFlow()
     private fun listSort(key: String) = _topicListSorts.value[key] ?: TopicListSort()
+    private fun currentHomeSortKey(): String = _homeFilter.value.sortKey()
     private val _floatingBallEnabled = MutableStateFlow(store.isFloatingBallEnabled())
     val floatingBallEnabled: StateFlow<Boolean> = _floatingBallEnabled.asStateFlow()
     private val _floatingBallActions = MutableStateFlow(store.getFloatingBallActions())
@@ -7239,6 +7242,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 val sortAscending = sort.apiAscending
                 val freshPage = repository.fetchCategoryTopics(
                     slug, categoryId, 0, present = false, order = sortOrder, ascending = sortAscending,
+                    hot = sort.order.isHotEndpoint,
                     beforeDispatch = ::checkBeforeDispatch,
                 )
                 ApiQuotaPool.INCOMING_PROBE.onSuccess()
@@ -7269,11 +7273,15 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             } else {
                 val currentFeedState = _feedStates.value[feed] ?: return
                 if (currentFeedState.items.isEmpty()) return
-                val sort = listSort(TopicListKey.feed(feed))
-                val sortOrder = sort.order.apiValue
-                val sortAscending = sort.apiAscending
-                val freshPage = repository.fetchFeed(
-                    feed, 0, awaitCategories = false, present = false, order = sortOrder, ascending = sortAscending,
+                val filter = _homeFilter.value
+                val sort = listSort(filter.sortKey())
+                val freshPage = repository.fetchFilteredHomeTopics(
+                    filter = filter,
+                    categories = _categories.value.items.ifEmpty { repository.cachedCategoryList().orEmpty() },
+                    sort = sort,
+                    page = 0,
+                    awaitCategories = false,
+                    present = false,
                     beforeDispatch = ::checkBeforeDispatch,
                 )
                 ApiQuotaPool.INCOMING_PROBE.onSuccess()
@@ -7400,7 +7408,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         val key = when {
             currentCategoryId != null -> TopicListKey.category(currentCategoryId)
             currentTag != null -> TopicListKey.tag(currentTag)
-            else -> TopicListKey.feed(feed)
+            else -> currentHomeSortKey()
         }
         val current = listSort(key)
         val next = current.select(order)
@@ -7431,6 +7439,72 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 refreshLatest()
             }
         }
+    }
+
+    /** 更新首页筛选状态（类别 / LV 等级 / 标签），取消在途首页请求并立即按新条件刷新。 */
+    fun updateHomeFilter(next: org.linuxdo.android.data.HomeFilterState) {
+        val categories = _categories.value.items.ifEmpty { repository.cachedCategoryList().orEmpty() }
+        val normalized = if (next.categoryId != null && next.level != null && categories.isNotEmpty()) {
+            val supported = org.linuxdo.android.data.HomeFilterResolver.supportedLevelsForCategory(categories, next.categoryId)
+            if (next.level !in supported) next.copy(level = null) else next
+        } else next
+        if (normalized == _homeFilter.value) return
+        _homeFilter.value = normalized
+        incomingProbeGeneration++
+        val feed = _state.value.homeFeed
+        loadingFeeds.remove(feed)?.cancel()
+        val retained = (_feedStates.value[feed] ?: _state.value.latest).copy(
+            refreshing = false,
+            loadingMore = false,
+            needsRefresh = true,
+            pendingPage = null,
+            incomingTopicIds = emptySet(),
+            highlightedTopicIds = emptySet(),
+            error = null,
+        )
+        _feedStates.update { it + (feed to retained) }
+        _state.update { it.copy(latest = retained) }
+        if (normalized.level != null && categories.isEmpty() && !_categories.value.loading) {
+            loadCategories()
+        }
+        viewModelScope.launch { loadFeed(feed, page = 0, pullRefresh = true) }
+    }
+
+    fun selectHomeCategory(category: Category?) {
+        val current = _homeFilter.value
+        if (category == null) {
+            updateHomeFilter(current.copy(categoryId = null, categorySlug = null, categoryName = null))
+            return
+        }
+        val categories = _categories.value.items.ifEmpty { repository.cachedCategoryList().orEmpty() }
+        val extractedLevel = org.linuxdo.android.data.HomeFilterResolver.extractLevel(category)
+        val group = org.linuxdo.android.data.compactCategoryGroups(categories).firstOrNull { (parent, levels) ->
+            parent.id == category.id || levels.any { it.id == category.id }
+        }
+        val parent = group?.first ?: category
+        val nextLevel = extractedLevel ?: current.level
+        updateHomeFilter(
+            current.copy(
+                categoryId = parent.id,
+                categorySlug = parent.slug,
+                categoryName = org.linuxdo.android.data.HomeFilterResolver.baseCategoryName(parent.name),
+                level = nextLevel,
+            ),
+        )
+    }
+
+    fun selectHomeLevel(level: Int?) {
+        updateHomeFilter(_homeFilter.value.copy(level = level))
+    }
+
+    fun selectHomeTag(tag: String?) {
+        val clean = tag?.trim()?.takeIf { it.isNotEmpty() }
+        updateHomeFilter(_homeFilter.value.copy(tag = clean))
+    }
+
+    fun clearHomeFilters() {
+        if (!_homeFilter.value.isActive) return
+        updateHomeFilter(org.linuxdo.android.data.HomeFilterState())
     }
 
     fun setFloatingBallEnabled(enabled: Boolean) {
@@ -7601,7 +7675,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 val sort = listSort(TopicListKey.category(id))
                 val sortOrder = sort.order.apiValue
                 val sortAscending = sort.apiAscending
-                val result = repository.fetchCategoryTopics(slug, id, page, order = sortOrder, ascending = sortAscending)
+                val result = repository.fetchCategoryTopics(slug, id, page, order = sortOrder, ascending = sortAscending, hot = sort.order.isHotEndpoint)
                 ExcerptCache.loadBatchFromStore(result.items.map { it.topic.id })
                 if (!isActive || accountGeneration != accountScopeGeneration) return@launch
                 // 对齐通知分页：防死循环检测页码推进，而非条目增加。高频重叠由页码单调递增穿透。
@@ -8550,7 +8624,7 @@ fun openTopicSearch(topicId: Long, title: String) {
                 val sort = listSort(TopicListKey.tag(tag))
                 val sortOrder = sort.order.apiValue
                 val sortAscending = sort.apiAscending
-                val result = repository.fetchTagTopics(tag, page, order = sortOrder, ascending = sortAscending)
+                val result = repository.fetchTagTopics(tag, page, order = sortOrder, ascending = sortAscending, hot = sort.order.isHotEndpoint)
                 ExcerptCache.loadBatchFromStore(result.items.map { it.topic.id })
                 if (!isActive || accountGeneration != accountScopeGeneration) return@launch
                 val items = if (more) (previous.items + result.items).distinctBy { it.topic.id } else result.items
@@ -9371,6 +9445,7 @@ fun openTopicSearch(topicId: Long, title: String) {
         _topicCreator.value = TopicCreatorUiState()
         _drafts.value = DraftsUiState()
         _feedStates.value = emptyMap()
+        _homeFilter.value = org.linuxdo.android.data.HomeFilterState()
         _chat.value = ChatUiState()
         _followList.value = FollowUiState()
         _blockedUsers.value = emptyList()
@@ -9790,10 +9865,23 @@ fun openTopicSearch(topicId: Long, title: String) {
         }
 
         try {
-            val sort = listSort(TopicListKey.feed(feed))
-            val sortOrder = sort.order.apiValue
-            val sortAscending = sort.apiAscending
-            val result = repository.fetchFeed(feed, page, awaitCategories = false, order = sortOrder, ascending = sortAscending)
+            val filter = _homeFilter.value
+            val sort = listSort(filter.sortKey())
+            var categoriesList = _categories.value.items.ifEmpty { repository.cachedCategoryList().orEmpty() }
+            if (filter.level != null && categoriesList.isEmpty()) {
+                categoriesList = runCatching { repository.fetchCategories() }.getOrDefault(emptyList())
+                if (categoriesList.isNotEmpty() && _categories.value.items.isEmpty()) {
+                    _categories.update { it.copy(items = categoriesList, loaded = true, loading = false) }
+                }
+            }
+            val result = repository.fetchFilteredHomeTopics(
+                filter = filter,
+                categories = categoriesList,
+                sort = sort,
+                page = page,
+                awaitCategories = false,
+                present = true,
+            )
             if (!isCurrent()) return
             if (page == 0 && pageJobs["sync:categories"]?.isActive != true && repository.cachedCategoryList() == null) {
                 syncCategoriesInBackground()

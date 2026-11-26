@@ -209,6 +209,21 @@ fun TopicListScreen(
     trailing: @Composable () -> Unit = {},
     showHeaderActions: Boolean = false,
     homeLeading: @Composable () -> Unit = {},
+    homeFilter: org.linuxdo.android.data.HomeFilterState? = null,
+    homeCategories: List<Category> = emptyList(),
+    homeCategoriesLoading: Boolean = false,
+    homeCategoryOrder: List<Long> = emptyList(),
+    homeTags: List<org.linuxdo.android.data.DiscourseTag> = emptyList(),
+    homeTagsLoading: Boolean = false,
+    homeSearchedTags: List<org.linuxdo.android.data.DiscourseTag> = emptyList(),
+    homeTagSearchQuery: String = "",
+    onSelectHomeCategory: ((Category?) -> Unit)? = null,
+    onSelectHomeLevel: ((Int?) -> Unit)? = null,
+    onSelectHomeTag: ((String?) -> Unit)? = null,
+    onClearHomeFilters: (() -> Unit)? = null,
+    onEnsureHomeCategories: (() -> Unit)? = null,
+    onEnsureHomeTags: (() -> Unit)? = null,
+    onHomeTagSearchQueryChange: ((String) -> Unit)? = null,
     currentFeed: HomeFeedType? = null,
     miniAppHomePullEnabled: Boolean = false,
     onOpenMiniApps: (() -> Unit)? = null,
@@ -484,8 +499,10 @@ fun TopicListScreen(
     }
 
     var rawDragOffset by remember { mutableFloatStateOf(0f) }
+    val useHomeFilterHeader = homeFilter != null && onSelectHomeCategory != null &&
+        onSelectHomeLevel != null && onSelectHomeTag != null && onClearHomeFilters != null
     val homeFeedSwipeModifier = Modifier.tabSwipeGesture(
-        enabled = active && currentFeed != null && onFeedSelect != null,
+        enabled = !useHomeFilterHeader && active && currentFeed != null && onFeedSelect != null,
         onStart = {
             settleJob?.cancel()
             rawDragOffset = feedOffset
@@ -660,7 +677,7 @@ fun TopicListScreen(
                 Box(
                     Modifier
                         .align(Alignment.TopCenter)
-                        .padding(top = IosMetrics.navBarHeight + 10.dp)
+                        .padding(top = if (useHomeFilterHeader) 98.dp else IosMetrics.navBarHeight + 10.dp)
                         .graphicsLayer {
                             alpha = if (effectiveState.refreshing) 1f else min(1f, fraction * 1.4f)
                         },
@@ -697,19 +714,68 @@ fun TopicListScreen(
             trailing = {
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     trailing()
-                    if (showHeaderActions) TopicListHeaderActions(sortOrder, sortAscending,
-                        onSort = { showSortDialog = true }, onSearch = onNavigateToSearch)
+                    if (showHeaderActions) TopicListHeaderActions(
+                        order = sortOrder,
+                        ascending = sortAscending,
+                        onSelectOrder = { order ->
+                            scope.launch { listState.scrollToItem(0) }
+                            onSortChange(order)
+                        },
+                        onSearch = onNavigateToSearch,
+                    )
                 }
             },
-            pageOffsetXProvider = if (effectiveFeed != null) ({ feedOffset }) else null,
-            secondaryListState = secondaryListState,
-            secondaryPageOffsetXProvider = if (incomingFeed != null) {
+            stickySubHeader = if (useHomeFilterHeader) {
+                {
+                    HomeTopFilterHeader(
+                        topBarVisible = org.linuxdo.android.ui.design.LocalListBars.current?.value != false,
+                        filter = homeFilter!!,
+                        sortOrder = sortOrder,
+                        sortAscending = sortAscending,
+                        categories = homeCategories,
+                        categoriesLoading = homeCategoriesLoading,
+                        categoryOrder = homeCategoryOrder,
+                        tags = homeTags,
+                        tagsLoading = homeTagsLoading,
+                        searchedTags = homeSearchedTags,
+                        tagSearchQuery = homeTagSearchQuery,
+                        leading = homeLeading,
+                        onSelectCategory = { cat ->
+                            scope.launch { listState.scrollToItem(0) }
+                            onSelectHomeCategory!!.invoke(cat)
+                        },
+                        onSelectLevel = { lv ->
+                            scope.launch { listState.scrollToItem(0) }
+                            onSelectHomeLevel!!.invoke(lv)
+                        },
+                        onSelectTag = { tg ->
+                            scope.launch { listState.scrollToItem(0) }
+                            onSelectHomeTag!!.invoke(tg)
+                        },
+                        onClearFilters = {
+                            scope.launch { listState.scrollToItem(0) }
+                            onClearHomeFilters!!.invoke()
+                        },
+                        onEnsureCategories = { onEnsureHomeCategories?.invoke() },
+                        onEnsureTags = { onEnsureHomeTags?.invoke() },
+                        onTagSearchQueryChange = { onHomeTagSearchQueryChange?.invoke(it) },
+                        onSortChange = { order ->
+                            scope.launch { listState.scrollToItem(0) }
+                            onSortChange(order)
+                        },
+                        onSearch = onNavigateToSearch,
+                    )
+                }
+            } else null,
+            pageOffsetXProvider = if (!useHomeFilterHeader && effectiveFeed != null) ({ feedOffset }) else null,
+            secondaryListState = if (useHomeFilterHeader) null else secondaryListState,
+            secondaryPageOffsetXProvider = if (!useHomeFilterHeader && incomingFeed != null) {
                 {
                     val offset = feedOffset
                     if (offset < 0f) containerWidthPx + offset else -containerWidthPx + offset
                 }
             } else null,
-            secondaryContent = if (previewFeed != null && incomingFeedState != null) {
+            secondaryContent = if (!useHomeFilterHeader && previewFeed != null && incomingFeedState != null) {
                 {
                     renderFeedItems(
                         pageState = incomingFeedState,
@@ -720,6 +786,7 @@ fun TopicListScreen(
                 }
             } else null,
             customLargeTitle = when {
+                useHomeFilterHeader -> null
                 effectiveFeed != null && onFeedSelect != null -> {
                     {
                         SectionHeader(
@@ -731,8 +798,15 @@ fun TopicListScreen(
                             },
                             actionWidth = if (showHeaderActions) 88.dp else 48.dp,
                             actions = {
-                                if (showHeaderActions) TopicListHeaderActions(sortOrder, sortAscending,
-                                    onSort = { showSortDialog = true }, onSearch = onNavigateToSearch)
+                                if (showHeaderActions) TopicListHeaderActions(
+                                    order = sortOrder,
+                                    ascending = sortAscending,
+                                    onSelectOrder = { order ->
+                                        scope.launch { listState.scrollToItem(0) }
+                                        onSortChange(order)
+                                    },
+                                    onSearch = onNavigateToSearch,
+                                )
                                 else trailing()
                             },
                             leading = homeLeading,
@@ -778,7 +852,7 @@ fun TopicListScreen(
                     exit = fadeOut(tween(150)) + slideOutVertically(tween(200)) { -it },
                     modifier = Modifier
                         .align(Alignment.TopCenter)
-                        .padding(top = if (onBack == null) 58.dp else IosMetrics.navBarHeight + 8.dp),
+                        .padding(top = if (useHomeFilterHeader) 98.dp else if (onBack == null) 58.dp else IosMetrics.navBarHeight + 8.dp),
                 ) {
                     var bannerAlphaTarget by remember { mutableFloatStateOf(1f) }
                     LaunchedEffect(listState) {
@@ -863,7 +937,7 @@ fun TopicListScreen(
                         onSelectOrder = { order ->
                             scope.launch { listState.scrollToItem(0) }
                             onSortChange(order)
-                            if (order == TopicSortOrder.Default || order != sortOrder) {
+                            if (!order.supportsAscending || order != sortOrder) {
                                 showSortDialog = false
                             }
                         },
@@ -971,17 +1045,33 @@ private fun CreateTopicFab(onClick: () -> Unit) {
 
 @Composable
 private fun TopicListHeaderActions(
-    order: TopicSortOrder, ascending: Boolean, onSort: () -> Unit, onSearch: (() -> Unit)?,
+    order: TopicSortOrder,
+    ascending: Boolean,
+    onSelectOrder: (TopicSortOrder) -> Unit,
+    onSearch: (() -> Unit)?,
 ) {
+    var expanded by remember { mutableStateOf(false) }
     Row(verticalAlignment = Alignment.CenterVertically) {
-        TopicSortButton(order, ascending, onSort, floating = false)
+        Box {
+            TopicSortDynamicButton(order, ascending, onClick = { expanded = true }, floating = false)
+            TopicSortDropdownMenu(
+                expanded = expanded,
+                currentOrder = order,
+                ascending = ascending,
+                onDismiss = { expanded = false },
+                onSelectOrder = { selected ->
+                    expanded = false
+                    onSelectOrder(selected)
+                },
+            )
+        }
         if (onSearch != null) IconButton(onClick = onSearch, modifier = Modifier.size(44.dp)) {
             Icon(Icons.Default.Search, contentDescription = "搜索", tint = IosTheme.colors.label)
         }
     }
 }
 
-/** 复用同一双向箭头与排序操作；顶栏模式使用普通图标按钮外观。 */
+/** 复用同一语义排序图标与操作；悬浮模式使用圆形卡片外观。 */
 @Composable
 private fun TopicSortButton(
     sortOrder: TopicSortOrder,
@@ -989,161 +1079,26 @@ private fun TopicSortButton(
     onClick: () -> Unit,
     floating: Boolean = true,
 ) {
-    val isDefault = sortOrder == TopicSortOrder.Default
-    val activeColor = IosTheme.colors.accent
-    val tintColor = if (!floating) IosTheme.colors.label else if (!isDefault) activeColor else IosTheme.colors.secondaryLabel
-    val bgBase = IosTheme.colors.card.copy(alpha = 0.94f)
-    val borderColor = if (isDefault) IosTheme.colors.separator.copy(alpha = 0.4f) else activeColor.copy(alpha = 0.45f)
-
-    Box(
-        Modifier
-            .size(44.dp)
-            .then(if (floating) Modifier.shadow(elevation = 3.dp, shape = CircleShape, clip = false) else Modifier)
-            .clip(CircleShape)
-            .then(if (floating) Modifier.background(bgBase).border(1.dp, borderColor, CircleShape) else Modifier)
-            .clickable(role = Role.Button, onClick = onClick)
-            .semantics { contentDescription = "列表排序：${sortOrder.label}" +
-                if (isDefault) "" else if (ascending) "，升序" else "，降序" },
-        contentAlignment = Alignment.Center,
-    ) {
-        Canvas(Modifier.size(19.dp)) {
-            scale(size.width / 24f, size.height / 24f, pivot = Offset.Zero) {
-                val stroke = Stroke(width = 2.1f, cap = StrokeCap.Round, join = StrokeJoin.Round)
-                // 左侧向上箭头 (x=8)
-                drawLine(tintColor, Offset(8f, 18.5f), Offset(8f, 5.5f), strokeWidth = 2.1f, cap = StrokeCap.Round)
-                val leftArrow = Path().apply {
-                    moveTo(4.5f, 9.5f)
-                    lineTo(8f, 5.5f)
-                    lineTo(11.5f, 9.5f)
-                }
-                drawPath(leftArrow, tintColor, style = stroke)
-
-                // 右侧向下箭头 (x=16)
-                drawLine(tintColor, Offset(16f, 5.5f), Offset(16f, 18.5f), strokeWidth = 2.1f, cap = StrokeCap.Round)
-                val rightArrow = Path().apply {
-                    moveTo(12.5f, 14.5f)
-                    lineTo(16f, 18.5f)
-                    lineTo(19.5f, 14.5f)
-                }
-                drawPath(rightArrow, tintColor, style = stroke)
-            }
-        }
-    }
+    TopicSortDynamicButton(
+        sortOrder = sortOrder,
+        ascending = ascending,
+        onClick = onClick,
+        floating = floating,
+    )
 }
 
-/** 排序选项图标绘制 */
+/** 排序选项图标绘制：直接复用新的 5 项动态语义图标。 */
 @Composable
 private fun TopicSortIcon(
     order: TopicSortOrder,
     tint: Color,
     modifier: Modifier = Modifier.size(18.dp),
 ) {
-    Canvas(modifier) {
-        scale(size.width / 24f, size.height / 24f, pivot = Offset.Zero) {
-            val stroke = Stroke(width = 1.9f, cap = StrokeCap.Round, join = StrokeJoin.Round)
-            when (order) {
-                TopicSortOrder.Default -> {
-                    // 三条横线 ≡
-                    drawLine(tint, Offset(4f, 6.5f), Offset(20f, 6.5f), strokeWidth = 2f, cap = StrokeCap.Round)
-                    drawLine(tint, Offset(4f, 12f), Offset(16f, 12f), strokeWidth = 2f, cap = StrokeCap.Round)
-                    drawLine(tint, Offset(4f, 17.5f), Offset(12f, 17.5f), strokeWidth = 2f, cap = StrokeCap.Round)
-                }
-                TopicSortOrder.Activity -> {
-                    // 逆时针时钟刷新 ↺
-                    drawArc(
-                        color = tint,
-                        startAngle = -210f,
-                        sweepAngle = 300f,
-                        useCenter = false,
-                        topLeft = Offset(4.5f, 4.5f),
-                        size = androidx.compose.ui.geometry.Size(15f, 15f),
-                        style = stroke,
-                    )
-                    val arrow = Path().apply {
-                        moveTo(1.5f, 9.5f)
-                        lineTo(4.5f, 6.5f)
-                        lineTo(8f, 9.5f)
-                    }
-                    drawPath(arrow, tint, style = stroke)
-                    drawLine(tint, Offset(12f, 12f), Offset(12f, 8.5f), strokeWidth = 1.8f, cap = StrokeCap.Round)
-                    drawLine(tint, Offset(12f, 12f), Offset(14.5f, 12f), strokeWidth = 1.8f, cap = StrokeCap.Round)
-                }
-                TopicSortOrder.Created -> {
-                    // 日历 📅
-                    val cal = Path().apply {
-                        moveTo(4f, 7f)
-                        lineTo(20f, 7f)
-                        lineTo(20f, 20f)
-                        lineTo(4f, 20f)
-                        close()
-                    }
-                    drawPath(cal, tint, style = stroke)
-                    drawLine(tint, Offset(4f, 11f), Offset(20f, 11f), strokeWidth = 1.8f, cap = StrokeCap.Round)
-                    drawLine(tint, Offset(8f, 3.5f), Offset(8f, 7f), strokeWidth = 2f, cap = StrokeCap.Round)
-                    drawLine(tint, Offset(16f, 3.5f), Offset(16f, 7f), strokeWidth = 2f, cap = StrokeCap.Round)
-                }
-                TopicSortOrder.Likes -> {
-                    // 爱心 ♡
-                    val heart = Path().apply {
-                        moveTo(12f, 20.5f)
-                        cubicTo(10.5f, 19f, 4f, 13.5f, 4f, 8.5f)
-                        cubicTo(4f, 5.2f, 6.8f, 3.8f, 9.5f, 4.8f)
-                        cubicTo(10.8f, 5.3f, 11.6f, 6.2f, 12f, 7.2f)
-                        cubicTo(12.4f, 6.2f, 13.2f, 5.3f, 14.5f, 4.8f)
-                        cubicTo(17.2f, 3.8f, 20f, 5.2f, 20f, 8.5f)
-                        cubicTo(20f, 13.5f, 13.5f, 19f, 12f, 20.5f)
-                        close()
-                    }
-                    drawPath(heart, tint, style = stroke)
-                }
-                TopicSortOrder.Views -> {
-                    // 眼睛 👁
-                    val eye = Path().apply {
-                        moveTo(3f, 12f)
-                        cubicTo(6.5f, 6f, 17.5f, 6f, 21f, 12f)
-                        cubicTo(17.5f, 18f, 6.5f, 18f, 3f, 12f)
-                        close()
-                    }
-                    drawPath(eye, tint, style = stroke)
-                    drawCircle(tint, 2.8f, Offset(12f, 12f))
-                }
-                TopicSortOrder.Posts -> {
-                    // 回复数 💬
-                    val bubble = Path().apply {
-                        moveTo(4f, 6f)
-                        lineTo(20f, 6f)
-                        lineTo(20f, 16f)
-                        lineTo(10f, 16f)
-                        lineTo(6f, 19.5f)
-                        lineTo(6f, 16f)
-                        lineTo(4f, 16f)
-                        close()
-                    }
-                    drawPath(bubble, tint, style = stroke)
-                }
-                TopicSortOrder.Posters -> {
-                    // 参与者 👥
-                    drawCircle(tint, 3f, Offset(9f, 7.5f), style = stroke)
-                    val body1 = Path().apply {
-                        moveTo(4.5f, 18f)
-                        cubicTo(4.5f, 14f, 13.5f, 14f, 13.5f, 18f)
-                    }
-                    drawPath(body1, tint, style = stroke)
-
-                    drawCircle(tint, 2.4f, Offset(16.5f, 8.5f), style = stroke)
-                    val body2 = Path().apply {
-                        moveTo(13.8f, 18f)
-                        cubicTo(13.8f, 15f, 19.5f, 15f, 19.5f, 18f)
-                    }
-                    drawPath(body2, tint, style = stroke)
-                }
-            }
-        }
-    }
+    TopicSortDynamicGlyph(order = order, tint = tint, modifier = modifier)
 }
 
 /**
- * 列表排序选择弹出框（复刻参考图 1 风格：带标题Header、7个图标选项、选中对勾与升降序切换）。
+ * 列表排序选择弹出框（供辅助悬浮球触发时使用，5 项排序与右上角下拉菜单保持一致）。
  */
 @Composable
 private fun TopicSortDialog(
@@ -1161,7 +1116,6 @@ private fun TopicSortDialog(
                 .border(0.6.dp, IosTheme.colors.separator.copy(alpha = 0.35f), RoundedCornerShape(16.dp))
                 .padding(vertical = 6.dp),
         ) {
-            // 顶部 Header: ≡ 排序：默认   ^
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -1175,7 +1129,7 @@ private fun TopicSortDialog(
                     modifier = Modifier.size(19.dp),
                 )
                 Spacer(Modifier.width(12.dp))
-                val sortSuffix = if (currentOrder != TopicSortOrder.Default) {
+                val sortSuffix = if (currentOrder.supportsAscending) {
                     if (ascending) " (升序)" else " (降序)"
                 } else ""
                 Text(
@@ -1184,7 +1138,6 @@ private fun TopicSortDialog(
                     color = IosTheme.colors.label,
                     modifier = Modifier.weight(1f),
                 )
-                // 向上折叠指示符 ^
                 Canvas(Modifier.size(14.dp)) {
                     val chevron = Path().apply {
                         moveTo(2f, 9.5f)
@@ -1197,7 +1150,6 @@ private fun TopicSortDialog(
 
             IosDivider(startIndent = 14.dp, modifier = Modifier.padding(end = 14.dp))
 
-            // 7 个排序条目
             TopicSortOrder.entries.forEach { order ->
                 val isSelected = order == currentOrder
                 val itemColor = if (isSelected) IosTheme.colors.accent else IosTheme.colors.label
@@ -1215,16 +1167,22 @@ private fun TopicSortDialog(
                         modifier = Modifier.size(19.dp),
                     )
                     Spacer(Modifier.width(14.dp))
-                    Text(
-                        text = order.label,
-                        style = IosTheme.type.body.copy(
-                            fontWeight = if (isSelected) FontWeight.SemiBold else FontWeight.Normal,
-                        ),
-                        color = itemColor,
-                        modifier = Modifier.weight(1f),
-                    )
+                    Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(1.dp)) {
+                        Text(
+                            text = order.label,
+                            style = IosTheme.type.body.copy(
+                                fontWeight = if (isSelected) FontWeight.SemiBold else FontWeight.Normal,
+                            ),
+                            color = itemColor,
+                        )
+                        Text(
+                            text = order.description,
+                            style = IosTheme.type.caption.copy(fontSize = 11.sp),
+                            color = if (isSelected) itemColor.copy(alpha = 0.8f) else IosTheme.colors.tertiaryLabel,
+                        )
+                    }
                     if (isSelected) {
-                        if (order != TopicSortOrder.Default) {
+                        if (order.supportsAscending) {
                             Text(
                                 text = if (ascending) "↑ 升序" else "↓ 降序",
                                 style = IosTheme.type.caption.copy(fontWeight = FontWeight.Medium),

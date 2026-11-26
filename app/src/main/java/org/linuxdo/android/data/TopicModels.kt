@@ -172,14 +172,19 @@ enum class HomeFeedType(val label: String, val apiPath: String) {
 }
 
 /** 话题列表排序方式，与 Discourse API 参数及 FluxDO 对齐。 */
-enum class TopicSortOrder(val label: String, val apiValue: String?) {
-    Default("默认", null),
-    Activity("活跃度", "activity"),
-    Created("创建时间", "created"),
-    Likes("点赞数", "likes"),
-    Views("浏览量", "views"),
-    Posts("回复数", "posts"),
-    Posters("参与者", "posters");
+enum class TopicSortOrder(
+    val label: String,
+    val apiValue: String?,
+    val description: String,
+    val supportsAscending: Boolean = false,
+) {
+    Default("最新", null, "按最新动态时间"),
+    Created("最新发布", "created", "按发帖时间先后", supportsAscending = true),
+    Hot("热门", null, "按站点近期综合热度"),
+    Likes("点赞最多", "likes", "按主帖获赞数排序", supportsAscending = true),
+    Views("浏览最多", "views", "按话题浏览量排序", supportsAscending = true);
+
+    val isHotEndpoint: Boolean get() = this == Hot
 
     companion object {
         fun fromName(name: String?): TopicSortOrder =

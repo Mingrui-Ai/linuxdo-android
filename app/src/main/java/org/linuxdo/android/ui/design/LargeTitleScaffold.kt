@@ -86,6 +86,8 @@ fun IosLargeTitleScaffold(
     trailing: @Composable () -> Unit = {},
     trailingWidth: Dp = 0.dp,
     fixedHeader: (@Composable () -> Unit)? = null,
+    stickySubHeader: (@Composable () -> Unit)? = null,
+    stickySubHeaderAlwaysVisible: Boolean = false,
     customLargeTitle: (@Composable () -> Unit)? = null,
     customCollapsedTitle: (@Composable () -> Unit)? = null,
     floatingOverlay: (@Composable BoxScope.() -> Unit)? = null,
@@ -100,6 +102,9 @@ fun IosLargeTitleScaffold(
     var navBarHeight by remember(fixedHeader != null) {
         mutableStateOf(if (fixedHeader != null) IosMetrics.largeTitleHeight else IosMetrics.navBarHeight)
     }
+    var customHeaderHeight by remember(stickySubHeader != null) {
+        mutableStateOf(if (stickySubHeader != null) 94.dp else 0.dp)
+    }
     val titleBoxHeight = maxOf(
         if (compactTop) IosMetrics.largeTitleHeight else 34.dp,
         with(density) { IosTheme.type.largeTitle.lineHeight.toDp() } + 6.dp,
@@ -113,14 +118,14 @@ fun IosLargeTitleScaffold(
         }
     }
 
-    val topPadding = if (showLargeTitle) {
-        if (compactTop) 0.dp else navBarHeight
-    } else {
-        navBarHeight
+    val topPadding = when {
+        stickySubHeader != null -> customHeaderHeight
+        showLargeTitle && compactTop -> 0.dp
+        else -> navBarHeight
     }
 
     Box(modifier.fillMaxSize().clipToBounds().background(IosTheme.colors.groupedBackground)) {
-        val feedHeader = pageOffsetXProvider != null && customLargeTitle != null && showLargeTitle
+        val feedHeader = stickySubHeader == null && pageOffsetXProvider != null && customLargeTitle != null && showLargeTitle
         if (feedHeader) {
             // 分类切换复用已显示的目标列表；顶部栏是两页共享的兄弟节点，不在任一横移裁剪区内。
             val pages = listOfNotNull(secondaryListState, listState)
@@ -147,7 +152,7 @@ fun IosLargeTitleScaffold(
                 modifier = Modifier.fillMaxSize().scrollListBars(listState),
                 contentPadding = PaddingValues(top = topPadding, bottom = bottomPadding),
             ) {
-                if (showLargeTitle) {
+                if (stickySubHeader == null && showLargeTitle) {
                     item(key = "ios-large-title") {
                         Box(
                             Modifier
@@ -179,38 +184,55 @@ fun IosLargeTitleScaffold(
 
         }
 
-        val showNavBar = feedHeader || !compactTop || collapse > 0.01f || !showLargeTitle
-        AnimatedVisibility(
-            visible = showNavBar && LocalListBars.current?.value != false,
-            enter = slideInVertically(animationSpec = tween(220)) { -it } + fadeIn(animationSpec = tween(180)),
-            exit = slideOutVertically(animationSpec = tween(220)) { -it } + fadeOut(animationSpec = tween(180)),
-            modifier = Modifier.align(Alignment.TopStart),
-        ) {
-            if (feedHeader) {
-                Box(Modifier.fillMaxWidth().height(titleBoxHeight)
-                    .background(IosTheme.colors.groupedBackground), contentAlignment = Alignment.Center) {
-                    customLargeTitle?.invoke()
+        if (stickySubHeader != null) {
+            val barsVisible = LocalListBars.current?.value != false
+            Box(
+                modifier = Modifier
+                    .align(Alignment.TopStart)
+                    .fillMaxWidth()
+                    .onSizeChanged { measured ->
+                        val h = with(density) { measured.height.toDp() }
+                        if (h > 0.dp && (barsVisible || customHeaderHeight == 0.dp)) {
+                            customHeaderHeight = h
+                        }
+                    },
+            ) {
+                stickySubHeader()
+            }
+        } else {
+            val showNavBar = feedHeader || !compactTop || collapse > 0.01f || !showLargeTitle
+            AnimatedVisibility(
+                visible = showNavBar && (stickySubHeaderAlwaysVisible || LocalListBars.current?.value != false),
+                enter = slideInVertically(animationSpec = tween(220)) { -it } + fadeIn(animationSpec = tween(180)),
+                exit = slideOutVertically(animationSpec = tween(220)) { -it } + fadeOut(animationSpec = tween(180)),
+                modifier = Modifier.align(Alignment.TopStart),
+            ) {
+                if (feedHeader) {
+                    Box(Modifier.fillMaxWidth().height(titleBoxHeight)
+                        .background(IosTheme.colors.groupedBackground), contentAlignment = Alignment.Center) {
+                        customLargeTitle?.invoke()
+                    }
+                } else if (fixedHeader != null) {
+                    fixedHeader()
+                } else {
+                    IosNavBar(
+                        title = title,
+                        modifier = Modifier.onSizeChanged { navBarHeight = with(density) { it.height.toDp() } },
+                        titleAlpha = if (!showLargeTitle) 1f else collapse,
+                        showDivider = if (!showLargeTitle) true else collapse > 0.01f,
+                        backLabel = backLabel,
+                        // 顶部时与大标题区同色、看起来融为一体,折叠后过渡成实色条。
+                        background = if (!showLargeTitle) IosTheme.colors.card else lerp(
+                            IosTheme.colors.groupedBackground,
+                            IosTheme.colors.card,
+                            collapse,
+                        ),
+                        onBack = onBack,
+                        trailing = trailing,
+                        trailingWidth = trailingWidth,
+                        customTitle = customCollapsedTitle,
+                    )
                 }
-            } else if (fixedHeader != null) {
-                fixedHeader()
-            } else {
-                IosNavBar(
-                    title = title,
-                    modifier = Modifier.onSizeChanged { navBarHeight = with(density) { it.height.toDp() } },
-                    titleAlpha = if (!showLargeTitle) 1f else collapse,
-                    showDivider = if (!showLargeTitle) true else collapse > 0.01f,
-                    backLabel = backLabel,
-                    // 顶部时与大标题区同色、看起来融为一体,折叠后过渡成实色条。
-                    background = if (!showLargeTitle) IosTheme.colors.card else lerp(
-                        IosTheme.colors.groupedBackground,
-                        IosTheme.colors.card,
-                        collapse,
-                    ),
-                    onBack = onBack,
-                    trailing = trailing,
-                    trailingWidth = trailingWidth,
-                    customTitle = customCollapsedTitle,
-                )
             }
         }
 
