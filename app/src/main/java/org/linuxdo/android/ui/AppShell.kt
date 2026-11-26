@@ -71,6 +71,9 @@ import androidx.compose.foundation.layout.union
 import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.material.icons.Icons
+import org.linuxdo.android.data.TopicListSort
+import org.linuxdo.android.data.TopicListKey
+import org.linuxdo.android.data.TopicSearchScope
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -732,8 +735,7 @@ private fun MainNavigation(state: UiState, viewModel: MainViewModel, lifecycle: 
     }
     val skinPreset by viewModel.skinPreset.collectAsStateWithLifecycle()
     val userRepliesStates by viewModel.userRepliesStates.collectAsStateWithLifecycle()
-    val topicSortOrder by viewModel.topicSortOrder.collectAsStateWithLifecycle()
-    val topicSortAscending by viewModel.topicSortAscending.collectAsStateWithLifecycle()
+    val topicListSorts by viewModel.topicListSorts.collectAsStateWithLifecycle()
     val floatingBallEnabled by viewModel.floatingBallEnabled.collectAsStateWithLifecycle()
     val floatingBallActions by viewModel.floatingBallActions.collectAsStateWithLifecycle()
     val floatingBallXRatio by viewModel.floatingBallXRatio.collectAsStateWithLifecycle()
@@ -879,7 +881,7 @@ private fun MainNavigation(state: UiState, viewModel: MainViewModel, lifecycle: 
     val visibleRoute = stack.current
     val isKeyboardOpen = WindowInsets.ime.getBottom(LocalDensity.current) > 0
     val isDetailRoute = visibleRoute is Route.TopicDetail || visibleRoute == Route.Chat ||
-        visibleRoute is Route.ChatRoom || visibleRoute == Route.Search || visibleRoute == Route.Profile || visibleRoute is Route.UserProfile
+        visibleRoute is Route.ChatRoom || visibleRoute is Route.Search || visibleRoute == Route.Profile || visibleRoute is Route.UserProfile
     val navigationLifecycleState by lifecycle.currentStateFlow.collectAsStateWithLifecycle()
     val listForeground = navigationLifecycleState.isAtLeast(Lifecycle.State.RESUMED) && !contentObscured
     DisposableEffect(lifecycle, browsing, accountState.activeUserId) {
@@ -946,9 +948,12 @@ private fun MainNavigation(state: UiState, viewModel: MainViewModel, lifecycle: 
         }
         selected = tab
     }
-    fun openSearch() {
-        if (stack.current != Route.Search) stack.push(Route.Search)
+    fun openScopedSearch(scope: TopicSearchScope?) {
+        val target = Route.Search(scope)
+        viewModel.prepareSearch(scope)
+        if (stack.current != target) stack.push(target)
     }
+    fun openSearch() = openScopedSearch(null)
     fun openCategories() {
         if (stack.current != Route.CategoryList) stack.push(Route.CategoryList)
     }
@@ -1091,7 +1096,10 @@ private fun MainNavigation(state: UiState, viewModel: MainViewModel, lifecycle: 
                                 }
                                 Route.CategoryList -> viewModel.loadCategories()
                                 Route.TopicList -> if (state.latest.needsRefresh) viewModel.refreshLatest()
-                                Route.Search -> if (search.results.needsRefresh) viewModel.updateSearch(search.query)
+                                is Route.Search -> {
+                                    viewModel.prepareSearch(route.scope)
+                                    if (search.scope == route.scope && search.results.needsRefresh) viewModel.updateSearch(search.query)
+                                }
                                 is Route.TagTopics -> viewModel.loadTagTopics(route.tag)
                                 is Route.CategoryTopics -> {
                                     if (!categories.loaded && !categories.loading) viewModel.loadCategories()
@@ -1131,11 +1139,7 @@ private fun MainNavigation(state: UiState, viewModel: MainViewModel, lifecycle: 
                                 active = active && listForeground,
                                 scrollToTopRequest = scrollToTopRequest,
                                 homeLeading = { PersonalDrawerAvatar(state.username, drawerAccount, ::openPersonalDrawer) },
-                                trailing = {
-                                    IconButton(onClick = ::openSearch, modifier = Modifier.size(48.dp)) {
-                                        Icon(Icons.Default.Search, contentDescription = "搜索", tint = IosTheme.colors.label)
-                                    }
-                                },
+                                showHeaderActions = true,
                                 currentFeed = state.homeFeed,
                                 feedStates = feedStates,
                                 onFeedSelect = viewModel::switchHomeFeed,
@@ -1153,8 +1157,8 @@ private fun MainNavigation(state: UiState, viewModel: MainViewModel, lifecycle: 
                                     viewModel.submitTopicFlagFromList(topic.id, reasonId, message, onSuccess, onError)
                                 },
                                 onSaveTopic = if (savedTopicsUserId > 0L) viewModel::saveTopicFromList else null,
-                                sortOrder = topicSortOrder,
-                                sortAscending = topicSortAscending,
+                                sortOrder = (topicListSorts[TopicListKey.feed(state.homeFeed)] ?: TopicListSort()).order,
+                                sortAscending = (topicListSorts[TopicListKey.feed(state.homeFeed)] ?: TopicListSort()).ascending,
                                 onSortChange = { viewModel.setTopicSort(it) },
                                 floatingBallEnabled = floatingBallEnabled,
                                 floatingBallActions = floatingBallActions,
@@ -1444,8 +1448,8 @@ private fun MainNavigation(state: UiState, viewModel: MainViewModel, lifecycle: 
                                     onSetNotificationLevel = { topic, level ->
                                         viewModel.setTopicNotificationLevel(topic.id, level)
                                     },
-                                    sortOrder = topicSortOrder,
-                                    sortAscending = topicSortAscending,
+                                    sortOrder = (topicListSorts[TopicListKey.tag(route.tag)] ?: TopicListSort()).order,
+                                    sortAscending = (topicListSorts[TopicListKey.tag(route.tag)] ?: TopicListSort()).ascending,
                                     onSortChange = { viewModel.setTopicSort(it, currentTag = route.tag) },
                                     floatingBallEnabled = floatingBallEnabled,
                                     floatingBallActions = floatingBallActions,
@@ -1454,7 +1458,7 @@ private fun MainNavigation(state: UiState, viewModel: MainViewModel, lifecycle: 
                                     floatingBallOnRight = floatingBallOnRight,
                                     onFloatingBallPositionChange = viewModel::updateFloatingBallPosition,
                                     onNavigateToDrafts = { stack.push(Route.Drafts) },
-                                    onNavigateToSearch = ::openSearch,
+                                    onNavigateToSearch = { openScopedSearch(TopicSearchScope(tag = route.tag)) },
                                     onNavigateToCategories = ::openCategories,
                                     onNavigateToHistory = { stack.push(Route.BrowsingHistory) },
                                     onNavigateToConnect = { showConnectSheet = true },
@@ -1538,8 +1542,8 @@ private fun MainNavigation(state: UiState, viewModel: MainViewModel, lifecycle: 
                                         viewModel.submitTopicFlagFromList(topic.id, reasonId, message, onSuccess, onError)
                                     },
                                     onSaveTopic = if (savedTopicsUserId > 0L) viewModel::saveTopicFromList else null,
-                                    sortOrder = topicSortOrder,
-                                    sortAscending = topicSortAscending,
+                                    sortOrder = (topicListSorts[TopicListKey.category(route.categoryId)] ?: TopicListSort()).order,
+                                    sortAscending = (topicListSorts[TopicListKey.category(route.categoryId)] ?: TopicListSort()).ascending,
                                     onSortChange = { viewModel.setTopicSort(it, currentCategoryId = route.categoryId, currentCategorySlug = route.slug) },
                                     floatingBallEnabled = floatingBallEnabled,
                                     floatingBallActions = floatingBallActions,
@@ -1548,7 +1552,7 @@ private fun MainNavigation(state: UiState, viewModel: MainViewModel, lifecycle: 
                                     floatingBallOnRight = floatingBallOnRight,
                                     onFloatingBallPositionChange = viewModel::updateFloatingBallPosition,
                                     onNavigateToDrafts = { stack.push(Route.Drafts) },
-                                    onNavigateToSearch = ::openSearch,
+                                    onNavigateToSearch = { openScopedSearch(TopicSearchScope(categoryId = route.categoryId, categoryName = route.name)) },
                                     onNavigateToCategories = ::openCategories,
                                     onNavigateToHistory = { stack.push(Route.BrowsingHistory) },
                                     onNavigateToConnect = { showConnectSheet = true },
@@ -1583,8 +1587,8 @@ private fun MainNavigation(state: UiState, viewModel: MainViewModel, lifecycle: 
                                 )
                             }
 
-                            Route.Search -> SearchScreen(
-                                state = search,
+                            is Route.Search -> SearchScreen(
+                                state = if (search.scope == route.scope) search else SearchUiState(scope = route.scope),
                                 onQuery = viewModel::updateSearch,
                                 onLoadMore = viewModel::loadMoreSearch,
                                 onOpenTopic = {
@@ -1787,9 +1791,7 @@ private fun MainNavigation(state: UiState, viewModel: MainViewModel, lifecycle: 
                                         viewModel.submitTopicFlagFromList(topic.id, reasonId, message, onSuccess, onError)
                                     },
                                     onSaveTopic = if (savedTopicsUserId > 0L) viewModel::saveTopicFromList else null,
-                                    sortOrder = topicSortOrder,
-                                    sortAscending = topicSortAscending,
-                                    onSortChange = { viewModel.setTopicSort(it) },
+                                    sortEnabled = false,
                                     floatingBallEnabled = floatingBallEnabled,
                                     floatingBallActions = floatingBallActions,
                                     floatingBallXRatio = floatingBallXRatio,

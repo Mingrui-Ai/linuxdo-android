@@ -18,7 +18,7 @@ sealed interface Route : Serializable {
     data object CategoryList : Route
     data class CategoryTopics(val categoryId: Int, val slug: String, val name: String) : Route
     data class TagTopics(val tag: String) : Route
-    data object Search : Route
+    data class Search(val scope: org.linuxdo.android.data.TopicSearchScope? = null) : Route
     data object Profile : Route
     data object Diagnostics : Route
     data object Settings : Route

@@ -129,7 +129,7 @@ fun SearchScreen(
     Column(Modifier.fillMaxSize().background(IosTheme.colors.groupedBackground)) {
         ListNavigationHeader {
             IosNavBar(
-                title = "搜索",
+                title = if (state.scope == null) "搜索" else "范围内搜索",
                 onBack = closeSearch,
                 background = IosTheme.colors.groupedBackground,
                 showDivider = false,
@@ -182,7 +182,7 @@ fun SearchScreen(
                             Box {
                                 if (state.query.isEmpty()) {
                                     Text(
-                                        "输入关键词查找话题",
+                                        if (state.scope == null) "输入关键词查找话题" else "搜索${state.scope.label}中的话题",
                                         style = IosTheme.type.body.copy(fontSize = 14.5.sp),
                                         color = IosTheme.colors.secondaryLabel,
                                     )
@@ -221,6 +221,12 @@ fun SearchScreen(
                         }
                         .padding(start = 12.dp, top = 6.dp, bottom = 6.dp),
                 )
+            }
+
+            state.scope?.let { scope ->
+                Text("搜索范围：${scope.label}", style = IosTheme.type.footnote,
+                    color = IosTheme.colors.secondaryLabel,
+                    modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp))
             }
 
             // 筛选标签栏 (排序依据 + 透明玻璃胶囊)
