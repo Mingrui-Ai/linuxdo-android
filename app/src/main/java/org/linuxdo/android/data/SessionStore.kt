@@ -1064,18 +1064,27 @@ class SessionStore(context: Context) : org.linuxdo.android.net.DohConfigProvider
         saveDisplayPreference(KEY_HOME_FEED) { prefs.edit().putString(KEY_HOME_FEED, feed).apply() }
     }
 
-    fun getTopicSortOrder(): TopicSortOrder =
-        TopicSortOrder.fromName(readDisplayPreference(null) { prefs.getString(KEY_TOPIC_SORT_ORDER, null) })
-
-    fun setTopicSortOrder(order: TopicSortOrder) {
-        saveDisplayPreference(KEY_TOPIC_SORT_ORDER) { prefs.edit().putString(KEY_TOPIC_SORT_ORDER, order.name).apply() }
+    fun getTopicListSorts(): Map<String, TopicListSort> = readDisplayPreference(emptyMap()) {
+        val raw = prefs.getString("topic_list_sorts_v2", null) ?: return@readDisplayPreference emptyMap()
+        runCatching {
+            val root = JSONObject(raw)
+            buildMap {
+                root.keys().forEach { key ->
+                    val value = root.optJSONObject(key) ?: return@forEach
+                    val order = TopicSortOrder.fromName(value.optString("order"))
+                    put(key, TopicListSort(order, order != TopicSortOrder.Default && value.optBoolean("ascending")))
+                }
+            }
+        }.getOrDefault(emptyMap())
     }
 
-    fun getTopicSortAscending(): Boolean =
-        readDisplayPreference(false) { prefs.getBoolean(KEY_TOPIC_SORT_ASCENDING, false) }
-
-    fun setTopicSortAscending(ascending: Boolean) {
-        saveDisplayPreference(KEY_TOPIC_SORT_ASCENDING) { prefs.edit().putBoolean(KEY_TOPIC_SORT_ASCENDING, ascending).apply() }
+    fun setTopicListSorts(sorts: Map<String, TopicListSort>) {
+        saveDisplayPreference("topic_list_sorts_v2") {
+            val root = JSONObject()
+            sorts.forEach { (key, sort) -> root.put(key, JSONObject()
+                .put("order", sort.order.name).put("ascending", sort.ascending)) }
+            prefs.edit().putString("topic_list_sorts_v2", root.toString()).apply()
+        }
     }
 
     fun isFloatingBallEnabled(): Boolean =
@@ -1631,8 +1640,6 @@ class SessionStore(context: Context) : org.linuxdo.android.net.DohConfigProvider
         private const val KEY_SAVED_AT = "saved_at"
         private const val KEY_USER_AGENT = "user_agent"
         private const val KEY_HOME_FEED = "home_feed"
-        private const val KEY_TOPIC_SORT_ORDER = "topic_sort_order"
-        private const val KEY_TOPIC_SORT_ASCENDING = "topic_sort_ascending"
         private const val KEY_FLOATING_BALL_ENABLED = "floating_ball_enabled"
         private const val KEY_FLOATING_BALL_ACTIONS = "floating_ball_actions"
         private const val KEY_FLOATING_BALL_X_RATIO = "floating_ball_x_ratio"

@@ -93,6 +93,10 @@ import org.linuxdo.android.data.DiscourseTagSearchResult
 import org.linuxdo.android.data.Category
 import org.linuxdo.android.data.CommentOrder
 import org.linuxdo.android.data.collectCommentPosts
+import org.linuxdo.android.data.TopicListSort
+import org.linuxdo.android.data.TopicListKey
+import org.linuxdo.android.data.TopicSearchScope
+import kotlinx.coroutines.currentCoroutineContext
 import org.linuxdo.android.data.TopicSortOrder
 import org.linuxdo.android.data.FloatingAction
 import org.linuxdo.android.data.flattenCategories
@@ -643,6 +647,7 @@ data class SearchUiState(
     val results: TopicListUiState = TopicListUiState(initialLoading = false, hasMore = false),
     val excerpts: Map<Long, String> = emptyMap(),
     val order: SearchOrder = SearchOrder.Relevance,
+    val scope: TopicSearchScope? = null,
 )
 
 data class TopicSearchUiState(
@@ -890,10 +895,9 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     private val initialHomeFeed = HomeFeedType.fromName(store.homeFeed())
     private val _feedStates = MutableStateFlow<Map<HomeFeedType, TopicListUiState>>(emptyMap())
     val feedStates = _feedStates.asStateFlow()
-    private val _topicSortOrder = MutableStateFlow(store.getTopicSortOrder())
-    val topicSortOrder: StateFlow<TopicSortOrder> = _topicSortOrder.asStateFlow()
-    private val _topicSortAscending = MutableStateFlow(store.getTopicSortAscending())
-    val topicSortAscending: StateFlow<Boolean> = _topicSortAscending.asStateFlow()
+    private val _topicListSorts = MutableStateFlow(store.getTopicListSorts())
+    val topicListSorts = _topicListSorts.asStateFlow()
+    private fun listSort(key: String) = _topicListSorts.value[key] ?: TopicListSort()
     private val _floatingBallEnabled = MutableStateFlow(store.isFloatingBallEnabled())
     val floatingBallEnabled: StateFlow<Boolean> = _floatingBallEnabled.asStateFlow()
     private val _floatingBallActions = MutableStateFlow(store.getFloatingBallActions())
@@ -949,7 +953,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     private var reconcileSessionJob: Job? = null
     private var verifying = false
     private var resumeAfterVerification: (() -> Unit)? = null
-    private val loadingFeeds = java.util.concurrent.ConcurrentHashMap<HomeFeedType, Long>()
+    private val loadingFeeds = java.util.concurrent.ConcurrentHashMap<HomeFeedType, Job>()
     private var searchJob: Job? = null
     private var unreadJob: Job? = null
     private var unreadFailures = 0
@@ -7462,8 +7466,9 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 if (currentCategoryState.items.isEmpty()) return
                 val category = _categories.value.items.firstOrNull { it.id == categoryId }
                 val slug = category?.slug ?: activeCategory?.takeIf { it.first == categoryId }?.second ?: "c"
-                val sortOrder = _topicSortOrder.value.apiValue
-                val sortAscending = _topicSortAscending.value.takeIf { sortOrder != null }
+                val sort = listSort(TopicListKey.category(categoryId))
+                val sortOrder = sort.order.apiValue
+                val sortAscending = sort.apiAscending
                 val freshPage = repository.fetchCategoryTopics(
                     slug, categoryId, 0, present = false, order = sortOrder, ascending = sortAscending,
                     beforeDispatch = ::checkBeforeDispatch,
@@ -7496,8 +7501,9 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             } else {
                 val currentFeedState = _feedStates.value[feed] ?: return
                 if (currentFeedState.items.isEmpty()) return
-                val sortOrder = _topicSortOrder.value.apiValue
-                val sortAscending = _topicSortAscending.value.takeIf { sortOrder != null }
+                val sort = listSort(TopicListKey.feed(feed))
+                val sortOrder = sort.order.apiValue
+                val sortAscending = sort.apiAscending
                 val freshPage = repository.fetchFeed(
                     feed, 0, awaitCategories = false, present = false, order = sortOrder, ascending = sortAscending,
                     beforeDispatch = ::checkBeforeDispatch,
@@ -7622,30 +7628,41 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun setTopicSort(order: TopicSortOrder, currentCategoryId: Int? = null, currentCategorySlug: String? = null, currentTag: String? = null) {
-        val currentOrder = _topicSortOrder.value
-        val currentAscending = _topicSortAscending.value
-        val (newOrder, newAscending) = if (order != TopicSortOrder.Default && order == currentOrder) {
-            order to !currentAscending
-        } else {
-            order to false
+        val feed = _state.value.homeFeed
+        val key = when {
+            currentCategoryId != null -> TopicListKey.category(currentCategoryId)
+            currentTag != null -> TopicListKey.tag(currentTag)
+            else -> TopicListKey.feed(feed)
         }
-        if (newOrder == currentOrder && newAscending == currentAscending) return
-        _topicSortOrder.value = newOrder
-        _topicSortAscending.value = newAscending
-        store.setTopicSortOrder(newOrder)
-        store.setTopicSortAscending(newAscending)
-
-        pageJobs.filter { it.key.startsWith("category:") || it.key.startsWith("feed:") || it.key.startsWith("bookmark:") || it.key.startsWith("created:") }.values.forEach { it.cancel() }
-        _feedStates.value = emptyMap()
-        _categoryTopics.value = emptyMap()
-        _userTopicStates.value = emptyMap()
-        pageJobs.keys.filter { it.startsWith("tag:") }.forEach { pageJobs.remove(it)?.cancel() }
-        _tagTopics.value = emptyMap()
-        if (currentCategoryId != null && !currentCategorySlug.isNullOrBlank()) {
-            loadCategory(currentCategoryId, currentCategorySlug, refresh = true)
+        val current = listSort(key)
+        val next = current.select(order)
+        if (next == current) return
+        _topicListSorts.update { it + (key to next) }
+        store.setTopicListSorts(_topicListSorts.value)
+        incomingProbeGeneration++
+        // 仅取消并刷新当前列表；保留已有内容，其他页面的缓存/顺序不受影响。
+        pageJobs.remove(key)?.cancel()
+        fun pending(list: TopicListUiState) = list.copy(
+            refreshing = false, loadingMore = false, needsRefresh = true,
+            pendingPage = null, incomingTopicIds = emptySet(), highlightedTopicIds = emptySet(), error = null,
+        )
+        when {
+            currentCategoryId != null -> {
+                _categoryTopics.update { it + (currentCategoryId to pending(it[currentCategoryId] ?: TopicListUiState())) }
+                loadCategory(currentCategoryId, currentCategorySlug ?: "category", refresh = true)
+            }
+            currentTag != null -> {
+                _tagTopics.update { it + (currentTag to pending(it[currentTag] ?: TopicListUiState())) }
+                loadTagTopics(currentTag, refresh = true)
+            }
+            else -> {
+                loadingFeeds.remove(feed)?.cancel()
+                val retained = pending(_feedStates.value[feed] ?: _state.value.latest)
+                _feedStates.update { it + (feed to retained) }
+                _state.update { it.copy(latest = retained) }
+                refreshLatest()
+            }
         }
-        if (!currentTag.isNullOrBlank()) loadTagTopics(currentTag, refresh = true)
-        refreshLatest()
     }
 
     fun setFloatingBallEnabled(enabled: Boolean) {
@@ -7797,10 +7814,15 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     fun loadCategory(id: Int, slug: String, refresh: Boolean = false, more: Boolean = false) {
         if (refresh && !more) incomingProbeGeneration++
+        val accountGeneration = accountScopeGeneration
         val current = _categoryTopics.value[id]
         if (pageJobs["category:$id"]?.isActive == true) return
         if (!refresh && !more && current != null && !current.needsRefresh) return
         val previous = current ?: TopicListUiState()
+        if (more && previous.needsRefresh) {
+            loadCategory(id, slug, refresh = true)
+            return
+        }
         if (more && !previous.hasMore) return
         val page = if (more) previous.page + 1 else 0
         pageJobs["category:$id"] = viewModelScope.launch {
@@ -7808,10 +7830,12 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 refreshing = refresh, loadingMore = more, initialLoading = previous.items.isEmpty(), error = null,
             )) }
             try {
-                val sortOrder = _topicSortOrder.value.apiValue
-                val sortAscending = _topicSortAscending.value.takeIf { sortOrder != null }
+                val sort = listSort(TopicListKey.category(id))
+                val sortOrder = sort.order.apiValue
+                val sortAscending = sort.apiAscending
                 val result = repository.fetchCategoryTopics(slug, id, page, order = sortOrder, ascending = sortAscending)
                 ExcerptCache.loadBatchFromStore(result.items.map { it.topic.id })
+                if (!isActive || accountGeneration != accountScopeGeneration) return@launch
                 // 对齐通知分页：防死循环检测页码推进，而非条目增加。高频重叠由页码单调递增穿透。
                 val hasMore = result.hasMore && result.items.isNotEmpty() && (!more || page > previous.page)
                 _categoryTopics.update { states ->
@@ -7830,13 +7854,14 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             } catch (error: CancellationException) {
                 throw error
             } catch (error: Exception) {
+                if (!isActive || accountGeneration != accountScopeGeneration) return@launch
                 _categoryTopics.update { states ->
                     val latest = states[id] ?: return@update states
                     states + (id to latest.copy(initialLoading = false, error = error.message ?: "加载失败"))
                 }
                 handlePageFailure(error) { loadCategory(id, slug, refresh = !more, more = more) }
             } finally {
-                _categoryTopics.update { states -> states[id]?.let {
+                if (isActive && accountGeneration == accountScopeGeneration) _categoryTopics.update { states -> states[id]?.let {
                     states + (id to it.copy(initialLoading = false, refreshing = false, loadingMore = false))
                 } ?: states }
             }
@@ -8201,11 +8226,18 @@ fun openTopicSearch(topicId: Long, title: String) {
         }
     }
 
+    fun prepareSearch(scope: TopicSearchScope?) {
+        if (_search.value.scope == scope) return
+        searchJob?.cancel()
+        searchSequence++
+        _search.value = SearchUiState(scope = scope)
+    }
+
     fun updateSearch(query: String) {
         searchJob?.cancel()
         searchSequence++
         val trimmed = query.trim()
-        _search.value = SearchUiState(query, TopicListUiState(initialLoading = trimmed.isNotEmpty(), hasMore = false), order = _search.value.order)
+        _search.value = SearchUiState(query, TopicListUiState(initialLoading = trimmed.isNotEmpty(), hasMore = false), order = _search.value.order, scope = _search.value.scope)
         if (trimmed.isEmpty()) return
         searchJob = viewModelScope.launch {
             delay(500)
@@ -8231,7 +8263,7 @@ fun openTopicSearch(topicId: Long, title: String) {
         val accountGeneration = accountScopeGeneration
         _search.update { it.copy(results = it.results.copy(initialLoading = page == 1, loadingMore = page > 1, error = null)) }
         try {
-            val result = repository.search(query, page, previous.order)
+            val result = repository.search(previous.scope?.applyTo(query) ?: query, page, previous.order)
             if (sequence != searchSequence || accountGeneration != accountScopeGeneration) return
             val items = if (page == 1) result.items.distinctBy { it.listKey } else (previous.results.items + result.items).distinctBy { it.listKey }
             val hasMore = result.hasMore && result.items.isNotEmpty() && (page == 1 || page > previous.results.page)
@@ -8731,10 +8763,15 @@ fun openTopicSearch(topicId: Long, title: String) {
     }
 
     fun loadTagTopics(tag: String, refresh: Boolean = false, more: Boolean = false) {
+        val accountGeneration = accountScopeGeneration
         val current = _tagTopics.value[tag]
         if (pageJobs["tag:$tag"]?.isActive == true) return
         if (!refresh && !more && current != null && !current.needsRefresh) return
         val previous = current ?: TopicListUiState()
+        if (more && previous.needsRefresh) {
+            loadTagTopics(tag, refresh = true)
+            return
+        }
         if (more && !previous.hasMore) return
         val page = if (more) previous.page + 1 else 0
         pageJobs["tag:$tag"] = viewModelScope.launch {
@@ -8742,11 +8779,12 @@ fun openTopicSearch(topicId: Long, title: String) {
                 refreshing = refresh, loadingMore = more, initialLoading = previous.items.isEmpty(), error = null,
             )) }
             try {
-                val sortOrder = _topicSortOrder.value.apiValue
-                val sortAscending = _topicSortAscending.value.takeIf { sortOrder != null }
+                val sort = listSort(TopicListKey.tag(tag))
+                val sortOrder = sort.order.apiValue
+                val sortAscending = sort.apiAscending
                 val result = repository.fetchTagTopics(tag, page, order = sortOrder, ascending = sortAscending)
                 ExcerptCache.loadBatchFromStore(result.items.map { it.topic.id })
-                if (!isActive) return@launch
+                if (!isActive || accountGeneration != accountScopeGeneration) return@launch
                 val items = if (more) (previous.items + result.items).distinctBy { it.topic.id } else result.items
                 val hasMore = result.hasMore && result.items.isNotEmpty() && (!more || page > previous.page)
                 _tagTopics.update { it + (tag to TopicListUiState(
@@ -8758,11 +8796,11 @@ fun openTopicSearch(topicId: Long, title: String) {
             } catch (error: CancellationException) {
                 throw error
             } catch (error: Exception) {
-                if (!isActive) return@launch
+                if (!isActive || accountGeneration != accountScopeGeneration) return@launch
                 _tagTopics.update { it + (tag to previous.copy(initialLoading = false, error = error.message ?: "加载失败")) }
                 handlePageFailure(error) { loadTagTopics(tag, refresh = !more, more = more) }
             } finally {
-                if (isActive) _tagTopics.update { states -> states[tag]?.let {
+                if (isActive && accountGeneration == accountScopeGeneration) _tagTopics.update { states -> states[tag]?.let {
                     states + (tag to it.copy(initialLoading = false, refreshing = false, loadingMore = false))
                 } ?: states }
             }
@@ -8779,14 +8817,14 @@ fun openTopicSearch(topicId: Long, title: String) {
             )
         }
         store.saveHomeFeed(feed.name)
-        if (cached == null || (cached.items.isEmpty() && !cached.loadingMore && !cached.refreshing)) {
+        if (cached == null || cached.needsRefresh || (cached.items.isEmpty() && !cached.loadingMore && !cached.refreshing)) {
             viewModelScope.launch { loadFeed(feed, page = 0, pullRefresh = false) }
         }
     }
 
     fun preloadHomeFeed(feed: HomeFeedType) {
         val cached = _feedStates.value[feed]
-        if (cached == null || (cached.items.isEmpty() && !cached.loadingMore && !cached.refreshing && !cached.initialLoading)) {
+        if (cached == null || cached.needsRefresh || (cached.items.isEmpty() && !cached.loadingMore && !cached.refreshing && !cached.initialLoading)) {
             viewModelScope.launch { loadFeed(feed, page = 0, pullRefresh = false) }
         }
     }
@@ -8810,6 +8848,7 @@ fun openTopicSearch(topicId: Long, title: String) {
         val feed = _state.value.homeFeed
         val current = _feedStates.value[feed] ?: _state.value.latest
         if (!current.hasMore || current.loadingMore || current.refreshing) return
+        if (current.needsRefresh) { refreshLatest(); return }
         val currentPage = current.page
         viewModelScope.launch { loadFeed(feed, page = currentPage + 1, pullRefresh = false) }
     }
@@ -9528,6 +9567,7 @@ fun openTopicSearch(topicId: Long, title: String) {
         }
         pageJobs.values.forEach { it.cancel() }
         pageJobs.clear()
+        loadingFeeds.values.forEach { it.cancel() }
         loadingFeeds.clear()
         clearExcerptPrefetchState()
         ExcerptCache.clear()
@@ -9940,13 +9980,19 @@ fun openTopicSearch(topicId: Long, title: String) {
         loadFeed(_state.value.homeFeed, page, pullRefresh)
     }
 
-    private suspend fun loadFeed(feed: HomeFeedType, page: Int, pullRefresh: Boolean) {
+    private suspend fun loadFeed(feed: HomeFeedType, page: Int, pullRefresh: Boolean) = kotlinx.coroutines.supervisorScope {
+        launch { loadFeedRequest(feed, page, pullRefresh) }.join()
+    }
+
+    private suspend fun loadFeedRequest(feed: HomeFeedType, page: Int, pullRefresh: Boolean) {
         val requestScopeGeneration = accountScopeGeneration
+        val requestJob = currentCoroutineContext()[Job]!!
+        fun isCurrent() = requestJob.isActive && requestScopeGeneration == accountScopeGeneration && loadingFeeds[feed] === requestJob
         val current = _feedStates.value[feed] ?: if (_state.value.homeFeed == feed) _state.value.latest else TopicListUiState()
-        val existingFeedGeneration = loadingFeeds.putIfAbsent(feed, requestScopeGeneration)
+        val existingFeedGeneration = loadingFeeds.putIfAbsent(feed, requestJob)
         if (existingFeedGeneration != null || current.refreshing || current.loadingMore) {
             if (existingFeedGeneration == null) {
-                loadingFeeds.remove(feed, requestScopeGeneration)
+                loadingFeeds.remove(feed, requestJob)
             }
             // 已有加载在途，不重复发请求。但下拉刷新不能静默吞掉：下拉指示器要等
             // refreshing 由 true 回落才收起，直接 return 会让它一直转。
@@ -9958,7 +10004,7 @@ fun openTopicSearch(topicId: Long, title: String) {
                     delay(50)
                     waitedMs += 50
                 }
-                setFeedRefreshing(feed, false)
+                if (requestJob.isActive && requestScopeGeneration == accountScopeGeneration && !loadingFeeds.containsKey(feed)) setFeedRefreshing(feed, false)
             }
             return
         }
@@ -9975,10 +10021,11 @@ fun openTopicSearch(topicId: Long, title: String) {
         }
 
         try {
-            val sortOrder = _topicSortOrder.value.apiValue
-            val sortAscending = _topicSortAscending.value.takeIf { sortOrder != null }
+            val sort = listSort(TopicListKey.feed(feed))
+            val sortOrder = sort.order.apiValue
+            val sortAscending = sort.apiAscending
             val result = repository.fetchFeed(feed, page, awaitCategories = false, order = sortOrder, ascending = sortAscending)
-            if (requestScopeGeneration != accountScopeGeneration) return
+            if (!isCurrent()) return
             if (page == 0 && pageJobs["sync:categories"]?.isActive != true && repository.cachedCategoryList() == null) {
                 syncCategoriesInBackground()
             }
@@ -9990,7 +10037,7 @@ fun openTopicSearch(topicId: Long, title: String) {
                 }
             } else result.items
             ExcerptCache.loadBatchFromStore(freshItems.map { it.topic.id })
-            if (requestScopeGeneration != accountScopeGeneration) return
+            if (!isCurrent()) return
             // 分页等待期间可能已经合并了提示条的新话题，使用当前状态。
             val latest = _feedStates.value[feed] ?: loadingState
             val merged = if (page == 0) {
@@ -10008,6 +10055,7 @@ fun openTopicSearch(topicId: Long, title: String) {
                 loadingMore = false,
                 initialLoading = false,
                 error = null,
+                needsRefresh = false,
                 pendingPage = if (page == 0) null else latest.pendingPage,
                 incomingTopicIds = if (page == 0) emptySet() else latest.incomingTopicIds,
                 highlightedTopicIds = if (page == 0) emptySet() else latest.highlightedTopicIds,
@@ -10021,11 +10069,11 @@ fun openTopicSearch(topicId: Long, title: String) {
         } catch (error: CancellationException) {
             throw error
         } catch (error: NeedsInteractiveVerification) {
-            if (requestScopeGeneration != accountScopeGeneration) return
+            if (!isCurrent()) return
             settleFeedLoading(feed)
             enterWebScreen(Screen.Verify, error.message.orEmpty(), error.readProbePath)
         } catch (error: RateLimitException) {
-            if (requestScopeGeneration != accountScopeGeneration) return
+            if (!isCurrent()) return
             val current = _feedStates.value[feed] ?: TopicListUiState()
             if (current.items.isNotEmpty()) {
                 diagnostics.log("列表受限流冷却保护，继续展示本地缓存: ${error.message}")
@@ -10034,7 +10082,7 @@ fun openTopicSearch(topicId: Long, title: String) {
                 settleFeedLoading(feed, error.message)
             }
         } catch (error: HttpStatusException) {
-            if (requestScopeGeneration != accountScopeGeneration) return
+            if (!isCurrent()) return
             val msg = if (error.status == 403 && _state.value.username == null) {
                 "请先登录账号后查看${feed.label}"
             } else {
@@ -10043,11 +10091,11 @@ fun openTopicSearch(topicId: Long, title: String) {
             diagnostics.log("加载 ${feed.label} 失败: $msg")
             settleFeedLoading(feed, msg)
         } catch (error: Exception) {
-            if (requestScopeGeneration != accountScopeGeneration) return
+            if (!isCurrent()) return
             diagnostics.log("加载 ${feed.label} 异常: ${error.message}")
             settleFeedLoading(feed, error.message ?: error.javaClass.simpleName)
         } finally {
-            loadingFeeds.remove(feed, requestScopeGeneration)
+            loadingFeeds.remove(feed, requestJob)
         }
     }
 

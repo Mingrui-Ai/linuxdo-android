@@ -223,6 +223,7 @@ fun TopicListScreen(
     sortOrder: TopicSortOrder = TopicSortOrder.Default,
     sortAscending: Boolean = false,
     onSortChange: (TopicSortOrder) -> Unit = {},
+    sortEnabled: Boolean = true,
     floatingBallEnabled: Boolean = true,
     floatingBallActions: List<FloatingAction> = FloatingAction.DEFAULT_ACTIONS,
     floatingBallXRatio: Float = 0.95f,
@@ -656,14 +657,8 @@ fun TopicListScreen(
             trailing = {
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     trailing()
-                    if (showHeaderActions) {
-                        onNavigateToSearch?.let { openSearch ->
-                            IconButton(onClick = openSearch, modifier = Modifier.size(44.dp)) {
-                                Icon(Icons.Default.Search, contentDescription = "搜索", tint = IosTheme.colors.label)
-                            }
-                        }
-                        TopicSortButton(sortOrder, sortAscending, onClick = { showSortDialog = true }, floating = false)
-                    }
+                    if (showHeaderActions) TopicListHeaderActions(sortOrder, sortAscending,
+                        onSort = { showSortDialog = true }, onSearch = onNavigateToSearch)
                 }
             },
             pageOffsetXProvider = if (effectiveFeed != null) ({ feedOffset }) else null,
@@ -695,8 +690,12 @@ fun TopicListScreen(
                                 indicatorPosition = {
                                     effectiveFeed.ordinal + ((previewFeed ?: effectiveFeed).ordinal - effectiveFeed.ordinal) * slideProgress()
                                 },
-                                actionWidth = 48.dp,
-                                actions = trailing,
+                                actionWidth = if (showHeaderActions) 88.dp else 48.dp,
+                                actions = {
+                                    if (showHeaderActions) TopicListHeaderActions(sortOrder, sortAscending,
+                                        onSort = { showSortDialog = true }, onSearch = onNavigateToSearch)
+                                    else trailing()
+                                },
                                 leading = homeLeading,
                             )
                         }
@@ -770,7 +769,7 @@ fun TopicListScreen(
                 }
                 if (floatingBallEnabled && floatingBallActions.isNotEmpty()) {
                     FloatingAssistiveBall(
-                        actions = floatingBallActions,
+                        actions = if (sortEnabled) floatingBallActions else floatingBallActions.filter { it != FloatingAction.Sort },
                         sortOrder = sortOrder,
                         sortAscending = sortAscending,
                         initialXRatio = floatingBallXRatio,
@@ -806,7 +805,7 @@ fun TopicListScreen(
                         horizontalAlignment = Alignment.CenterHorizontally,
                         verticalArrangement = Arrangement.spacedBy(10.dp),
                     ) {
-                        TopicSortButton(
+                        if (sortEnabled) TopicSortButton(
                             sortOrder = sortOrder,
                             ascending = sortAscending,
                             onClick = { showSortDialog = true },
@@ -816,12 +815,13 @@ fun TopicListScreen(
                         }
                     }
                 }
-                if (showSortDialog) {
+                if (sortEnabled && showSortDialog) {
                     TopicSortDialog(
                         currentOrder = sortOrder,
                         ascending = sortAscending,
                         onDismiss = { showSortDialog = false },
                         onSelectOrder = { order ->
+                            scope.launch { listState.scrollToItem(0) }
                             onSortChange(order)
                             if (order == TopicSortOrder.Default || order != sortOrder) {
                                 showSortDialog = false
@@ -929,6 +929,18 @@ private fun CreateTopicFab(onClick: () -> Unit) {
     }
 }
 
+@Composable
+private fun TopicListHeaderActions(
+    order: TopicSortOrder, ascending: Boolean, onSort: () -> Unit, onSearch: (() -> Unit)?,
+) {
+    Row(verticalAlignment = Alignment.CenterVertically) {
+        TopicSortButton(order, ascending, onSort, floating = false)
+        if (onSearch != null) IconButton(onClick = onSearch, modifier = Modifier.size(44.dp)) {
+            Icon(Icons.Default.Search, contentDescription = "搜索", tint = IosTheme.colors.label)
+        }
+    }
+}
+
 /** 复用同一双向箭头与排序操作；顶栏模式使用普通图标按钮外观。 */
 @Composable
 private fun TopicSortButton(
@@ -939,7 +951,7 @@ private fun TopicSortButton(
 ) {
     val isDefault = sortOrder == TopicSortOrder.Default
     val activeColor = IosTheme.colors.accent
-    val tintColor = if (!isDefault) activeColor else if (floating) IosTheme.colors.secondaryLabel else IosTheme.colors.label
+    val tintColor = if (!floating) IosTheme.colors.label else if (!isDefault) activeColor else IosTheme.colors.secondaryLabel
     val bgBase = IosTheme.colors.card.copy(alpha = 0.94f)
     val borderColor = if (isDefault) IosTheme.colors.separator.copy(alpha = 0.4f) else activeColor.copy(alpha = 0.45f)
 
