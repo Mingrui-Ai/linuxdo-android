@@ -6783,8 +6783,12 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         _feedStates.update { feeds -> feeds.mapValues { updateList(it.value) } }
         _state.update { it.copy(latest = updateList(it.latest)) }
         _categoryTopics.update { categories -> categories.mapValues { updateList(it.value) } }
+        _tagTopics.update { tags -> tags.mapValues { updateList(it.value) } }
         _userTopicStates.update { users -> users.mapValues { updateList(it.value) } }
         _search.update { it.copy(results = updateList(it.results)) }
+        homeFilterCache.entries.forEach { entry ->
+            entry.setValue(updateList(entry.value.first) to entry.value.second)
+        }
     }
 
     private fun removeMutedTopicFromLatest(topicId: Long) {
@@ -6798,6 +6802,9 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             feeds + (HomeFeedType.Latest to removeTopic(it))
         } ?: feeds }
         if (_state.value.homeFeed == HomeFeedType.Latest) _state.update { it.copy(latest = removeTopic(it.latest)) }
+        homeFilterCache.entries.forEach { entry ->
+            entry.setValue(removeTopic(entry.value.first) to entry.value.second)
+        }
     }
 
     /** 回到 1 楼。窗口化加载下 1 楼可能还没取回来,这时从头重拉整个话题。 */

@@ -151,6 +151,7 @@ import androidx.compose.ui.graphics.Outline
 import androidx.compose.ui.graphics.Shape
 import androidx.compose.ui.unit.Density
 import androidx.compose.ui.unit.Dp
+import androidx.compose.ui.unit.DpOffset
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.IntRect
 import androidx.compose.ui.unit.IntSize
@@ -237,6 +238,7 @@ import org.linuxdo.android.App
 import org.linuxdo.android.Config
 import org.linuxdo.android.data.Post
 import org.linuxdo.android.data.CommentOrder
+import org.linuxdo.android.data.TopicSortOrder
 import org.linuxdo.android.data.likedPostRows
 import org.linuxdo.android.data.Category
 import org.linuxdo.android.data.Boost
@@ -1489,6 +1491,11 @@ fun TopicDetailScreen(
                                         authorMenuExpanded = !authorMenuExpanded
                                         showToc = false
                                     },
+                                    onAuthorMenuDismiss = { authorMenuExpanded = false },
+                                    onSelectFilterUser = { userId ->
+                                        authorMenuExpanded = false
+                                        onSetFilterUser(userId)
+                                    },
                                     isPinned = isPinned,
                                 )
                             }
@@ -1804,200 +1811,6 @@ fun TopicDetailScreen(
             }
         }
     }
-    if (authorMenuExpanded) {
-        FullscreenDialog(
-            onDismissRequest = { authorMenuExpanded = false },
-        ) {
-            Box(
-                modifier = Modifier
-                    .fillMaxSize()
-                    .clickable(
-                        interactionSource = remember { androidx.compose.foundation.interaction.MutableInteractionSource() },
-                        indication = null,
-                        onClick = { authorMenuExpanded = false },
-                    )
-                    .safeDrawingPadding()
-                    .padding(top = 96.dp, start = 20.dp, end = 20.dp),
-                contentAlignment = Alignment.TopCenter,
-            ) {
-                Column(
-                    modifier = Modifier
-                        .widthIn(max = 320.dp)
-                        .fillMaxWidth()
-                        .shadow(elevation = 16.dp, shape = RoundedCornerShape(16.dp))
-                        .clip(RoundedCornerShape(16.dp))
-                        .background(IosTheme.colors.card)
-                        .clickable(interactionSource = remember { androidx.compose.foundation.interaction.MutableInteractionSource() }, indication = null) {}
-                        .padding(horizontal = 16.dp, vertical = 14.dp),
-                ) {
-                    // Header: 筛选发言者 + 关闭 ✕
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                        verticalAlignment = Alignment.CenterVertically,
-                    ) {
-                        Text(
-                            text = "筛选发言者",
-                            style = IosTheme.type.headline,
-                            fontWeight = FontWeight.Bold,
-                            color = IosTheme.colors.label,
-                        )
-                        Box(
-                            modifier = Modifier
-                                .size(28.dp)
-                                .clip(CircleShape)
-                                .clickable { authorMenuExpanded = false },
-                            contentAlignment = Alignment.Center,
-                        ) {
-                            Text("✕", fontSize = 14.sp, color = IosTheme.colors.secondaryLabel)
-                        }
-                    }
-
-                    Spacer(Modifier.height(8.dp))
-                    IosDivider()
-                    Spacer(Modifier.height(4.dp))
-
-                    Column(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .heightIn(max = 380.dp)
-                            .verticalScroll(rememberScrollState()),
-                    ) {
-                        // 首项: 全部作者
-                        val isAllSelected = state.filterUserId == null
-                        Row(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .clip(RoundedCornerShape(8.dp))
-                                .clickable {
-                                    authorMenuExpanded = false
-                                    onSetFilterUser(null)
-                                }
-                                .padding(vertical = 10.dp, horizontal = 4.dp),
-                            verticalAlignment = Alignment.CenterVertically,
-                        ) {
-                            Box(
-                                modifier = Modifier
-                                    .size(28.dp)
-                                    .clip(CircleShape)
-                                    .background(IosTheme.colors.fieldBackground),
-                                contentAlignment = Alignment.Center,
-                            ) {
-                                Text("👥", fontSize = 13.sp)
-                            }
-                            Spacer(Modifier.width(10.dp))
-                            Text(
-                                text = "全部楼层",
-                                style = IosTheme.type.body.copy(fontSize = 14.sp),
-                                fontWeight = if (isAllSelected) FontWeight.SemiBold else FontWeight.Normal,
-                                color = IosTheme.colors.label,
-                                modifier = Modifier.weight(1f),
-                            )
-                            if (isAllSelected) {
-                                Text("✓", fontSize = 15.sp, fontWeight = FontWeight.Bold, color = IosTheme.colors.accent)
-                            }
-                        }
-
-                        IosDivider(modifier = Modifier.padding(vertical = 1.dp))
-
-                        // 各发言者项
-                        authorFilterItems.forEachIndexed { idx, item ->
-                            val isSelected = state.filterUserId == item.userId
-                            val avatarUrl = item.avatarTemplate?.let { org.linuxdo.android.data.avatarUrlOf(it, size = 96) }
-                            Row(
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .clip(RoundedCornerShape(8.dp))
-                                    .clickable {
-                                        authorMenuExpanded = false
-                                        onSetFilterUser(item.userId)
-                                    }
-                                    .padding(vertical = 8.dp, horizontal = 4.dp),
-                                verticalAlignment = Alignment.CenterVertically,
-                            ) {
-                                // 头像
-                                if (!avatarUrl.isNullOrBlank()) {
-                                    AsyncImage(
-                                        model = avatarUrl,
-                                        contentDescription = item.username,
-                                        contentScale = androidx.compose.ui.layout.ContentScale.Crop,
-                                        modifier = Modifier
-                                            .size(28.dp)
-                                            .clip(CircleShape)
-                                            .background(IosTheme.colors.fieldBackground),
-                                    )
-                                } else {
-                                    Box(
-                                        modifier = Modifier
-                                            .size(28.dp)
-                                            .clip(CircleShape)
-                                            .background(Color(0xFFE1F0FF)),
-                                        contentAlignment = Alignment.Center,
-                                    ) {
-                                        Text(
-                                            text = item.username.firstOrNull()?.uppercase() ?: "U",
-                                            fontSize = 13.sp,
-                                            fontWeight = FontWeight.Bold,
-                                            color = IosTheme.colors.accent,
-                                        )
-                                    }
-                                }
-
-                                Spacer(Modifier.width(10.dp))
-
-                                // 用户名与楼主标识
-                                Row(
-                                    modifier = Modifier.weight(1f),
-                                    verticalAlignment = Alignment.CenterVertically,
-                                    horizontalArrangement = Arrangement.spacedBy(6.dp),
-                                ) {
-                                    Text(
-                                        text = item.username,
-                                        style = IosTheme.type.body.copy(fontSize = 14.sp),
-                                        fontWeight = if (isSelected) FontWeight.SemiBold else FontWeight.Normal,
-                                        color = if (isSelected) IosTheme.colors.accent else IosTheme.colors.label,
-                                        maxLines = 1,
-                                        overflow = TextOverflow.Ellipsis,
-                                    )
-                                    if (item.isOp) {
-                                        Box(
-                                            modifier = Modifier
-                                                .clip(RoundedCornerShape(4.dp))
-                                                .background(Color(0xFFE0F2FE))
-                                                .padding(horizontal = 5.dp, vertical = 1.dp),
-                                        ) {
-                                            Text(
-                                                text = "楼主",
-                                                style = IosTheme.type.caption.copy(fontSize = 10.sp, fontWeight = FontWeight.SemiBold),
-                                                color = Color(0xFF0284C7),
-                                            )
-                                        }
-                                    }
-                                }
-
-                                // 发帖数胶囊
-                                Box(
-                                    modifier = Modifier
-                                        .clip(RoundedCornerShape(6.dp))
-                                        .background(IosTheme.colors.fieldBackground)
-                                        .padding(horizontal = 7.dp, vertical = 2.dp),
-                                ) {
-                                    Text(
-                                        text = "${item.postCount} 帖",
-                                        style = IosTheme.type.caption.copy(fontSize = 11.sp),
-                                        color = IosTheme.colors.secondaryLabel,
-                                    )
-                                }
-                            }
-                            if (idx < authorFilterItems.lastIndex) {
-                                IosDivider(modifier = Modifier.padding(vertical = 1.dp))
-                            }
-                        }
-                    }
-                }
-            }
-        }
-    }
     manageTarget?.let { post ->
         PostManageDialog(post, onDismiss = { manageTarget = null },
             onEdit = {
@@ -2026,8 +1839,10 @@ fun TopicDetailScreen(
 }
 
 /**
- * 评论区头部栏:左侧总回复数与筛选药丸(贴吧模式),右侧显示当前排序的菜单。
- * 固定跟在 1 楼下方 —— 向上滑动触顶时吸顶冻结,方便用户随时切换筛选或翻转排序;非顶部取消冻结。
+ * 评论区头部栏：
+ * - 左侧：总回复数 + 锚定下拉筛选发言者胶囊（样式与主页筛选胶囊保持一致，不再弹出全屏中间弹窗）；
+ * - 右侧：复用主页动态排序按钮与锚定下拉菜单逻辑（按时间正/倒序、点赞数切换语义图标与菜单高亮）。
+ * 固定跟在 1 楼下方 —— 向上滑动触顶时吸顶冻结，方便随时切换筛选或排序。
  */
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
@@ -2041,8 +1856,18 @@ private fun CommentOrderBar(
     filterUserId: Long? = null,
     authorMenuExpanded: Boolean = false,
     onAuthorMenuClick: () -> Unit = {},
+    onAuthorMenuDismiss: () -> Unit = {},
+    onSelectFilterUser: (Long?) -> Unit = {},
     isPinned: Boolean = false,
 ) {
+    val isDark = IosTheme.colors.isDark
+    val accent = IosTheme.colors.accent
+    val mappedSortOrder = when (order) {
+        CommentOrder.TimeAscending -> TopicSortOrder.Default
+        CommentOrder.TimeDescending -> TopicSortOrder.Created
+        CommentOrder.Likes -> TopicSortOrder.Likes
+    }
+
     Column(
         Modifier
             .fillMaxWidth()
@@ -2051,92 +1876,339 @@ private fun CommentOrderBar(
             )
             .background(IosTheme.colors.card)
     ) {
-        FlowRow(
+        Row(
             Modifier
                 .fillMaxWidth()
-                .padding(horizontal = 16.dp, vertical = 8.dp),
+                .padding(horizontal = 16.dp, vertical = 7.dp),
             horizontalArrangement = Arrangement.SpaceBetween,
-            verticalArrangement = Arrangement.spacedBy(8.dp),
+            verticalAlignment = Alignment.CenterVertically,
         ) {
-            Row(Modifier.padding(end = 8.dp), verticalAlignment = Alignment.CenterVertically) {
+            Row(
+                Modifier.weight(1f).padding(end = 8.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
                 // 1. 全部回复标签
                 Text(
                     text = if (total > 0) "全部回复 $total" else "全部回复",
                     style = IosTheme.type.subheadline,
                     fontWeight = FontWeight.SemiBold,
                     color = IosTheme.colors.label,
+                    maxLines = 1,
                 )
 
-                // 2. 筛选药丸（放在全部回复后面，参照贴吧模式）
+                // 2. 筛选发言者胶囊 + 锚定下拉栏
                 if (authorFilterItems.isNotEmpty()) {
                     Spacer(Modifier.width(8.dp))
                     val isFiltered = filterUserId != null
-                    val pillBg = when {
-                        authorMenuExpanded -> Color(0xFFE0F2FE)
-                        isFiltered -> IosTheme.colors.accent.copy(alpha = 0.12f)
-                        IosTheme.colors.isDark -> Color(0xFF2C2C2E)
-                        else -> IosTheme.colors.fieldBackground
-                    }
-                    val pillTextColor = when {
-                        authorMenuExpanded || isFiltered -> Color(0xFF0284C7)
-                        IosTheme.colors.isDark -> Color(0xFFE5E5EA)
-                        else -> IosTheme.colors.label
-                    }
                     val selectedName = authorFilterItems.firstOrNull { it.userId == filterUserId }?.username
-                    val isDark = IosTheme.colors.isDark
-                    val filterShape = RoundedCornerShape(8.dp)
-                    val filterBorder = if (authorMenuExpanded) Color(0xFF0284C7) else (if (isDark) Color(0xFF48484A) else Color(0xFFD1D1D6))
-                    Row(
-                        modifier = Modifier
-                            .widthIn(max = 140.dp)
-                            .heightIn(min = 26.dp)
-                            .clip(filterShape)
-                            .background(pillBg)
-                            .border(if (authorMenuExpanded) 1.2.dp else 0.75.dp, filterBorder, filterShape)
-                            .clickable(onClick = onAuthorMenuClick)
-                            .padding(horizontal = 8.dp, vertical = 4.dp),
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(3.dp),
-                    ) {
-                        Text(
-                            text = when {
-                                selectedName != null -> "只看 $selectedName ${if (authorMenuExpanded) "▴" else "▾"}"
-                                authorMenuExpanded -> "筛选 ▴"
-                                else -> "筛选 ▾"
-                            },
-                            style = IosTheme.type.footnote.copy(fontSize = 11.5.sp, lineHeight = 15.sp),
-                            color = pillTextColor,
-                            fontWeight = if (authorMenuExpanded || isFiltered) FontWeight.SemiBold else FontWeight.Medium,
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis,
-                            softWrap = false,
-                        )
+                    val filterShape = RoundedCornerShape(16.dp)
+                    val activePill = authorMenuExpanded || isFiltered
+                    val pillBg = when {
+                        activePill -> accent.copy(alpha = if (isDark) 0.18f else 0.11f)
+                        isDark -> Color.White.copy(alpha = 0.08f)
+                        else -> Color(0xFF767680).copy(alpha = 0.11f)
+                    }
+                    val pillBorder = if (activePill) accent.copy(alpha = if (isDark) 0.42f else 0.30f) else Color.Transparent
+                    val pillTextColor = if (activePill) accent else IosTheme.colors.label
+
+                    Box {
+                        Row(
+                            modifier = Modifier
+                                .widthIn(max = 152.dp)
+                                .height(30.dp)
+                                .clip(filterShape)
+                                .background(pillBg)
+                                .then(
+                                    if (pillBorder != Color.Transparent) Modifier.border(0.9.dp, pillBorder, filterShape)
+                                    else Modifier
+                                )
+                                .clickable(onClick = onAuthorMenuClick)
+                                .padding(start = 10.dp, end = if (isFiltered) 6.dp else 9.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(5.dp),
+                        ) {
+                            Text(
+                                text = selectedName?.let { "只看 $it" } ?: "筛选",
+                                style = IosTheme.type.footnote.copy(
+                                    fontSize = 12.5.sp,
+                                    fontWeight = if (activePill) FontWeight.SemiBold else FontWeight.Medium,
+                                ),
+                                color = pillTextColor,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
+                                softWrap = false,
+                                modifier = Modifier.weight(1f, fill = false),
+                            )
+                            if (isFiltered) {
+                                Box(
+                                    modifier = Modifier
+                                        .size(16.dp)
+                                        .clip(CircleShape)
+                                        .background(accent.copy(alpha = 0.18f))
+                                        .clickable { onSelectFilterUser(null) },
+                                    contentAlignment = Alignment.Center,
+                                ) {
+                                    Text(
+                                        text = "×",
+                                        fontSize = 11.sp,
+                                        fontWeight = FontWeight.Bold,
+                                        color = accent,
+                                        lineHeight = 11.sp,
+                                    )
+                                }
+                            } else {
+                                Text(
+                                    text = if (authorMenuExpanded) "▴" else "▾",
+                                    fontSize = 10.sp,
+                                    color = pillTextColor.copy(alpha = 0.7f),
+                                )
+                            }
+                        }
+
+                        DropdownMenu(
+                            expanded = authorMenuExpanded,
+                            onDismissRequest = onAuthorMenuDismiss,
+                            offset = DpOffset(0.dp, 4.dp),
+                            containerColor = IosTheme.colors.card,
+                            shape = RoundedCornerShape(14.dp),
+                            modifier = Modifier.width(216.dp),
+                        ) {
+                            Column(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .heightIn(max = 340.dp)
+                                    .verticalScroll(rememberScrollState()),
+                            ) {
+                                val isAllSelected = filterUserId == null
+                                Row(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .padding(horizontal = 6.dp, vertical = 2.dp)
+                                        .clip(RoundedCornerShape(9.dp))
+                                        .background(if (isAllSelected) accent.copy(alpha = 0.10f) else Color.Transparent)
+                                        .clickable { onSelectFilterUser(null) }
+                                        .padding(horizontal = 9.dp, vertical = 8.dp),
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                                ) {
+                                    Box(
+                                        modifier = Modifier
+                                            .size(24.dp)
+                                            .clip(CircleShape)
+                                            .background(IosTheme.colors.fieldBackground),
+                                        contentAlignment = Alignment.Center,
+                                    ) {
+                                        Text("👥", fontSize = 11.sp)
+                                    }
+                                    Text(
+                                        text = "全部楼层",
+                                        style = IosTheme.type.footnote.copy(
+                                            fontSize = 13.sp,
+                                            fontWeight = if (isAllSelected) FontWeight.SemiBold else FontWeight.Normal,
+                                        ),
+                                        color = if (isAllSelected) accent else IosTheme.colors.label,
+                                        modifier = Modifier.weight(1f),
+                                    )
+                                    if (isAllSelected) {
+                                        Text("✓", fontSize = 12.5.sp, fontWeight = FontWeight.Bold, color = accent)
+                                    }
+                                }
+
+                                authorFilterItems.forEach { item ->
+                                    val isSelected = filterUserId == item.userId
+                                    val avatarUrl = item.avatarTemplate?.let { org.linuxdo.android.data.avatarUrlOf(it, size = 96) }
+                                    Row(
+                                        modifier = Modifier
+                                            .fillMaxWidth()
+                                            .padding(horizontal = 6.dp, vertical = 2.dp)
+                                            .clip(RoundedCornerShape(9.dp))
+                                            .background(if (isSelected) accent.copy(alpha = 0.10f) else Color.Transparent)
+                                            .clickable { onSelectFilterUser(item.userId) }
+                                            .padding(horizontal = 9.dp, vertical = 7.dp),
+                                        verticalAlignment = Alignment.CenterVertically,
+                                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                                    ) {
+                                        if (!avatarUrl.isNullOrBlank()) {
+                                            AsyncImage(
+                                                model = avatarUrl,
+                                                contentDescription = item.username,
+                                                contentScale = ContentScale.Crop,
+                                                modifier = Modifier
+                                                    .size(24.dp)
+                                                    .clip(CircleShape)
+                                                    .background(IosTheme.colors.fieldBackground),
+                                            )
+                                        } else {
+                                            Box(
+                                                modifier = Modifier
+                                                    .size(24.dp)
+                                                    .clip(CircleShape)
+                                                    .background(accent.copy(alpha = 0.14f)),
+                                                contentAlignment = Alignment.Center,
+                                            ) {
+                                                Text(
+                                                    text = item.username.firstOrNull()?.uppercase() ?: "U",
+                                                    fontSize = 11.sp,
+                                                    fontWeight = FontWeight.Bold,
+                                                    color = accent,
+                                                )
+                                            }
+                                        }
+
+                                        Row(
+                                            modifier = Modifier.weight(1f),
+                                            verticalAlignment = Alignment.CenterVertically,
+                                            horizontalArrangement = Arrangement.spacedBy(5.dp),
+                                        ) {
+                                            Text(
+                                                text = item.username,
+                                                style = IosTheme.type.footnote.copy(
+                                                    fontSize = 13.sp,
+                                                    fontWeight = if (isSelected) FontWeight.SemiBold else FontWeight.Normal,
+                                                ),
+                                                color = if (isSelected) accent else IosTheme.colors.label,
+                                                maxLines = 1,
+                                                overflow = TextOverflow.Ellipsis,
+                                                modifier = Modifier.weight(1f, fill = false),
+                                            )
+                                            if (item.isOp) {
+                                                Box(
+                                                    modifier = Modifier
+                                                        .clip(RoundedCornerShape(4.dp))
+                                                        .background(accent.copy(alpha = if (isDark) 0.22f else 0.12f))
+                                                        .padding(horizontal = 4.dp, vertical = 1.dp),
+                                                ) {
+                                                    Text(
+                                                        text = "楼主",
+                                                        style = IosTheme.type.caption.copy(fontSize = 9.5.sp, fontWeight = FontWeight.SemiBold),
+                                                        color = accent,
+                                                    )
+                                                }
+                                            }
+                                        }
+
+                                        Text(
+                                            text = "${item.postCount}",
+                                            style = IosTheme.type.caption.copy(fontSize = 11.sp, fontFeatureSettings = "tnum"),
+                                            color = if (isSelected) accent else IosTheme.colors.tertiaryLabel,
+                                        )
+                                        if (isSelected) {
+                                            Text("✓", fontSize = 12.sp, fontWeight = FontWeight.Bold, color = accent)
+                                        }
+                                    }
+                                }
+                            }
+                        }
                     }
                 }
             }
 
-            Box {
+            // 3. 右侧复用主页动态排序按钮 + 锚定下拉栏
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(6.dp),
+            ) {
                 var menuExpanded by remember { mutableStateOf(false) }
-                Row(
-                    Modifier.clip(RoundedCornerShape(8.dp))
-                        .background(IosTheme.colors.fieldBackground)
-                        .clickable(enabled = !busy) { menuExpanded = true }
-                        .padding(horizontal = 10.dp, vertical = 6.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(4.dp),
-                ) {
-                    Text(order.title, style = IosTheme.type.footnote,
-                        color = if (busy) IosTheme.colors.secondaryLabel else IosTheme.colors.label)
-                    Text("▾", style = IosTheme.type.caption, color = IosTheme.colors.secondaryLabel)
+                if (order != CommentOrder.TimeAscending) {
+                    Text(
+                        text = order.title,
+                        style = IosTheme.type.caption.copy(fontSize = 11.sp, fontWeight = FontWeight.SemiBold),
+                        color = accent,
+                        maxLines = 1,
+                        modifier = Modifier
+                            .clip(RoundedCornerShape(99.dp))
+                            .background(accent.copy(alpha = 0.12f))
+                            .clickable(enabled = !busy) { menuExpanded = true }
+                            .padding(horizontal = 7.dp, vertical = 2.dp),
+                    )
                 }
-                DropdownMenu(expanded = menuExpanded, onDismissRequest = { menuExpanded = false },
-                    modifier = Modifier.background(IosTheme.colors.card)) {
-                    CommentOrder.entries.forEach { option ->
-                        DropdownMenuItem(
-                            text = { Text(option.title, color = if (option == order) IosTheme.colors.accent else IosTheme.colors.label) },
-                            trailingIcon = { if (option == order) Text("✓", color = IosTheme.colors.accent) },
-                            onClick = { menuExpanded = false; onSelect(option) },
-                        )
+                Box {
+                    TopicSortDynamicButton(
+                        sortOrder = mappedSortOrder,
+                        ascending = false,
+                        onClick = { if (!busy) menuExpanded = true },
+                    )
+                    DropdownMenu(
+                        expanded = menuExpanded,
+                        onDismissRequest = { menuExpanded = false },
+                        offset = DpOffset(0.dp, 4.dp),
+                        containerColor = IosTheme.colors.card,
+                        shape = RoundedCornerShape(16.dp),
+                        modifier = Modifier.width(184.dp),
+                    ) {
+                        CommentOrder.entries.forEachIndexed { idx, option ->
+                            val selected = option == order
+                            val optionGlyph = when (option) {
+                                CommentOrder.TimeAscending -> TopicSortOrder.Default
+                                CommentOrder.TimeDescending -> TopicSortOrder.Created
+                                CommentOrder.Likes -> TopicSortOrder.Likes
+                            }
+                            val optionDesc = when (option) {
+                                CommentOrder.TimeAscending -> "按楼层先后浏览"
+                                CommentOrder.TimeDescending -> "最新回复优先"
+                                CommentOrder.Likes -> "全帖按获赞从高到低"
+                            }
+                            val tint = if (selected) accent else IosTheme.colors.label
+                            val iconBg = if (selected) accent.copy(alpha = 0.12f)
+                            else if (isDark) Color.White.copy(alpha = 0.07f)
+                            else Color(0xFF767680).copy(alpha = 0.10f)
+
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(horizontal = 6.dp, vertical = 2.dp)
+                                    .clip(RoundedCornerShape(10.dp))
+                                    .background(if (selected) accent.copy(alpha = 0.10f) else Color.Transparent)
+                                    .clickable(enabled = !busy) {
+                                        menuExpanded = false
+                                        onSelect(option)
+                                    }
+                                    .padding(horizontal = 10.dp, vertical = 8.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(10.dp),
+                            ) {
+                                Box(
+                                    modifier = Modifier
+                                        .size(28.dp)
+                                        .clip(RoundedCornerShape(8.dp))
+                                        .background(iconBg),
+                                    contentAlignment = Alignment.Center,
+                                ) {
+                                    TopicSortDynamicGlyph(
+                                        order = optionGlyph,
+                                        tint = if (selected) accent else IosTheme.colors.secondaryLabel,
+                                        modifier = Modifier.size(16.dp),
+                                    )
+                                }
+                                Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(1.dp)) {
+                                    Text(
+                                        text = option.title,
+                                        style = IosTheme.type.subheadline.copy(
+                                            fontSize = 13.5.sp,
+                                            fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Normal,
+                                        ),
+                                        color = tint,
+                                    )
+                                    Text(
+                                        text = optionDesc,
+                                        style = IosTheme.type.caption.copy(fontSize = 10.5.sp),
+                                        color = if (selected) accent.copy(alpha = 0.8f) else IosTheme.colors.tertiaryLabel,
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis,
+                                    )
+                                }
+                                if (selected) {
+                                    Text(
+                                        text = "✓",
+                                        style = IosTheme.type.caption.copy(fontSize = 12.sp, fontWeight = FontWeight.Bold),
+                                        color = accent,
+                                    )
+                                }
+                            }
+                            if (idx < CommentOrder.entries.lastIndex) {
+                                Spacer(Modifier.height(1.dp))
+                            }
+                        }
                     }
                 }
             }

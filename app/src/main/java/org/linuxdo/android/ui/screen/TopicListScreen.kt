@@ -643,10 +643,21 @@ fun TopicListScreen(
                     onCopyLink = { copyTopicLink(item.topic) },
                     onBookmark = bookmarkTopicAction?.let { fn -> { fn(item.topic) } },
                     onFlag = flagTopicAction?.let { fn -> { fn(item.topic) } },
-                    onSwipeMute = if (useHomeFilterHeader && onSetNotificationLevel != null && item.bookmarkId == null) {
+                    onSwipeMute = if (onSetNotificationLevel != null && item.bookmarkId == null) {
                         {
                             onSetNotificationLevel(item.topic, TopicNotificationLevel.Muted)
                             showNotice("已设为免打扰")
+                        }
+                    } else null,
+                    onSwipeWatch = if (onSetNotificationLevel != null && item.bookmarkId == null) {
+                        {
+                            val target = if (item.notificationLevel == TopicNotificationLevel.Watching) {
+                                TopicNotificationLevel.Regular
+                            } else {
+                                TopicNotificationLevel.Watching
+                            }
+                            onSetNotificationLevel(item.topic, target)
+                            showNotice(if (target == TopicNotificationLevel.Watching) "已关注话题" else "已取消关注")
                         }
                     } else null,
                     onOpenUser = onOpenUser,
@@ -2051,6 +2062,7 @@ fun TopicRow(
     onBookmark: (() -> Unit)? = null,
     onFlag: (() -> Unit)? = null,
     onSwipeMute: (() -> Unit)? = null,
+    onSwipeWatch: (() -> Unit)? = null,
     onOpenUser: (String, String?, String?, String?) -> Unit = { _, _, _, _ -> },
     onClick: () -> Unit,
     feedGraphicMode: Boolean = true,
@@ -2115,9 +2127,14 @@ fun TopicRow(
     }
     val density = LocalDensity.current
     val swipeScope = rememberCoroutineScope()
-    val maxSwipePx = remember(density) { with(density) { 96.dp.toPx() } }
-    val revealThresholdPx = remember(density) { with(density) { 44.dp.toPx() } }
-    val edgeGuardPx = remember(density) { with(density) { 28.dp.toPx() } }
+    val hasSwipeActions = onSwipeMute != null || onSwipeWatch != null
+    val actionCount = (if (onSwipeWatch != null) 1 else 0) + (if (onSwipeMute != null) 1 else 0)
+    val actionWidthDp = 76.dp
+    val maxSwipePx = remember(density, actionCount) { with(density) { (actionWidthDp * actionCount).toPx() } }
+    val revealThresholdPx = remember(density, actionCount) {
+        with(density) { (if (actionCount >= 2) 56.dp else 44.dp).toPx() }
+    }
+    val edgeGuardPx = remember(density) { with(density) { 24.dp.toPx() } }
     var swipeOffsetX by remember(topic.id) { mutableFloatStateOf(0f) }
     var swipeSettleJob by remember(topic.id) { mutableStateOf<Job?>(null) }
     fun settleSwipeTo(target: Float) {
@@ -2131,15 +2148,15 @@ fun TopicRow(
         }
     }
     LaunchedEffect(item.notificationLevelUpdating, topic.id) {
-        if (item.notificationLevelUpdating && swipeOffsetX > 0f) settleSwipeTo(0f)
+        if (item.notificationLevelUpdating && swipeOffsetX < 0f) settleSwipeTo(0f)
     }
-    val swipeModifier = if (onSwipeMute != null) {
+    val swipeModifier = if (hasSwipeActions && maxSwipePx > 0f) {
         Modifier.pointerInput(topic.id, maxSwipePx, revealThresholdPx, item.notificationLevelUpdating) {
             awaitEachGesture {
                 val down = awaitFirstDown(requireUnconsumed = false)
                 if (item.notificationLevelUpdating) return@awaitEachGesture
-                // 左边缘留给系统返回/侧栏手势，避免冲突
-                if (down.position.x < edgeGuardPx && swipeOffsetX <= 0f) return@awaitEachGesture
+                // 右边缘留给系统返回手势，避免冲突
+                if (down.position.x > size.width - edgeGuardPx && swipeOffsetX >= 0f) return@awaitEachGesture
                 var totalDx = 0f
                 var totalDy = 0f
                 var lockedHorizontal = false
@@ -2149,7 +2166,7 @@ fun TopicRow(
                     val change = event.changes.firstOrNull { it.id == down.id } ?: break
                     if (!change.pressed) {
                         if (lockedHorizontal) {
-                            val target = if (swipeOffsetX >= revealThresholdPx) maxSwipePx else 0f
+                            val target = if (swipeOffsetX <= -revealThresholdPx) -maxSwipePx else 0f
                             settleSwipeTo(target)
                         }
                         break
@@ -2164,7 +2181,8 @@ fun TopicRow(
                             break
                         }
                         if (absX > viewConfiguration.touchSlop && absX > absY * 1.25f) {
-                            val canDrag = (startOffset > 0f) || (totalDx > 0f)
+                            // 左滑展开（totalDx < 0），已展开时允许右滑收回（startOffset < 0）
+                            val canDrag = (startOffset < 0f) || (totalDx < 0f)
                             if (!canDrag) break
                             lockedHorizontal = true
                             swipeSettleJob?.cancel()
@@ -2172,7 +2190,7 @@ fun TopicRow(
                     }
                     if (lockedHorizontal) {
                         change.consume()
-                        swipeOffsetX = (startOffset + totalDx).coerceIn(0f, maxSwipePx * 1.15f)
+                        swipeOffsetX = (startOffset + totalDx).coerceIn(-maxSwipePx * 1.12f, 0f)
                     }
                 }
             }
@@ -2184,38 +2202,76 @@ fun TopicRow(
             .clipToBounds()
             .then(swipeModifier),
     ) {
-        if (onSwipeMute != null && swipeOffsetX > 0.5f) {
+        if (hasSwipeActions && swipeOffsetX < -0.5f) {
+            val isWatching = item.notificationLevel == TopicNotificationLevel.Watching
+            val watchBg = if (isWatching) Color(0xFF5E5CE6) else Color(0xFF007AFF)
+            val muteBg = Color(0xFFFF3B30)
             Box(
                 modifier = Modifier
                     .matchParentSize()
-                    .background(Color(0xFFFF3B30)),
-                contentAlignment = Alignment.CenterStart,
+                    .background(if (onSwipeMute != null) muteBg else watchBg),
+                contentAlignment = Alignment.CenterEnd,
             ) {
-                Box(
-                    modifier = Modifier
-                        .width(96.dp)
-                        .fillMaxHeight()
-                        .clickable(enabled = !item.notificationLevelUpdating) {
-                            settleSwipeTo(0f)
-                            onSwipeMute()
-                        },
-                    contentAlignment = Alignment.Center,
-                ) {
-                    Column(
-                        horizontalAlignment = Alignment.CenterHorizontally,
-                        verticalArrangement = Arrangement.spacedBy(4.dp),
-                    ) {
-                        TopicNotificationIcon(
-                            level = TopicNotificationLevel.Muted,
-                            modifier = Modifier.size(20.dp),
-                            tint = Color.White,
-                        )
-                        Text(
-                            text = "免打扰",
-                            style = IosTheme.type.caption.copy(fontSize = 12.sp, fontWeight = FontWeight.SemiBold),
-                            color = Color.White,
-                            maxLines = 1,
-                        )
+                Row(modifier = Modifier.fillMaxHeight()) {
+                    if (onSwipeWatch != null) {
+                        Box(
+                            modifier = Modifier
+                                .width(actionWidthDp)
+                                .fillMaxHeight()
+                                .background(watchBg)
+                                .clickable(enabled = !item.notificationLevelUpdating) {
+                                    settleSwipeTo(0f)
+                                    onSwipeWatch()
+                                },
+                            contentAlignment = Alignment.Center,
+                        ) {
+                            Column(
+                                horizontalAlignment = Alignment.CenterHorizontally,
+                                verticalArrangement = Arrangement.spacedBy(4.dp),
+                            ) {
+                                TopicNotificationIcon(
+                                    level = TopicNotificationLevel.Watching,
+                                    modifier = Modifier.size(20.dp),
+                                    tint = Color.White,
+                                )
+                                Text(
+                                    text = if (isWatching) "取消关注" else "关注",
+                                    style = IosTheme.type.caption.copy(fontSize = 12.sp, fontWeight = FontWeight.SemiBold),
+                                    color = Color.White,
+                                    maxLines = 1,
+                                )
+                            }
+                        }
+                    }
+                    if (onSwipeMute != null) {
+                        Box(
+                            modifier = Modifier
+                                .width(actionWidthDp)
+                                .fillMaxHeight()
+                                .background(muteBg)
+                                .clickable(enabled = !item.notificationLevelUpdating) {
+                                    settleSwipeTo(0f)
+                                    onSwipeMute()
+                                },
+                            contentAlignment = Alignment.Center,
+                        ) {
+                            Column(
+                                horizontalAlignment = Alignment.CenterHorizontally,
+                                verticalArrangement = Arrangement.spacedBy(4.dp),
+                            ) {
+                                TopicNotificationIcon(
+                                    level = TopicNotificationLevel.Muted,
+                                    modifier = Modifier.size(20.dp),
+                                    tint = Color.White,
+                                )
+                                Text(
+                                    text = "免打扰",
+                                    style = IosTheme.type.caption.copy(fontSize = 12.sp, fontWeight = FontWeight.SemiBold),
+                                    color = Color.White,
+                                    maxLines = 1,
+                                )
+                            }
+                        }
                     }
                 }
             }
@@ -2230,11 +2286,11 @@ fun TopicRow(
                 .background(if (isHighlighted) IosTheme.colors.card.copy(alpha = 0.85f) else IosTheme.colors.card)
                 .combinedClickable(
                     onClick = {
-                        if (swipeOffsetX > 1f) settleSwipeTo(0f) else onClick()
+                        if (swipeOffsetX < -1f) settleSwipeTo(0f) else onClick()
                     },
                     onLongClick = if (hasAnyLongPress && !item.notificationLevelUpdating) {
                         {
-                            if (swipeOffsetX > 1f) settleSwipeTo(0f)
+                            if (swipeOffsetX < -1f) settleSwipeTo(0f)
                             else showLevelMenu = true
                         }
                     } else null,
