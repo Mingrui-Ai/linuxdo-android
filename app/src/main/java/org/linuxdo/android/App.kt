@@ -278,7 +278,7 @@ class AppContainer(context: Context) {
     )
 
     val imageLoader: ImageLoader = ImageLoader.Builder(context)
-        .callFactory(dynamicCallFactory)
+        .callFactory(org.linuxdo.android.net.ImageCallFactory { dohCoordinator.currentClient })
         .components {
             if (Build.VERSION.SDK_INT >= 28) {
                 add(ImageDecoderDecoder.Factory(enforceMinimumFrameDelay = true))

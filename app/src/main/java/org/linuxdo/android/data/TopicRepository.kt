@@ -3835,8 +3835,10 @@ class TopicRepository(
         burst: Boolean = false,
         present: Boolean = true,
         retryAllowed: Boolean = true,
-    ): JsonObject =
-        json.parseToJsonElement(request(path, burst = burst, present = present, retryAllowed = retryAllowed)).jsonObject
+    ): JsonObject {
+        val body = request(path, burst = burst, present = present, retryAllowed = retryAllowed)
+        return withContext(Dispatchers.Default) { json.parseToJsonElement(body).jsonObject }
+    }
     private fun JsonObject.text(key: String): String = (get(key) as? JsonPrimitive)?.contentOrNull.orEmpty()
     private fun JsonObject.number(key: String): Long? = (get(key) as? JsonPrimitive)?.longOrNull?.takeIf { it > 0 }
     private fun JsonObject.objects(key: String): List<JsonObject> = (get(key) as? JsonArray).orEmpty().mapNotNull { it as? JsonObject }

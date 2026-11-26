@@ -4,9 +4,7 @@ import java.io.IOException
 import kotlin.coroutines.resume
 import kotlin.coroutines.resumeWithException
 import kotlinx.coroutines.CancellationException
-import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.suspendCancellableCoroutine
-import kotlinx.coroutines.withContext
 import okhttp3.Call
 import okhttp3.Callback
 import okhttp3.Cookie
@@ -66,7 +64,6 @@ class OkHttpTransport(
         bytes: ByteArray,
         fields: Map<String, String>,
     ): TransportResult {
-        withContext(Dispatchers.Main) { store.syncFromWebView() }
         val body = MultipartBody.Builder().setType(MultipartBody.FORM).apply {
             fields.forEach { (key, value) -> addFormDataPart(key, value) }
             // Discourse 收的是 files[] 这个字段名。
@@ -99,11 +96,9 @@ class OkHttpTransport(
         isClearanceProbe: Boolean = false,
         expectedGeneration: Long? = null,
     ): TransportResult {
-        // 先把 WebView 的现场 Cookie 同步进加密存储,共享客户端的 Interceptor 会读这份快照。
-        withContext(Dispatchers.Main) {
-            if (expectedGeneration != null && expectedGeneration != store.sessionGeneration) throw CancellationException("会话已切换")
-            store.syncFromWebView()
-        }
+        // 共享客户端的 SessionHeaderInterceptor 在每次实际发送（包括重定向）前同步凭据。
+        // 不在此重复同步，避免每个请求额外阻塞一次主线程。
+        if (expectedGeneration != null && expectedGeneration != store.sessionGeneration) throw CancellationException("会话已切换")
         val targetUrl = if (path.startsWith("http://") || path.startsWith("https://")) path else Config.BASE_URL + path
         val isConnect = targetUrl.contains("connect.linux.do")
         val acceptHeader = if (path.startsWith("/raw/")) {

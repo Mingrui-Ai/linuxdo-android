@@ -23,7 +23,7 @@ import org.linuxdo.android.net.anycast.AnycastPool
 /**
  * 全应用共用的 HTTP 客户端。
  *
- * 图片(Coil)和 JSON 请求必须走同一个客户端:cf_clearance 与 UA 绑定,
+ * 图片(Coil)和 JSON 请求共用网络配置、连接池与凭据拦截器（调度队列独立）:cf_clearance 与 UA 绑定,
  * 图片请求若用了 Coil 默认客户端(不同 UA、没有 Cookie),会被 Cloudflare 直接拦掉,
  * 结果就是列表里头像全空。
  *
@@ -360,10 +360,13 @@ private class SessionHeaderInterceptor(
             return response
         }
         try {
+            val responseCookies = Cookie.parseAll(original.url, response.headers)
+            // 大多数图片/API 响应没有 Set-Cookie，无需往返主线程和等待 Cookie 写入锁。
+            checkSession()
+            if (responseCookies.isEmpty()) return response
             // 每次重定向都在进入下一跳前落 Cookie；普通 API 和 OAuth 共用此入口。
             runBlocking(Dispatchers.Main) {
                 checkSession()
-                val responseCookies = Cookie.parseAll(original.url, response.headers)
                 val sameUserAgent = requestUserAgent == (store.userAgentOrNull() ?: userAgent)
                 if (!sameUserAgent && responseCookies.any { isCloudflareCookie(it.name) }) {
                     NetDiagnostics.log("忽略浏览器标识切换前的响应安全 Cookie，保留登录凭据更新")
@@ -494,46 +497,12 @@ internal object SiteImageGateInterceptor {
     /** 用户主动点击触发的显式文件/附件下载，不进列表图片门禁排队与冷却。 */
     data object ExplicitDownloadRequest
 
-    private const val EMOJI_CONCURRENT = 12
-    private const val AVATAR_CONCURRENT = 3
-    private const val MEDIA_CONCURRENT = 4
     private const val ACQUIRE_TIMEOUT_MS = 15_000L
     private const val DEFAULT_COOLDOWN_MS = 4_000L
 
-    private const val EMOJI_PREFIX = "/images/emoji/"
-    private const val SVG_PREFIX = "/svg-sprite/"
-    private val avatarPrefixes = listOf("/user_avatar/", "/letter_avatar")
-    private const val UPLOADS_PREFIX = "/uploads/"
-    private const val IMAGES_PREFIX = "/images/"
-    private val mediaExtensions = listOf(".png", ".jpg", ".jpeg", ".webp", ".gif", ".avif", ".svg", ".ico")
-
-    private val emojiPermits = java.util.concurrent.Semaphore(EMOJI_CONCURRENT, true)
-    private val avatarPermits = java.util.concurrent.Semaphore(AVATAR_CONCURRENT, true)
-    private val mediaPermits = java.util.concurrent.Semaphore(MEDIA_CONCURRENT, true)
+    private val permits = ImageRequestLane.entries.associateWith { java.util.concurrent.Semaphore(it.concurrency, true) }
     @Volatile private var cooldownUntil = 0L
     @Volatile private var recoveryStore: SessionStore? = null
-
-    private enum class ImageCategory {
-        NONE, EMOJI, AVATAR, MEDIA
-    }
-
-    private fun categorize(url: okhttp3.HttpUrl, isSignature: Boolean = false): ImageCategory {
-        val host = url.host.lowercase().trimEnd('.')
-        val isLinuxDo = host == Config.HOST || host.endsWith(".${Config.HOST}")
-        val isLdStatic = host == "ldstatic.com" || host.endsWith(".ldstatic.com")
-        if (!isLinuxDo && !isLdStatic) return ImageCategory.NONE
-        val path = url.encodedPath
-        val lowerPath = path.lowercase()
-        return when {
-            path.startsWith(EMOJI_PREFIX) || path.startsWith(SVG_PREFIX) -> ImageCategory.EMOJI
-            avatarPrefixes.any { path.startsWith(it) } -> ImageCategory.AVATAR
-            isSignature -> ImageCategory.MEDIA
-            path.startsWith(UPLOADS_PREFIX) || path.startsWith(IMAGES_PREFIX) -> ImageCategory.MEDIA
-            mediaExtensions.any { lowerPath.endsWith(it) } -> ImageCategory.MEDIA
-            isLdStatic -> ImageCategory.MEDIA
-            else -> ImageCategory.NONE
-        }
-    }
 
     fun checkRecovery(
         url: okhttp3.HttpUrl,
@@ -541,7 +510,7 @@ internal object SiteImageGateInterceptor {
         isSignature: Boolean = false,
         isExplicitDownload: Boolean = false,
     ) {
-        if (isExplicitDownload || categorize(url, isSignature) == ImageCategory.NONE) return
+        if (isExplicitDownload || siteImageLane(url, isSignature) == null) return
         recoveryStore = store
         if (store.isClearanceRecoveryInProgress()) {
             throw ThrottledException("站内图片暂缓，等待安全验证完成")
@@ -558,33 +527,30 @@ internal object SiteImageGateInterceptor {
         val request = chain.request()
         if (request.tag(ExplicitDownloadRequest::class.java) != null) return chain.proceed(request)
         val isSignature = request.tag(SignatureRequest::class.java) != null
-        val category = categorize(request.url, isSignature)
-        if (category == ImageCategory.NONE) return chain.proceed(request)
+        val category = siteImageLane(request.url, isSignature) ?: return chain.proceed(request)
         checkRecovery(request.url, store, isSignature)
         checkCooldown()
-        val semaphore = when (category) {
-            ImageCategory.EMOJI -> emojiPermits
-            ImageCategory.AVATAR -> avatarPermits
-            ImageCategory.MEDIA -> mediaPermits
-            ImageCategory.NONE -> avatarPermits
-        }
-        if (!semaphore.tryAcquire(ACQUIRE_TIMEOUT_MS, TimeUnit.MILLISECONDS)) {
-            throw ThrottledException("站内图片排队超时")
-        }
-        val response = try {
+        val permit = ImageDownloadPermit.acquire(permits.getValue(category), chain.call(), ACQUIRE_TIMEOUT_MS)
+            ?: throw ThrottledException("站内图片排队超时")
+        try {
             if (chain.call().isCanceled()) throw IOException("Canceled")
             checkRecovery(request.url, store, isSignature)
             checkCooldown()
-            chain.proceed(request)
-        } finally {
-            // 头部到达即释放：读 body 不占着并发名额
-            semaphore.release()
+            val response = chain.proceed(request)
+            try {
+                if (response.code == 429 || (
+                        response.code in setOf(403, 503) &&
+                            response.header("cf-mitigated")?.contains("challenge", ignoreCase = true) == true
+                        )) enterCooldown(response)
+                return permit.attachTo(response)
+            } catch (error: Throwable) {
+                response.close()
+                throw error
+            }
+        } catch (error: Throwable) {
+            permit.release()
+            throw error
         }
-        if (response.code == 429 || (
-                response.code in setOf(403, 503) &&
-                    response.header("cf-mitigated")?.contains("challenge", ignoreCase = true) == true
-                )) enterCooldown(response)
-        return response
     }
 
     /** 图片自身冷却与主站全局 429 冷却取较长者；[retryImageAfterDelay] 的自动重试也据此等待。 */
