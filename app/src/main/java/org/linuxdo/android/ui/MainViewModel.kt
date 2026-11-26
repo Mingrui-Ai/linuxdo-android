@@ -2105,15 +2105,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     private val _skinPreset = MutableStateFlow(
-        run {
-            val saved = store.getSkinPresetId()
-            if (saved == "classic" && !store.isUserCustomizedSkin()) {
-                store.setSkinPresetId("spongebob")
-                org.linuxdo.android.ui.design.SkinPreset.SPONGEBOB
-            } else {
-                org.linuxdo.android.ui.design.SkinPreset.fromId(saved)
-            }
-        }
+        if (store.isUserCustomizedSkin()) org.linuxdo.android.ui.design.SkinPreset.fromId(store.getSkinPresetId())
+        else org.linuxdo.android.ui.design.SkinPreset.CLASSIC
     )
     val skinPreset: StateFlow<org.linuxdo.android.ui.design.SkinPreset> = _skinPreset.asStateFlow()
 

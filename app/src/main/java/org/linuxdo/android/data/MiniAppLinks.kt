@@ -18,8 +18,8 @@ enum class MiniAppOpenMode(val key: String, val label: String) {
     External("external", "外部浏览器");
 
     companion object {
-        // 升级沿用原来的外部打开方式。
-        fun fromKey(key: String?): MiniAppOpenMode = entries.firstOrNull { it.key == key } ?: External
+        // 未保存选择时使用内置浏览器，用户主动选择的外部打开保持不变。
+        fun fromKey(key: String?): MiniAppOpenMode = entries.firstOrNull { it.key == key } ?: Internal
     }
 }
 

@@ -1689,7 +1689,7 @@ object MiniAppSessionPool {
             onExternalRequest = { targetUri ->
                 val target = targetUri.toUri()
                 val scheme = target.scheme?.lowercase().orEmpty()
-                val mode = container?.preferences?.let { MiniAppPreferences(it).openMode() } ?: MiniAppOpenMode.External
+                val mode = container?.preferences?.let { MiniAppPreferences(it).openMode() } ?: MiniAppOpenMode.Internal
                 val destination = miniAppDestination(targetUri, mode)
                 val targetAppId = MiniAppEntry.idFromUrl(targetUri)
                 if (destination == MiniAppDestination.External) {

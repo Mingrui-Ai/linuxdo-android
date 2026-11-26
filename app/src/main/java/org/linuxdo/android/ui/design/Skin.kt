@@ -79,7 +79,7 @@ enum class SkinPreset(
 
     companion object {
         fun fromId(id: String?): SkinPreset =
-            entries.firstOrNull { it.id.equals(id, ignoreCase = true) } ?: SPONGEBOB
+            entries.firstOrNull { it.id.equals(id, ignoreCase = true) } ?: CLASSIC
     }
 }
 
@@ -128,7 +128,7 @@ data class AppSkin(
     val cardBorderColor: Color get() = shapes.cardBorderColor
 }
 
-val LocalAppSkin = staticCompositionLocalOf { resolveAppSkin(SkinPreset.SPONGEBOB, isDark = false) }
+val LocalAppSkin = staticCompositionLocalOf { resolveAppSkin(SkinPreset.CLASSIC, isDark = false) }
 
 /**
  * 根据预设与明暗模式计算出完整的沉浸式皮肤令牌
