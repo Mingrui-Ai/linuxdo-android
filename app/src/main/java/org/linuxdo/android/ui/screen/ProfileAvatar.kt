@@ -44,9 +44,11 @@ internal fun ProfileAvatar(
     onOpenProfile: (() -> Unit)? = null,
     avatarClickLabel: String = "查看 @$username 的详细主页",
     onImageLoaded: ((coil.memory.MemoryCache.Key?) -> Unit)? = null,
+    respectStatusPreference: Boolean = true,
 ) {
-    val display = rememberProfileDisplayPreferences()
-    val visibleStatus = status.takeIf { display[ProfileDisplayField.Status] }
+    // 侧栏固定展示状态；主页和资料弹窗继续遵循各自的显示设置。
+    val showStatus = if (respectStatusPreference) rememberProfileDisplayPreferences()[ProfileDisplayField.Status] else true
+    val visibleStatus = status.takeIf { showStatus }
     var now by remember(visibleStatus) { mutableStateOf(Instant.now()) }
     LaunchedEffect(visibleStatus) {
         while (visibleStatus?.isVisible(Instant.now()) == true) {
