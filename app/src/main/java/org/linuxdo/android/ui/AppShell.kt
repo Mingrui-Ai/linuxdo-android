@@ -276,10 +276,9 @@ private fun AppShellContent(viewModel: MainViewModel, browser: BrowserSession, s
                 )
             }
 
-            // 原生登录页面。
+            // 原生登录页面（背景延展至状态栏后方，顶部安全区由 LoginScreen 内部处理）。
             if (state.screen == Screen.Login) {
-                Box(Modifier.fillMaxSize().windowInsetsPadding(
-                    WindowInsets.systemBars.union(WindowInsets.displayCutout).only(WindowInsetsSides.Top))) {
+                Box(Modifier.fillMaxSize()) {
                     LoginScreen(
                         state = loginUiState,
                         onPasswordLogin = viewModel::loginWithPassword,

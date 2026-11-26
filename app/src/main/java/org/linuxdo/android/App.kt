@@ -82,7 +82,7 @@ class App : Application(), ImageLoaderFactory {
         org.linuxdo.android.push.LinuxDoPushSdk.init(
             org.linuxdo.android.push.PushConfig(
                 targetActivityClass = MainActivity::class.java,
-                smallIconResId = R.drawable.ic_launcher_foreground,
+                smallIconResId = R.drawable.ic_launcher_enhanced_monochrome,
                 baseUrl = Config.BASE_URL,
                 httpClientProvider = { container.httpClient },
                 sessionProvider = { ctx ->

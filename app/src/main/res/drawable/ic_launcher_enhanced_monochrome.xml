@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="utf-8"?>
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <!-- Android 13+ 单色主题图标与通知栏状态图标共用轮廓 -->
+    <path
+        android:fillColor="#FFFFFF"
+        android:pathData="M31.5,29.5 Q31.5,27 34,27 L42.5,27 Q45,27 45,29.5 L45,63 L67.5,63 L47,81 L34,81 Q31.5,81 31.5,78.5 Z" />
+    <path
+        android:fillColor="#FFFFFF"
+        android:pathData="M52,81 L74.5,60.2 Q76.5,58.5 76.5,61.6 L76.5,72 Q76.5,81 67.2,81 Z" />
+    <path
+        android:fillColor="#FFFFFF"
+        android:pathData="M64.5,26.5 C66.2,34.4 68.1,36.3 76,38 C68.1,39.7 66.2,41.6 64.5,49.5 C62.8,41.6 60.9,39.7 53,38 C60.9,36.3 62.8,34.4 64.5,26.5 Z" />
+</vector>

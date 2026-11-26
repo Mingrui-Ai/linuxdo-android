@@ -1,0 +1,33 @@
+<?xml version="1.0" encoding="utf-8"?>
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:aapt="http://schemas.android.com/aapt"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <!-- 曜石黑对角微渐变底色，与白底原版拉开 Pro/增强版质感差距 -->
+    <path android:pathData="M0,0 L108,0 L108,108 L0,108 Z">
+        <aapt:attr name="android:fillColor">
+            <gradient
+                android:type="linear"
+                android:startX="0"
+                android:startY="0"
+                android:endX="108"
+                android:endY="108"
+                android:startColor="#202126"
+                android:endColor="#111215" />
+        </aapt:attr>
+    </path>
+    <!-- 右下折角处极克制的暗金氛围光晕 -->
+    <path android:pathData="M48,70 A24,24 0 1,0 96,70 A24,24 0 1,0 48,70 Z">
+        <aapt:attr name="android:fillColor">
+            <gradient
+                android:type="radial"
+                android:centerX="72"
+                android:centerY="70"
+                android:gradientRadius="24"
+                android:startColor="#18FAB50F"
+                android:endColor="#00FAB50F" />
+        </aapt:attr>
+    </path>
+</vector>
