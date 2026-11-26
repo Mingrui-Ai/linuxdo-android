@@ -3082,13 +3082,79 @@ internal fun formatCount(value: Int): String {
     return if (decimal == 0) "${tenths / 10}k" else "${tenths / 10}.${decimal}k"
 }
 
+/**
+ * 计算类别在当前浅/深色背景上的高可读前景色：
+ * - 浅色模式下，像亮黄(#e0d900)、浅青(#32c3c3)、淡蓝(#a8c6fe)等原色在白底上对比度过低，
+ *   保留色相并适度压暗至相对亮度 <= 0.155（确保白底对比度 >= 4.8:1），护眼且保留色系辨识度。
+ * - 深色模式下，极暗色（如深绿 #38571A）适当提亮，避免在深灰卡片上发黑难辨。
+ */
+internal fun readableCategoryForeground(raw: Color, isDark: Boolean): Color {
+    val lum = 0.2126f * linearChannel(raw.red) +
+        0.7152f * linearChannel(raw.green) +
+        0.0722f * linearChannel(raw.blue)
+    if (!isDark) {
+        if (lum <= 0.155f) return raw
+        var lo = 0f
+        var hi = 1f
+        var best = raw
+        repeat(10) {
+            val mid = (lo + hi) * 0.5f
+            // 与深中性色混合而非纯黑，保留色相饱和度同时稳定压暗亮度
+            val candidate = Color(
+                red = raw.red * mid,
+                green = raw.green * mid,
+                blue = raw.blue * mid,
+                alpha = 1f,
+            )
+            val cLum = 0.2126f * linearChannel(candidate.red) +
+                0.7152f * linearChannel(candidate.green) +
+                0.0722f * linearChannel(candidate.blue)
+            if (cLum <= 0.155f) {
+                best = candidate
+                lo = mid
+            } else {
+                hi = mid
+            }
+        }
+        return best
+    } else {
+        if (lum >= 0.24f) return raw
+        var lo = 0f
+        var hi = 1f
+        var best = raw
+        repeat(10) {
+            val mid = (lo + hi) * 0.5f
+            val candidate = Color(
+                red = raw.red + (1f - raw.red) * mid,
+                green = raw.green + (1f - raw.green) * mid,
+                blue = raw.blue + (1f - raw.blue) * mid,
+                alpha = 1f,
+            )
+            val cLum = 0.2126f * linearChannel(candidate.red) +
+                0.7152f * linearChannel(candidate.green) +
+                0.0722f * linearChannel(candidate.blue)
+            if (cLum >= 0.24f) {
+                best = candidate
+                hi = mid
+            } else {
+                lo = mid
+            }
+        }
+        return best
+    }
+}
+
+private fun linearChannel(c: Float): Float =
+    if (c <= 0.03928f) c / 12.92f else Math.pow(((c + 0.055f) / 1.055f).toDouble(), 2.4).toFloat()
+
 @Composable
 internal fun CategoryTag(category: Category, prominent: Boolean = false, onClick: (() -> Unit)? = null) {
-    val catColor = parseCategoryColor(category.color) ?: IosTheme.colors.accent
+    val rawColor = parseCategoryColor(category.color) ?: IosTheme.colors.accent
     val isDark = IosTheme.colors.isDark
+    val fgColor = remember(rawColor, isDark) { readableCategoryForeground(rawColor, isDark) }
     val chipShape = RoundedCornerShape(8.dp)
-    val borderColor = catColor.copy(alpha = if (isDark) 0.35f else 0.22f)
-    val pillBg = catColor.copy(alpha = if (isDark) 0.16f else 0.08f)
+    val borderColor = fgColor.copy(alpha = if (isDark) 0.38f else 0.26f)
+    val pillBg = rawColor.copy(alpha = if (isDark) 0.16f else 0.11f)
     Row(
         verticalAlignment = Alignment.CenterVertically,
         modifier = Modifier
@@ -3100,12 +3166,12 @@ internal fun CategoryTag(category: Category, prominent: Boolean = false, onClick
             .background(pillBg)
             .padding(horizontal = 7.dp, vertical = 2.5.dp),
     ) {
-        ForumCategoryIcon(category, if (prominent) 15.dp else 12.dp, catColor, directory = prominent)
+        ForumCategoryIcon(category, if (prominent) 15.dp else 12.dp, fgColor, directory = prominent)
         Spacer(Modifier.width(4.5.dp))
         Text(
             text = category.name,
             style = if (prominent) IosTheme.type.body.copy(fontSize = 12.5.sp, fontWeight = FontWeight.Medium) else IosTheme.type.footnote.copy(fontSize = 11.5.sp, fontWeight = FontWeight.Medium),
-            color = catColor,
+            color = fgColor,
             maxLines = 1,
         )
     }
