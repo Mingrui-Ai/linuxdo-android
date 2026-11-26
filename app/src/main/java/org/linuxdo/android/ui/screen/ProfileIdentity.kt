@@ -159,18 +159,25 @@ internal fun ProfileDetails(
 
 /** 关注与粉丝作为一组紧随最近活跃，空间不足时整组换行。 */
 @Composable
-private fun ProfileFollowCounts(card: UserCardData?, onOpenNetwork: (Boolean) -> Unit, modifier: Modifier = Modifier) {
+internal fun ProfileFollowCounts(
+    card: UserCardData?,
+    onOpenNetwork: (Boolean) -> Unit,
+    modifier: Modifier = Modifier,
+    showUnavailable: Boolean = false,
+) {
     val following = visibleFollowCount(card?.totalFollowing, card?.canSeeFollowing)
     val followers = visibleFollowCount(card?.totalFollowers, card?.canSeeFollowers)
-    if (following == null && followers == null) return
+    if (!showUnavailable && following == null && followers == null) return
     Row(modifier, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
         listOf(false to following, true to followers).forEach { (isFollowers, count) ->
-            if (count != null) Row(Modifier.heightIn(min = 32.dp)
-                .clickable(role = Role.Button, onClickLabel = if (isFollowers) "查看粉丝" else "查看关注") {
+            val hidden = if (isFollowers) card?.canSeeFollowers == false else card?.canSeeFollowing == false
+            if (count != null || showUnavailable) Row(Modifier.heightIn(min = 32.dp)
+                .clickable(enabled = count != null, role = Role.Button, onClickLabel = if (isFollowers) "查看粉丝" else "查看关注") {
                     onOpenNetwork(isFollowers)
                 }, verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-                Text(count.toString(), style = IosTheme.type.caption, fontWeight = FontWeight.SemiBold,
+                Text(count?.toString() ?: if (hidden) "未公开" else if (card == null) "…" else "—",
+                    style = IosTheme.type.caption, fontWeight = FontWeight.SemiBold,
                     color = IosTheme.colors.label, maxLines = 1)
                 Text(if (isFollowers) "粉丝" else "关注", style = IosTheme.type.caption,
                     color = IosTheme.colors.secondaryLabel, maxLines = 1)

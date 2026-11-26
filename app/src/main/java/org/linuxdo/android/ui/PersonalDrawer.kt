@@ -48,11 +48,12 @@ import org.linuxdo.android.data.UserCardData
 import org.linuxdo.android.data.UserBadgeItem
 import org.linuxdo.android.data.avatarUrlOf
 import org.linuxdo.android.data.orderedCategoryGroups
-import org.linuxdo.android.data.visibleFollowCount
 import org.linuxdo.android.ui.design.*
 import org.linuxdo.android.ui.format.RelativeTime
 import org.linuxdo.android.ui.screen.LINUXDO_APPS_PLAZA_URL
 import org.linuxdo.android.ui.screen.ProfileWebApp
+import org.linuxdo.android.ui.screen.ProfileBadgePreview
+import org.linuxdo.android.ui.screen.ProfileFollowCounts
 
 internal sealed interface PersonalDrawerAction {
     data object Profile : PersonalDrawerAction
@@ -341,31 +342,23 @@ private fun DrawerProfileDetails(
             kotlinx.coroutines.delay(60_000L)
         }
     }
-    val following = visibleFollowCount(card?.totalFollowing, card?.canSeeFollowing)
-    val followers = visibleFollowCount(card?.totalFollowers, card?.canSeeFollowers)
-    val badgeCount = remember(badges.items) { badges.items?.count { it.isEarned } }
-    Column(Modifier.fillMaxWidth().padding(top = 12.dp), verticalArrangement = Arrangement.spacedBy(3.dp)) {
-        Text("最后活跃 ${if (card?.lastSeenAt.isNullOrBlank()) if (card == null) "…" else "未公开" else RelativeTime.format(card?.lastSeenAt, now)}",
-            style = IosTheme.type.caption, color = colors.secondaryLabel)
-        FlowRow(horizontalArrangement = Arrangement.spacedBy(12.dp), verticalArrangement = Arrangement.spacedBy(3.dp)) {
-            listOf(false to following, true to followers).forEach { (isFollowers, count) ->
-                val label = if (isFollowers) "粉丝" else "关注"
-                val hidden = if (isFollowers) card?.canSeeFollowers == false else card?.canSeeFollowing == false
-                Text("$label ${count?.toString() ?: if (hidden) "未公开" else if (card == null) "…" else "—"}",
-                    style = IosTheme.type.caption, color = colors.secondaryLabel,
-                    modifier = Modifier.heightIn(min = 32.dp).clickable(enabled = count != null,
-                        role = Role.Button, onClickLabel = "查看$label") {
-                        onAction(PersonalDrawerAction.Network(isFollowers))
-                    }.wrapContentHeight())
-            }
-            Text("勋章 ${badgeCount?.toString() ?: if (badges.loading) "…" else "—"}",
+    Column(Modifier.fillMaxWidth().padding(top = 12.dp), verticalArrangement = Arrangement.spacedBy(7.dp)) {
+        FlowRow(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(12.dp),
+            verticalArrangement = Arrangement.spacedBy(3.dp)) {
+            Text("最后活跃 ${if (card?.lastSeenAt.isNullOrBlank()) if (card == null) "…" else "未公开" else RelativeTime.format(card?.lastSeenAt, now)}",
                 style = IosTheme.type.caption, color = colors.secondaryLabel,
-                modifier = Modifier.heightIn(min = 32.dp).clickable(role = Role.Button, onClickLabel = "查看勋章") {
-                    onAction(PersonalDrawerAction.Badges)
-                }.wrapContentHeight())
+                modifier = Modifier.align(Alignment.CenterVertically))
+            ProfileFollowCounts(card, onOpenNetwork = { onAction(PersonalDrawerAction.Network(it)) },
+                modifier = Modifier.align(Alignment.CenterVertically), showUnavailable = true)
+        }
+        FlowRow(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(12.dp),
+            verticalArrangement = Arrangement.spacedBy(3.dp)) {
+            Box(Modifier.align(Alignment.CenterVertically)) {
+                ProfileBadgePreview(badges.items, badges.loading) { onAction(PersonalDrawerAction.Badges) }
+            }
             Text("点数 ${card?.gamificationScore?.toString() ?: if (card == null) "…" else "—"}",
                 style = IosTheme.type.caption, color = colors.secondaryLabel,
-                modifier = Modifier.heightIn(min = 32.dp).wrapContentHeight())
+                modifier = Modifier.heightIn(min = 32.dp).align(Alignment.CenterVertically).wrapContentHeight())
         }
     }
 }
