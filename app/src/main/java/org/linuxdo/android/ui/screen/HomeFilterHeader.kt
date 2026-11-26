@@ -598,19 +598,20 @@ internal fun TopicSortDynamicGlyph(
                     drawLine(tint, Offset(12f, 12f), Offset(15.5f, 14.0f), strokeWidth = 2.0f, cap = StrokeCap.Round)
                 }
                 TopicSortOrder.Hot -> {
-                    // 火焰图标
-                    val flame = Path().apply {
-                        moveTo(12.2f, 3.0f)
-                        cubicTo(13.2f, 6.2f, 10.8f, 8.2f, 9.2f, 9.8f)
-                        cubicTo(7.5f, 11.5f, 6.8f, 13.0f, 6.8f, 14.8f)
-                        cubicTo(6.8f, 18.1f, 9.2f, 20.5f, 12.2f, 20.5f)
-                        cubicTo(15.3f, 20.5f, 17.6f, 18.0f, 17.6f, 14.7f)
-                        cubicTo(17.6f, 11.7f, 15.8f, 9.5f, 14.2f, 8.0f)
-                        cubicTo(14.0f, 9.6f, 13.3f, 10.6f, 12.3f, 11.2f)
-                        cubicTo(13.1f, 9.0f, 13.4f, 6.2f, 12.2f, 3.0f)
-                        close()
+                    // 热度上升趋势折线箭头（简洁利落、辨识度高，替代旧火苗）
+                    val trend = Path().apply {
+                        moveTo(3.2f, 17.2f)
+                        lineTo(9.2f, 11.2f)
+                        lineTo(13.2f, 14.8f)
+                        lineTo(20.6f, 6.8f)
                     }
-                    drawPath(flame, tint, style = stroke)
+                    drawPath(trend, tint, style = stroke)
+                    val head = Path().apply {
+                        moveTo(15.2f, 6.8f)
+                        lineTo(20.6f, 6.8f)
+                        lineTo(20.6f, 12.2f)
+                    }
+                    drawPath(head, tint, style = stroke)
                 }
                 TopicSortOrder.Likes -> {
                     // 爱心图标

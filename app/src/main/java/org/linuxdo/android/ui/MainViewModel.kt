@@ -10005,10 +10005,11 @@ fun openTopicSearch(topicId: Long, title: String) {
             val filter = _homeFilter.value
             val sort = listSort(filter.sortKey())
             var categoriesList = _categories.value.items.ifEmpty { repository.cachedCategoryList().orEmpty() }
-            if (filter.level != null && categoriesList.isEmpty()) {
-                categoriesList = runCatching { repository.fetchCategories() }.getOrDefault(emptyList())
-                if (categoriesList.isNotEmpty() && _categories.value.items.isEmpty()) {
-                    _categories.update { it.copy(items = categoriesList, loaded = true, loading = false) }
+            if (filter.level != null && categoriesList.none { it.subcategoryList.isNotEmpty() || it.parentCategoryId != null }) {
+                val fetched = runCatching { repository.fetchCategories() }.getOrDefault(emptyList())
+                if (fetched.isNotEmpty()) {
+                    categoriesList = fetched
+                    _categories.update { it.copy(items = fetched, loaded = true, loading = false) }
                 }
             }
             val result = repository.fetchFilteredHomeTopics(

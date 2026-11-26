@@ -47,6 +47,13 @@ object HomeFilterResolver {
     fun baseCategoryName(name: String): String =
         name.replace(LEVEL_SUFFIX_REGEX, "").trim().ifBlank { name }
 
+    /**
+     * 解析某个类别对应的等级：
+     * - 带「Lv1/Lv2/Lv3」后缀的子版块返回对应数字；
+     * - 未带 Lv 后缀但带有子版块的父版块（以及公开版块）视作 Lv0。
+     */
+    fun effectiveLevel(category: Category): Int = extractLevel(category) ?: 0
+
     /** 解析父类别在指定等级下对应的真实子类别；无精确匹配时返回 null。 */
     fun resolveCategoryWithLevel(categories: List<Category>, parentCategoryId: Int, level: Int?): Category? {
         val groups = compactCategoryGroups(categories)
@@ -56,34 +63,71 @@ object HomeFilterResolver {
         if (group == null) return flattenCategories(categories).firstOrNull { it.id == parentCategoryId }
         val (parent, levels) = group
         if (level == null) return parent
-        // 某些版块父分类本身即 Lv.0（或无 Lv.0 子类而直接放在父分类下）
         val matched = levels.firstOrNull { extractLevel(it) == level }
         if (matched != null) return matched
-        if (level == 0 && levels.isNotEmpty() && extractLevel(parent) == null) return parent
+        if (level == 0 && extractLevel(parent) == null) return parent
         return null
     }
 
-    /** 获取指定类别支持的等级集合（升序）。 */
+    /** 获取指定类别支持的等级集合（升序）；含 Lv 子版块时父版块本身对应 Lv0 也一并纳入。 */
     fun supportedLevelsForCategory(categories: List<Category>, categoryId: Int): List<Int> {
         val group = compactCategoryGroups(categories).firstOrNull { (parent, levels) ->
             parent.id == categoryId || levels.any { it.id == categoryId }
         } ?: return emptyList()
         val explicit = group.second.mapNotNull(::extractLevel).distinct().sorted()
-        return explicit
+        return if (explicit.isNotEmpty() && 0 !in explicit && extractLevel(group.first) == null) {
+            listOf(0) + explicit
+        } else if (explicit.isEmpty() && extractLevel(group.first) == null) {
+            listOf(0)
+        } else {
+            explicit
+        }
     }
 
-    /** 独立按 LV 等级筛选（未选类别）时，返回全站所有该等级的子版块列表。 */
+    /**
+     * 独立按 LV 等级筛选（未选类别）时，返回全站所有满足「不低于该等级」或「对应等级」的版块列表：
+     * - Lv0：全站公开/Lv0 版块（不含 Lv1~Lv3）
+     * - Lv1：全站 Lv1~Lv3 子版块（过滤掉 Lv0 低级帖子）
+     * - Lv2：全站 Lv2~Lv3 子版块（过滤掉 Lv0/Lv1 低级帖子）
+     * - Lv3：仅全站 Lv3 子版块（过滤掉其他所有低级帖子）
+     */
     fun categoriesForLevel(categories: List<Category>, level: Int): List<Category> {
         val result = mutableListOf<Category>()
         compactCategoryGroups(categories).forEach { (parent, levels) ->
-            val matched = levels.firstOrNull { extractLevel(it) == level }
-            if (matched != null) {
-                result.add(matched)
-            } else if (level == 0 && levels.isNotEmpty() && extractLevel(parent) == null) {
-                // 没有独立 Lv.0 子分类时，不混入普通无等级版块，仅收录真实存在的 Lv.0 子版块
+            if (level == 0) {
+                val lv0 = levels.firstOrNull { extractLevel(it) == 0 }
+                if (lv0 != null) result.add(lv0)
+                else if (extractLevel(parent) == null) result.add(parent)
+            } else {
+                levels.filter { (extractLevel(it) ?: 0) >= level }.forEach(result::add)
             }
         }
         return result.distinctBy { it.id }
+    }
+
+    /**
+     * 判断一条帖子是否满足按等级筛选条件：
+     * - 选 Lv0：仅保留 Lv0 公开版块帖子；
+     * - 选 Lv1：过滤掉 Lv0 低级帖子，保留 Lv1 及以上；
+     * - 选 Lv2：过滤掉 Lv0/Lv1 低级帖子，保留 Lv2 及以上；
+     * - 选 Lv3：仅保留 Lv3 帖子（过滤掉其他低级帖子）。
+     * 当同时指定了某类别时，若该类别存在精确对应的 Lv 子版块，接口已精确锁定该子版块；
+     * 此处主要用于防父版块回混低级/高级帖子以及独立按等级筛选时的严格过滤。
+     */
+    fun matchesLevel(
+        item: TopicListItem,
+        categories: List<Category>,
+        level: Int,
+        exactOnly: Boolean = false,
+    ): Boolean {
+        val cat = item.category
+            ?: item.topic.categoryId?.let { id -> flattenCategories(categories).firstOrNull { it.id == id } }
+        val itemLevel = cat?.let(::effectiveLevel) ?: 0
+        return when {
+            exactOnly -> itemLevel == level
+            level == 0 -> itemLevel == 0
+            else -> itemLevel >= level
+        }
     }
 
     /** 根据当前筛选状态生成搜索范围，用于首页右上角搜索按钮。 */

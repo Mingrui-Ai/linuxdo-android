@@ -735,7 +735,7 @@ class TopicRepository(
             }
             val effectiveId = targetCategory?.id ?: filter.categoryId
             val effectiveSlug = targetCategory?.slug?.ifBlank { filter.categorySlug } ?: filter.categorySlug ?: "category"
-            return if (tag != null) {
+            val rawPage = if (tag != null) {
                 fetchCategoryTagTopics(
                     slug = effectiveSlug,
                     categoryId = effectiveId,
@@ -759,17 +759,48 @@ class TopicRepository(
                     beforeDispatch = beforeDispatch,
                 )
             }
+            // 选中了类别 + 等级时，精确匹配该子版块等级，避免父版块接口回混其他等级子版块帖子
+            return if (filter.level != null) {
+                rawPage.copy(items = rawPage.items.filter { HomeFilterResolver.matchesLevel(it, categories, filter.level, exactOnly = true) })
+            } else rawPage
         }
 
         if (filter.level != null) {
-            val levelCategories = HomeFilterResolver.categoriesForLevel(categories, filter.level)
+            val level = filter.level
+            // Lv0：全站主列表（或标签列表）过滤掉 Lv1~Lv3 子版块帖子，比并发拉几十个版块更全更快
+            if (level == 0) {
+                val basePage = if (tag != null) {
+                    fetchTagTopics(
+                        tag = tag,
+                        page = page,
+                        present = present,
+                        order = sortOrder,
+                        ascending = sortAscending,
+                        hot = isHot,
+                    )
+                } else {
+                    fetchFeed(
+                        feed = if (isHot) HomeFeedType.Hot else HomeFeedType.Latest,
+                        page = page,
+                        awaitCategories = awaitCategories,
+                        present = present,
+                        order = sortOrder,
+                        ascending = sortAscending,
+                        beforeDispatch = beforeDispatch,
+                    )
+                }
+                return basePage.copy(
+                    items = basePage.items.filter { HomeFilterResolver.matchesLevel(it, categories, 0) },
+                )
+            }
+            val levelCategories = HomeFilterResolver.categoriesForLevel(categories, level)
             if (levelCategories.isEmpty()) {
                 return TopicPage(items = emptyList(), hasMore = false)
             }
             // 仅一个子版块时直接走原生接口，避免额外开销
             if (levelCategories.size == 1) {
                 val single = levelCategories.first()
-                return if (tag != null) {
+                val singlePage = if (tag != null) {
                     fetchCategoryTagTopics(
                         slug = single.slug,
                         categoryId = single.id,
@@ -793,14 +824,20 @@ class TopicRepository(
                         beforeDispatch = beforeDispatch,
                     )
                 }
+                return singlePage.copy(
+                    items = singlePage.items.filter { HomeFilterResolver.matchesLevel(it, categories, level) },
+                )
             }
-            return fetchLevelAggregatedTopics(
+            val aggregated = fetchLevelAggregatedTopics(
                 levelCategories = levelCategories,
                 tag = tag,
                 sort = sort,
                 page = page,
                 present = present,
                 beforeDispatch = beforeDispatch,
+            )
+            return aggregated.copy(
+                items = aggregated.items.filter { HomeFilterResolver.matchesLevel(it, categories, level) },
             )
         }
 
@@ -825,10 +862,11 @@ class TopicRepository(
     ): TopicPage {
         val isHot = sort.order.isHotEndpoint
         // 优先尝试 Discourse /filter.json（非热门时一次请求完成多分类 + 标签 + 排序）
+        // 注意：子版块在 Discourse filter 语法中必须用「父slug:子slug」或数字 ID，直接传子 slug 可能查不到，这里优先走数字 ID
         if (!isHot) {
-            val slugList = levelCategories.mapNotNull { it.slug.takeIf(String::isNotBlank) }.distinct()
-            if (slugList.size == levelCategories.size) {
-                val qParts = mutableListOf("category:${slugList.joinToString(",")}")
+            val idList = levelCategories.map { it.id }.distinct()
+            if (idList.isNotEmpty()) {
+                val qParts = mutableListOf("category:${idList.joinToString(",")}")
                 if (tag != null) qParts.add("tag:$tag")
                 when (sort.order) {
                     TopicSortOrder.Created -> qParts.add(if (sort.ascending) "order:created-asc" else "order:created")
@@ -846,8 +884,12 @@ class TopicRepository(
                         retryAllowed = false,
                         beforeDispatch = beforeDispatch,
                     )
-                    return withContext(Dispatchers.Default) {
+                    val parsed = withContext(Dispatchers.Default) {
                         toPage(json.decodeFromString(body), awaitCategories = false)
+                    }
+                    // 若 filter.json 在首页返回空列表且存在多个目标分类，回退并发拉取各子版块做兜底
+                    if (parsed.items.isNotEmpty() || page > 0) {
+                        return parsed
                     }
                 } catch (error: CancellationException) {
                     throw error
