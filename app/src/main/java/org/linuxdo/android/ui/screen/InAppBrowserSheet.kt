@@ -144,6 +144,12 @@ import org.linuxdo.android.data.describeNativeMailError
 import org.linuxdo.android.data.MiniAppEntry
 import org.linuxdo.android.data.MiniAppLibraryState
 import org.linuxdo.android.data.MiniAppSort
+import org.linuxdo.android.data.MiniAppOpenMode
+import org.linuxdo.android.data.MiniAppPreferences
+import org.linuxdo.android.data.MiniAppDestination
+import org.linuxdo.android.data.miniAppDestination
+import org.linuxdo.android.data.externalMiniAppUrl
+import org.linuxdo.android.ui.rememberMiniAppOpenMode
 import org.linuxdo.android.net.gecko.GeckoAuthBridge
 import org.linuxdo.android.net.gecko.LINKED_H5_CONTEXT_PREFIX
 import org.linuxdo.android.net.NeedsInteractiveVerification
@@ -211,8 +217,8 @@ internal object InAppViewport {
     }
 }
 
-private fun isAppsPlazaUrl(value: String): Boolean = isTrustedForumUrl(value) &&
-    value.toUri().path?.trimEnd('/') == "/apps"
+private fun isAppsPlazaUrl(value: String): Boolean =
+    miniAppDestination(value, MiniAppOpenMode.External) == MiniAppDestination.Launcher
 
 private class MiniAppLibrary(
     private val preferences: SharedPreferences,
@@ -480,21 +486,19 @@ private fun MiniAppLauncher(onDismiss: () -> Unit, onOpen: (MiniAppEntry) -> Uni
                         onQueryChange = { query = it },
                     )
                 } else {
-                    // 微信风格顶部标题栏：主界面居中显示「应用广场」，二级列表左上角带返回箭头
+                    // 本地常用页和二级列表均提供明确的返回入口。
                     Box(Modifier.fillMaxWidth().height(52.dp)) {
-                        if (section != MiniAppSection.Home) {
-                            Box(
-                                modifier = Modifier
-                                    .align(Alignment.CenterStart)
-                                    .padding(start = 8.dp)
-                                    .size(40.dp)
-                                    .clip(CircleShape)
-                                    .clickable { back() }
-                                    .semantics { contentDescription = "返回" },
-                                contentAlignment = Alignment.Center,
-                            ) {
-                                WeChatBackChevron(Color.White.copy(alpha = 0.85f))
-                            }
+                        Box(
+                            modifier = Modifier
+                                .align(Alignment.CenterStart)
+                                .padding(start = 8.dp)
+                                .size(40.dp)
+                                .clip(CircleShape)
+                                .clickable { back() }
+                                .semantics { contentDescription = "返回" },
+                            contentAlignment = Alignment.Center,
+                        ) {
+                            WeChatBackChevron(Color.White.copy(alpha = 0.85f))
                         }
                         Text(
                             text = section.title,
@@ -1224,8 +1228,8 @@ fun miniAppBadgeLabelForUrl(rawUrl: String?): String? {
 
 fun isInAppMiniAppUrl(rawUrl: String?): Boolean = miniAppBadgeLabelForUrl(rawUrl) != null
 
-fun shouldOpenInAppBrowser(rawUrl: String?): Boolean =
-    org.linuxdo.android.data.externalMiniAppUrl(rawUrl) == null && normalizeInAppTargetUrl(rawUrl) != null
+// 所有小程序链接先进入统一入口，由入口读取用户的打开方式。
+fun shouldOpenInAppBrowser(rawUrl: String?): Boolean = normalizeInAppTargetUrl(rawUrl) != null
 
 fun isLinuxDoMiniAppUrl(rawUrl: String?): Boolean {
     if (!isTrustedForumUrl(rawUrl)) return false
@@ -1685,12 +1689,23 @@ object MiniAppSessionPool {
             onExternalRequest = { targetUri ->
                 val target = targetUri.toUri()
                 val scheme = target.scheme?.lowercase().orEmpty()
-                val externalApp = org.linuxdo.android.data.externalMiniAppUrl(targetUri)
-                if (externalApp != null) {
-                    openExternal(appContext, externalApp)
+                val mode = container?.preferences?.let { MiniAppPreferences(it).openMode() } ?: MiniAppOpenMode.External
+                val destination = miniAppDestination(targetUri, mode)
+                val targetAppId = MiniAppEntry.idFromUrl(targetUri)
+                if (destination == MiniAppDestination.External) {
+                    openExternal(appContext, externalMiniAppUrl(targetUri)!!)
+                    true
+                } else if (destination == MiniAppDestination.Launcher) {
+                    requestOpen(LINUXDO_APPS_PLAZA_URL)
                     true
                 } else if (!oneWayAuth && isolatedH5ContextId(targetUri, accountId) != null) {
                     requestOpen(targetUri)
+                    true
+                } else if (targetAppId != null && targetAppId != MiniAppEntry.idFromUrl(holder.entryUrl)) {
+                    requestOpen(miniAppPublicUrl(targetUri))
+                    true
+                } else if (targetAppId != null && target.getQueryParameter("embed_mode") != "true") {
+                    holder.session.loadUri(miniAppLaunchUrl(targetUri))
                     true
                 } else if (scheme !in setOf("http", "https")) {
                     openExternal(appContext, targetUri)
@@ -1811,15 +1826,8 @@ fun InAppBrowserSheet(
     preferNativeMail: Boolean = false,
 ) {
     val context = LocalContext.current
-    val externalApp = org.linuxdo.android.data.externalMiniAppUrl(url)
-    if (externalApp != null) {
-        // 先结束宿主弹层再交给系统；不创建广场界面或浏览器会话。
-        LaunchedEffect(externalApp) {
-            onDismiss()
-            openExternal(context, externalApp)
-        }
-        return
-    }
+    val openMode = rememberMiniAppOpenMode()
+    val library = rememberMiniAppLibrary()
     val initialNormalizedUrl = remember(url) { normalizeInAppTargetUrl(url) ?: url }
     val entry = initialNormalizedUrl.toHttpUrlOrNull()
     if (preferNativeMail && ProfileWebApp.fromUrl(initialNormalizedUrl) == ProfileWebApp.Mail &&
@@ -1828,13 +1836,45 @@ fun InAppBrowserSheet(
         return
     }
     val clipboard = LocalClipboardManager.current
-    var activeTargetUrl by remember(initialNormalizedUrl) { mutableStateOf(initialNormalizedUrl) }
-    var targetTitle by remember(initialNormalizedUrl) { mutableStateOf(initialTitle) }
+    var activeTargetUrl by rememberSaveable(initialNormalizedUrl) { mutableStateOf(initialNormalizedUrl) }
+    var targetTitle by rememberSaveable(initialNormalizedUrl) { mutableStateOf(initialTitle) }
+    val returnToLauncher = isAppsPlazaUrl(initialNormalizedUrl)
+    val launcherState = rememberSaveableStateHolder()
     var actionSheetVisible by remember(activeTargetUrl) { mutableStateOf(false) }
     var keepFloatingOnExit by remember(activeTargetUrl) { mutableStateOf(false) }
     val closeApp: () -> Unit = {
         actionSheetVisible = false
-        onDismiss()
+        if (returnToLauncher) activeTargetUrl = LINUXDO_APPS_PLAZA_URL else onDismiss()
+    }
+
+    if (isAppsPlazaUrl(activeTargetUrl)) {
+        launcherState.SaveableStateProvider("mini_app_launcher") {
+            MiniAppLauncher(onDismiss = onDismiss, onOpen = { entry ->
+                if (openMode == MiniAppOpenMode.External) {
+                    // 保留本地页面；从外部浏览器返回仍显示原来的常用列表。
+                    openExternal(context, entry.url)
+                } else {
+                    targetTitle = entry.name
+                    activeTargetUrl = entry.url
+                }
+            }, onVerify = {
+                targetTitle = "安全验证"
+                activeTargetUrl = "${Config.BASE_URL}/challenge"
+            })
+        }
+        return
+    }
+
+    if (miniAppDestination(activeTargetUrl, openMode) == MiniAppDestination.External) {
+        LaunchedEffect(activeTargetUrl) {
+            MiniAppEntry.idFromUrl(activeTargetUrl)?.let { id ->
+                val cached = (library.state.recent + library.state.favorites).firstOrNull { it.id == id }
+                library.update { it.visit(cached ?: MiniAppEntry(id, targetTitle ?: "小程序")) }
+            }
+            openExternal(context, externalMiniAppUrl(activeTargetUrl)!!)
+            closeApp()
+        }
+        return
     }
 
     val uri = remember(activeTargetUrl) { runCatching { activeTargetUrl.toUri() }.getOrNull() }
@@ -1869,7 +1909,6 @@ fun InAppBrowserSheet(
     val geckoView = remember(holder) {
         GeckoManager.createGeckoView(context, allowTouchInterceptOverride = true)
     }
-    val library = rememberMiniAppLibrary()
     LaunchedEffect(holder) {
         val id = MiniAppEntry.idFromUrl(holder.entryUrl) ?: return@LaunchedEffect
         val cached = (library.state.recent + library.state.favorites).firstOrNull { it.id == id }

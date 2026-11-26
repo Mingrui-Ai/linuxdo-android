@@ -6073,9 +6073,8 @@ private fun SandboxedWebPreview(
 ) {
     val externalApp = org.linuxdo.android.data.externalMiniAppUrl(url)
     if (externalApp != null) {
-        val context = LocalContext.current
         Box(modifier, contentAlignment = Alignment.Center) {
-            TextButton(onClick = { openExternal(context, externalApp) }) { Text("在浏览器中打开小程序") }
+            TextButton(onClick = { MiniAppSessionPool.requestOpen(externalApp) }) { Text("打开小程序") }
         }
         return
     }
@@ -6152,7 +6151,7 @@ private fun SandboxedWebPreview(
                         ): Boolean {
                             val externalApp = org.linuxdo.android.data.externalMiniAppUrl(request?.url?.toString())
                             if (externalApp != null) {
-                                if (request?.isForMainFrame == true) openExternal(ctx, externalApp)
+                                if (request?.isForMainFrame == true) MiniAppSessionPool.requestOpen(externalApp)
                                 return true
                             }
                             val reqScheme = request?.url?.scheme?.lowercase()
@@ -6279,7 +6278,7 @@ private fun SandboxedGeckoPreview(
             onExternalRequest = { targetUri ->
                 val externalApp = org.linuxdo.android.data.externalMiniAppUrl(targetUri)
                 if (externalApp != null) {
-                    openExternal(context, externalApp)
+                    MiniAppSessionPool.requestOpen(externalApp)
                     true
                 } else {
                     val scheme = runCatching { Uri.parse(targetUri).scheme?.lowercase() }.getOrNull()
@@ -6497,7 +6496,7 @@ private fun OneboxCard(onebox: CookedBlock.Onebox) {
                 ) {
                     if (isMiniAppOnebox) {
                         Text(
-                            text = if (org.linuxdo.android.data.externalMiniAppUrl(onebox.url) != null) "浏览器打开 ›" else "进入小程序 ›",
+                            text = "进入小程序 ›",
                             style = IosTheme.type.caption,
                             fontWeight = FontWeight.SemiBold,
                             color = Color(0xFF07C160),
@@ -6505,8 +6504,7 @@ private fun OneboxCard(onebox: CookedBlock.Onebox) {
                                 .clip(RoundedCornerShape(6.dp))
                                 .background(Color(0xFF07C160).copy(alpha = 0.14f))
                                 .clickable {
-                                    val externalApp = org.linuxdo.android.data.externalMiniAppUrl(onebox.url)
-                                    if (externalApp != null) openExternal(context, externalApp) else openUrl(onebox.url)
+                                    openUrl(onebox.url)
                                 }
                                 .padding(horizontal = 10.dp, vertical = 4.dp),
                         )

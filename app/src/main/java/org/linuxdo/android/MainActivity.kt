@@ -161,7 +161,7 @@ class MainActivity : ComponentActivity() {
         val miniAppUrl = org.linuxdo.android.data.parseInternalMiniAppUrl(url)
         if (miniAppUrl != null) {
             intent.data = null
-            org.linuxdo.android.ui.screen.openExternal(this, miniAppUrl)
+            org.linuxdo.android.ui.screen.MiniAppSessionPool.requestOpen(miniAppUrl)
             return
         }
         val link = org.linuxdo.android.data.parseInternalTopicUrl(url) ?: return

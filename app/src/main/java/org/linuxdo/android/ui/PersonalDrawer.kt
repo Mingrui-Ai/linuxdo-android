@@ -51,9 +51,11 @@ import org.linuxdo.android.data.orderedCategoryGroups
 import org.linuxdo.android.ui.design.*
 import org.linuxdo.android.ui.format.RelativeTime
 import org.linuxdo.android.ui.screen.LINUXDO_APPS_PLAZA_URL
+import org.linuxdo.android.ui.screen.LevelBadge
 import org.linuxdo.android.ui.screen.ProfileWebApp
 import org.linuxdo.android.ui.screen.ProfileBadgePreview
 import org.linuxdo.android.ui.screen.ProfileFollowCounts
+import org.linuxdo.android.ui.screen.ProfileAvatar
 
 internal sealed interface PersonalDrawerAction {
     data object Profile : PersonalDrawerAction
@@ -197,16 +199,31 @@ internal fun PersonalDrawerContent(
                             onClickLabel = "查看我的主页") { onAction(PersonalDrawerAction.Profile) },
                             verticalAlignment = Alignment.CenterVertically,
                             horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                            UserAvatar(
-                                avatarUrlOf(card?.avatarTemplate ?: account?.avatarTemplate,
+                            ProfileAvatar(
+                                username = username!!,
+                                avatarUrl = avatarUrlOf(card?.avatarTemplate ?: account?.avatarTemplate,
                                     card?.animatedAvatar ?: account?.animatedAvatar, 160, username),
-                                avatarUrlOf(card?.avatarTemplate ?: account?.avatarTemplate, size = 160),
-                                username!!, Modifier.size(56.dp), cornerRadius = 28.dp,
+                                staticAvatarUrl = avatarUrlOf(card?.avatarTemplate ?: account?.avatarTemplate, size = 160),
+                                status = card?.status,
+                                size = 56.dp,
+                                respectStatusPreference = false,
                             )
                             Column(Modifier.weight(1f)) {
-                                Text(card?.cleanDisplayName ?: account?.name?.takeIf { it.isNotBlank() } ?: username,
-                                    style = IosTheme.type.largeTitle, color = colors.label,
-                                    maxLines = 1, overflow = TextOverflow.Ellipsis)
+                                Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                                    Text(card?.cleanDisplayName ?: account?.name?.takeIf { it.isNotBlank() } ?: username,
+                                        style = IosTheme.type.largeTitle, color = colors.label,
+                                        maxLines = 1, overflow = TextOverflow.Ellipsis,
+                                        modifier = Modifier.weight(1f, fill = false))
+                                    (card?.trustLevel ?: account?.trustLevel)?.let { level ->
+                                        Box(Modifier.heightIn(min = 44.dp)
+                                            .clickable(role = Role.Button, onClickLabel = "等级与积分") {
+                                                onAction(PersonalDrawerAction.Level)
+                                            }, contentAlignment = Alignment.Center) {
+                                            LevelBadge(level)
+                                        }
+                                    }
+                                }
                                 Text("@$username", style = IosTheme.type.caption, color = colors.secondaryLabel,
                                     maxLines = 1, overflow = TextOverflow.Ellipsis)
                             }
