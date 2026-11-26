@@ -3592,9 +3592,6 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                     drainReadOutbox()
                     loadHistory(refresh = true, silent = true)
                     refreshActiveReadState()
-                    syncPendingDrafts()
-                    if (_drafts.value.loaded) loadDrafts(refresh = true, silent = true)
-                    activeDraftKeys().forEach { scheduleDraftSync(it, immediate = true) }
                 }
                 delay(30_000L)
             }
@@ -5593,7 +5590,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     /** 打开编辑器。编辑已有楼层时顺带把原文取回来填进输入框。 */
     fun openComposer(target: ComposerTarget) {
         if (_composer.value.submitting || store.sessionChanging || _accounts.value.switching) return
-        persistComposerDraft()
+        if (_composer.value.open) closeComposer()
         val needsDraft = target is ComposerTarget.Edit
         var storageError: String? = null
         val localDraft = try {
@@ -5662,10 +5659,12 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     fun closeComposer() {
         persistComposerDraft()
-        _composer.value.target?.let { scheduleDraftSync(composerDraftKey(it), immediate = true) }
+        val target = _composer.value.target
         pageJobs["composer"]?.cancel()
         pageJobs.remove("upload")?.cancel()
+        (target as? ComposerTarget.Edit)?.let { pageJobs.remove("draft:${it.postId}")?.cancel() }
         _composer.value = ComposerUiState()
+        target?.let { scheduleDraftSync(composerDraftKey(it)) }
     }
 
     private fun assembleRaw(raw: String, attachments: List<AttachedMedia>): String {
@@ -5852,6 +5851,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             val result = submit(publishKey)
             // 提交成功后不能因清理失败要求用户重发。
             if (userId == store.currentUserId() && generation == accountScopeGeneration) {
+                advanceDraftRevision(key)
                 draftSyncJobs.remove(key)?.cancel()
                 dismissedDraftConflicts.remove(key)
                 _draftConflict.update { if (it?.local?.key == key) null else it }
@@ -5884,6 +5884,16 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     private val accountDraftStore by lazy { org.linuxdo.android.data.AccountDraftStore(getApplication()) }
     private val draftSyncJobs = mutableMapOf<String, Job>()
+    // 打开、关闭或修改内容后递增，迟到的读取不能作用于新的编辑状态。
+    private val draftSyncRevisions = mutableMapOf<String, Long>()
+
+    private fun advanceDraftRevision(key: String): Long {
+        val revision = (draftSyncRevisions[key] ?: 0L) + 1L
+        draftSyncRevisions[key] = revision
+        _draftConflict.update { if (it?.local?.key == key) null else it }
+        return revision
+    }
+
     private val dismissedDraftConflicts = mutableSetOf<String>()
     private val draftSyncLocks = mutableMapOf<String, kotlinx.coroutines.sync.Mutex>()
     private val _draftConflict = MutableStateFlow<DraftConflictUi?>(null)
@@ -5916,14 +5926,14 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     private fun persistDraft(key: String, content: SyncedDraftContent) {
         val userId = store.currentUserId()
         if (userId <= 0 || store.sessionChanging || _accounts.value.switching) return
+        advanceDraftRevision(key)
         try {
             val previous = accountDraftStore.get(userId, key)
             if (previous == null && content.empty) return
             if (previous?.content == content) return
             accountDraftStore.put(userId, (previous ?: LocalSyncedDraft(key, content)).copy(
                 content = content, dirty = true, updatedAt = System.currentTimeMillis()))
-            setDraftSyncStatus(key, "已保存到手机，等待同步")
-            scheduleDraftSync(key)
+            setDraftSyncStatus(key, "已保存到手机，关闭后同步")
         } catch (error: Exception) { setDraftSyncStatus(key, "手机保存失败，请保持编辑器打开") }
     }
 
@@ -5949,39 +5959,47 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         (_composer.value.uploading && _composer.value.target?.let(::composerDraftKey) == key) ||
             (_topicCreator.value.uploading && _topicCreator.value.draftKey == key)
 
-    private fun scheduleDraftSync(key: String, immediate: Boolean = false) {
+    /** 只在编辑器边界或用户主动处理草稿时同步，不随输入或前台轮询重试。 */
+    private fun scheduleDraftSync(key: String, showConflict: Boolean = false) {
         if (store.currentUserId() <= 0 || store.sessionChanging || _accounts.value.switching ||
             isDraftSubmitting(key) || key in _drafts.value.deletingKeys) return
-        // 已发出的请求不随输入取消；它完成后再合并期间的新编辑。
-        if (draftSyncJobs[key]?.isActive == true) return
         val userId = store.currentUserId()
         val generation = accountScopeGeneration
-        draftSyncJobs[key] = viewModelScope.launch {
-            if (!immediate) delay(1_500L)
-            if (!isDraftSubmitting(key)) syncDraftNow(key, userId, generation)
-            if (generation == accountScopeGeneration) {
-                draftSyncJobs.remove(key)
-                val local = runCatching { accountDraftStore.get(userId, key) }.getOrNull()
-                if (local?.dirty == true && !local.conflict && activeDraftKeys().contains(key)) {
-                    delay(15_000L)
-                    if (generation == accountScopeGeneration) scheduleDraftSync(key, immediate = true)
-                }
+        val revision = advanceDraftRevision(key)
+        val previous = draftSyncJobs[key]
+        val job = viewModelScope.launch(start = kotlinx.coroutines.CoroutineStart.LAZY) {
+            try {
+                // 已发出的保存先确认基线，再同步关闭时的最新内容；不能丢弃这次关闭。
+                previous?.join()
+                syncDraftNow(key, userId, generation, revision, showConflict)
+            } finally {
+                if (draftSyncJobs[key] === coroutineContext[Job]) draftSyncJobs.remove(key)
             }
         }
+        draftSyncJobs[key] = job
+        job.start()
     }
 
-    private suspend fun syncDraftNow(key: String, userId: Long = store.currentUserId(), generation: Long = accountScopeGeneration): Boolean {
+    private suspend fun syncDraftNow(
+        key: String,
+        userId: Long = store.currentUserId(),
+        generation: Long = accountScopeGeneration,
+        revision: Long = draftSyncRevisions[key] ?: 0L,
+        showConflict: Boolean = false,
+    ): Boolean {
         val lock = draftSyncLocks.getOrPut(key) { kotlinx.coroutines.sync.Mutex() }
         return lock.withLock {
             fun valid() = userId > 0 && userId == store.currentUserId() && generation == accountScopeGeneration &&
                 !store.sessionChanging && !_accounts.value.switching
-            if (!valid() || isDraftUploading(key) || isDraftSubmitting(key)) return@withLock false
+            fun currentRequest() = valid() && revision == (draftSyncRevisions[key] ?: 0L) &&
+                !isDraftUploading(key) && !isDraftSubmitting(key)
+            if (!currentRequest()) return@withLock false
             try {
                 if (key !in activeDraftKeys() && accountDraftStore.get(userId, key) == null) return@withLock true
                 // 草稿读取只是后台备份检查，慢请求不能长时间占住发送共用的锁。
                 val remote = kotlinx.coroutines.withTimeoutOrNull(4_000L) { repository.fetchDraft(key) }
                     ?: error("草稿读取超时，稍后重试")
-                if (!valid() || isDraftUploading(key) || isDraftSubmitting(key)) return@withLock false
+                if (!currentRequest()) return@withLock false
                 val local = accountDraftStore.get(userId, key)
                 val merge = org.linuxdo.android.data.draftMergeAction(local, remote)
                 when (merge) {
@@ -6001,7 +6019,9 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                     org.linuxdo.android.data.DraftMergeAction.Conflict -> {
                         accountDraftStore.put(userId, local!!.copy(dirty = true, conflict = true))
                         setDraftSyncStatus(key, "两端草稿不同，可直接发送手机内容")
-                        if (key in activeDraftKeys() && key !in dismissedDraftConflicts && _draftConflict.value == null) _draftConflict.value = DraftConflictUi(local, remote)
+                        if (showConflict && key in activeDraftKeys() && key !in dismissedDraftConflicts && _draftConflict.value == null) {
+                            _draftConflict.value = DraftConflictUi(local, remote)
+                        }
                         return@withLock false
                     }
                     org.linuxdo.android.data.DraftMergeAction.SaveLocal -> {
@@ -6014,16 +6034,16 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                         val newest = accountDraftStore.get(userId, key) ?: return@withLock false
                         accountDraftStore.put(userId, newest.copy(base = snapshot.content.takeUnless { it.empty },
                             sequence = sequence, remoteData = remote.data, dirty = newest.content != snapshot.content, conflict = false))
-                        _topicCreator.update { if (it.open && it.draftKey == key) it.copy(sequence = sequence,
+                        if (currentRequest()) _topicCreator.update { if (it.open && it.draftKey == key) it.copy(sequence = sequence,
                             savedSnapshot = if (creatorDraftContent(it) == snapshot.content) it.currentSnapshot else it.savedSnapshot) else it }
                     }
                 }
-                if (valid()) setDraftSyncStatus(key,
-                    if (accountDraftStore.get(userId, key)?.dirty == true) "已保存到手机，等待同步" else "已与网页同步")
+                if (currentRequest()) setDraftSyncStatus(key,
+                    if (accountDraftStore.get(userId, key)?.dirty == true) "已保存到手机，关闭后同步" else "已与网页同步")
                 true
             } catch (error: CancellationException) { throw error }
             catch (error: Exception) {
-                if (valid()) {
+                if (currentRequest()) {
                     if (error is HttpStatusException && error.status == 409) {
                         accountDraftStore.get(userId, key)?.let { accountDraftStore.put(userId, it.copy(conflict = true)) }
                         setDraftSyncStatus(key, "网页草稿已有更新，可直接发送手机内容")
@@ -6031,7 +6051,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 }
                 false
             } finally {
-                if (valid()) {
+                if (currentRequest()) {
                     _composer.update { if (it.target?.let(::composerDraftKey) == key) it.copy(loadingDraft = false) else it }
                     _topicCreator.update { if (it.open && it.draftKey == key) it.copy(loadingDraft = false) else it }
                 }
@@ -6070,20 +6090,15 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         try {
             accountDraftStore.get(userId, key)?.let { applyDraftContent(key, it.content, it.sequence ?: 0L) }
             accountDraftStore.markLegacyImported(userId, key)
-            // 本机内容已恢复即可编辑；后台读取晚到时仍按基线合并，不覆盖期间的新输入。
+            // 本机内容恢复后即可编辑；开始输入会使这次打开检查失效，留到关闭时合并。
             _composer.update { if (it.target?.let(::composerDraftKey) == key) it.copy(loadingDraft = false) else it }
             _topicCreator.update { if (it.open && it.draftKey == key) it.copy(loadingDraft = false) else it }
-            scheduleDraftSync(key, immediate = true)
+            scheduleDraftSync(key, showConflict = true)
         } catch (error: Exception) {
             setDraftSyncStatus(key, "手机草稿暂不可读取，请稍后重试")
             _composer.update { if (it.target?.let(::composerDraftKey) == key) it.copy(loadingDraft = false) else it }
             _topicCreator.update { if (it.open && it.draftKey == key) it.copy(loadingDraft = false) else it }
         }
-    }
-
-    private fun syncPendingDrafts() {
-        try { accountDraftStore.entries(store.currentUserId()).filter { it.dirty && !it.conflict }.forEach { scheduleDraftSync(it.key, true) } }
-        catch (error: Exception) { diagnostics.log("待同步草稿暂不可读取") }
     }
 
     fun resolveDraftConflict(usePhone: Boolean) {
@@ -6100,7 +6115,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             applyDraftContent(key, content, conflict.remote.sequence)
         }
         _draftConflict.value = null
-        scheduleDraftSync(key, immediate = true)
+        scheduleDraftSync(key)
     }
 
     fun dismissDraftConflict() {
@@ -6120,7 +6135,6 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     fun loadDrafts(refresh: Boolean = false, silent: Boolean = false) {
         if (_state.value.username == null) return
-        syncPendingDrafts()
         val generation = accountScopeGeneration
         runCatching { localDraftItems() }.getOrNull()?.let { local ->
             _drafts.update { it.copy(items = (local + it.items.filterNot { item -> item.localOnly }).distinctBy { item -> item.draftKey }) }
@@ -6419,10 +6433,10 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     fun closeTopicCreator() {
         val current = _topicCreator.value
-        if (current.submitting || current.savingDraft) return
+        if (!current.open || current.submitting || current.savingDraft) return
         persistCreatorDraft()
-        scheduleDraftSync(current.draftKey, immediate = true)
         _topicCreator.value = TopicCreatorUiState()
+        scheduleDraftSync(current.draftKey)
         loadDrafts(refresh = true, silent = true)
     }
 
@@ -6472,7 +6486,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         val generation = accountScopeGeneration
         pageJobs["saveDraft"] = viewModelScope.launch {
             _topicCreator.update { it.copy(savingDraft = true) }
-            val success = syncDraftNow(current.draftKey, userId, generation)
+            val success = syncDraftNow(current.draftKey, userId, generation, showConflict = true)
             if (generation != accountScopeGeneration) return@launch
             _topicCreator.update { it.copy(savingDraft = false) }
             if (success && closeAfterSave && creatorDraftContent(_topicCreator.value) == creatorDraftContent(current)) {
@@ -9525,8 +9539,9 @@ fun openTopicSearch(topicId: Long, title: String) {
         org.linuxdo.android.ui.screen.SignatureMediaLoader.clearAccountScopedCache()
         accountScopeGeneration += 1
         readOutboxJob?.cancel()
-        draftSyncJobs.values.forEach { it.cancel() }
+        draftSyncJobs.values.toList().forEach { it.cancel() }
         draftSyncJobs.clear()
+        draftSyncRevisions.clear()
         _draftConflict.value = null
         dismissedDraftConflicts.clear()
         verificationAttempt++
