@@ -271,13 +271,13 @@ internal fun HomeTopFilterHeader(
                             )
                         }
 
-                        // 2. 独立 LV 等级胶囊 + 锚定下拉栏
+                        // 2. 独立 LV 等级胶囊 + 锚定下拉栏（外框/背景/文字同步对应等级卡片配色）
                         Box {
                             val lvActive = filter.level != null
                             HomeFilterPill(
                                 text = filter.level?.let { "Lv.$it" } ?: "等级",
                                 active = lvActive,
-                                isLv3 = filter.level == 3,
+                                selectedLevel = filter.level,
                                 onClick = {
                                     onEnsureCategories()
                                     showLevelMenu = true
@@ -423,7 +423,7 @@ private fun LinuxDoBrandWordmark() {
 private fun HomeFilterPill(
     text: String,
     active: Boolean,
-    isLv3: Boolean = false,
+    selectedLevel: Int? = null,
     accentColor: Color? = null,
     leading: (@Composable () -> Unit)? = null,
     onClick: () -> Unit,
@@ -432,22 +432,32 @@ private fun HomeFilterPill(
     val isDark = IosTheme.colors.isDark
     val shape = RoundedCornerShape(16.dp)
     val resolvedAccent = accentColor ?: IosTheme.colors.accent
+    val levelStyle = if (active && selectedLevel != null) levelPillColors(selectedLevel, isDark) else null
+    val isLv3 = active && selectedLevel == 3
+
     val bgBrush = when {
-        active && isLv3 -> Brush.linearGradient(listOf(Color(0xFF272219), Color(0xFF3B3019)))
+        isLv3 -> Brush.horizontalGradient(listOf(Color(0xFF3E2B08), Color(0xFF6B4A12), Color(0xFF4A3410)))
+        else -> null
+    }
+    val borderBrush = when {
+        isLv3 -> Brush.horizontalGradient(listOf(Color(0xFFFFE9A8), Color(0xFFD4AF37), Color(0xFFFFD76A)))
         else -> null
     }
     val bgColor = when {
-        active && isLv3 -> Color.Transparent
+        isLv3 -> Color.Transparent
+        levelStyle != null -> levelStyle.first
         active -> resolvedAccent.copy(alpha = if (isDark) 0.18f else 0.11f)
         else -> if (isDark) Color.White.copy(alpha = 0.08f) else Color(0xFF767680).copy(alpha = 0.11f)
     }
     val borderColor = when {
-        active && isLv3 -> Color(0xFFFFD873).copy(alpha = 0.55f)
+        isLv3 -> Color.Transparent
+        levelStyle != null -> levelStyle.second
         active -> resolvedAccent.copy(alpha = if (isDark) 0.42f else 0.30f)
         else -> Color.Transparent
     }
     val textColor = when {
-        active && isLv3 -> Color(0xFFFFD873)
+        isLv3 -> Color(0xFFFFD873)
+        levelStyle != null -> levelStyle.third
         active -> resolvedAccent
         else -> IosTheme.colors.label
     }
@@ -457,7 +467,13 @@ private fun HomeFilterPill(
             .height(32.dp)
             .clip(shape)
             .then(if (bgBrush != null) Modifier.background(bgBrush) else Modifier.background(bgColor))
-            .then(if (borderColor != Color.Transparent) Modifier.border(0.9.dp, borderColor, shape) else Modifier)
+            .then(
+                when {
+                    borderBrush != null -> Modifier.border(1.dp, borderBrush, shape)
+                    borderColor != Color.Transparent -> Modifier.border(0.9.dp, borderColor, shape)
+                    else -> Modifier
+                },
+            )
             .clickable(role = Role.Button, onClick = onClick)
             .padding(start = 10.dp, end = if (onClear != null) 6.dp else 9.dp),
         verticalAlignment = Alignment.CenterVertically,
@@ -479,10 +495,7 @@ private fun HomeFilterPill(
                 modifier = Modifier
                     .size(17.dp)
                     .clip(CircleShape)
-                    .background(
-                        if (isLv3) Color(0xFFFFD873).copy(alpha = 0.22f)
-                        else resolvedAccent.copy(alpha = 0.18f),
-                    )
+                    .background(textColor.copy(alpha = 0.18f))
                     .clickable(role = Role.Button, onClickLabel = "清除$text", onClick = onClear),
                 contentAlignment = Alignment.Center,
             ) {
@@ -778,12 +791,17 @@ private fun HomeLevelDropdownMenu(
         (0..3).forEach { lv ->
             val supported = filter.categoryId == null || categories.isEmpty() || lv in allowedLevels
             val selected = filter.level == lv
+            val (lvBg, lvBorder, lvText) = levelPillColors(lv, IosTheme.colors.isDark)
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
                     .padding(horizontal = 6.dp, vertical = 2.dp)
                     .clip(RoundedCornerShape(9.dp))
-                    .background(if (selected) IosTheme.colors.accent.copy(alpha = 0.12f) else Color.Transparent)
+                    .background(if (selected) lvBg.copy(alpha = if (lv == 3) 0.22f else 0.75f) else Color.Transparent)
+                    .then(
+                        if (selected) Modifier.border(0.8.dp, lvBorder, RoundedCornerShape(9.dp))
+                        else Modifier,
+                    )
                     .clickable(enabled = supported) { onSelectLevel(lv) }
                     .padding(horizontal = 9.dp, vertical = 7.dp)
                     .alpha(if (supported) 1f else 0.38f),
@@ -795,12 +813,11 @@ private fun HomeLevelDropdownMenu(
                     horizontalArrangement = Arrangement.spacedBy(5.dp),
                 ) {
                     if (lv == 0) {
-                        val (bg, border, fg) = levelPillColors(0, IosTheme.colors.isDark)
                         Box(
                             modifier = Modifier
                                 .clip(RoundedCornerShape(6.dp))
-                                .background(bg)
-                                .border(0.8.dp, border, RoundedCornerShape(6.dp))
+                                .background(lvBg)
+                                .border(0.8.dp, lvBorder, RoundedCornerShape(6.dp))
                                 .padding(horizontal = 5.dp, vertical = 1.dp),
                         ) {
                             Text(
@@ -808,7 +825,7 @@ private fun HomeLevelDropdownMenu(
                                 fontSize = 10.sp,
                                 lineHeight = 12.sp,
                                 fontWeight = FontWeight.SemiBold,
-                                color = fg,
+                                color = lvText,
                             )
                         }
                     } else {
@@ -817,11 +834,11 @@ private fun HomeLevelDropdownMenu(
                     Text(
                         text = "可见",
                         style = IosTheme.type.caption.copy(fontSize = 11.5.sp),
-                        color = if (selected) IosTheme.colors.accent else IosTheme.colors.secondaryLabel,
+                        color = if (selected) lvText else IosTheme.colors.secondaryLabel,
                     )
                 }
                 if (selected) {
-                    Text("✓", color = IosTheme.colors.accent, fontWeight = FontWeight.Bold, fontSize = 12.sp)
+                    Text("✓", color = lvText, fontWeight = FontWeight.Bold, fontSize = 12.sp)
                 }
             }
         }

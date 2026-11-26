@@ -510,6 +510,9 @@ class TopicRepository(
     private var tagListCache: List<DiscourseTag>? = null
     private val tagGate = Mutex()
     private var emojiCache: Map<String, String>? = null
+    /** 站点是否不支持 `/filter.json`：首次失败后记住，避免每次切换独立等级筛选多等一次无效请求。 */
+    @Volatile
+    private var filterEndpointUnsupported = false
 
     internal suspend fun forumIconSnapshot(previous: ForumIconSnapshot): ForumIconSnapshot = withContext(Dispatchers.IO) {
         val html = request(Config.BASE_URL + "/", present = false, retryAllowed = false)
@@ -862,8 +865,8 @@ class TopicRepository(
     ): TopicPage {
         val isHot = sort.order.isHotEndpoint
         // 优先尝试 Discourse /filter.json（非热门时一次请求完成多分类 + 标签 + 排序）
-        // 注意：子版块在 Discourse filter 语法中必须用「父slug:子slug」或数字 ID，直接传子 slug 可能查不到，这里优先走数字 ID
-        if (!isHot) {
+        // 注意：子版块在 Discourse filter 语法中必须用数字 ID；若站点返回 404/403/空结果，记住并直接走并发聚合，避免重复试错拖慢速度
+        if (!isHot && !filterEndpointUnsupported) {
             val idList = levelCategories.map { it.id }.distinct()
             if (idList.isNotEmpty()) {
                 val qParts = mutableListOf("category:${idList.joinToString(",")}")
@@ -887,22 +890,33 @@ class TopicRepository(
                     val parsed = withContext(Dispatchers.Default) {
                         toPage(json.decodeFromString(body), awaitCategories = false)
                     }
-                    // 若 filter.json 在首页返回空列表且存在多个目标分类，回退并发拉取各子版块做兜底
                     if (parsed.items.isNotEmpty() || page > 0) {
                         return parsed
+                    }
+                    if (tag == null) {
+                        filterEndpointUnsupported = true
                     }
                 } catch (error: CancellationException) {
                     throw error
                 } catch (error: NeedsInteractiveVerification) {
                     throw error
+                } catch (error: HttpStatusException) {
+                    if (error.status in setOf(400, 403, 404, 422)) {
+                        filterEndpointUnsupported = true
+                    }
                 } catch (_: Exception) {
                     // 回退到多子版块并发聚合
                 }
             }
         }
 
+        // 并发拉取该等级子版块：按话题数降序优先取最活跃的至多 6 个子版块，避免同时发出 15+ 请求撞限流拖慢首屏
+        val prioritized = levelCategories
+            .sortedByDescending { it.topicCount }
+            .take(6)
+
         val pages = kotlinx.coroutines.coroutineScope {
-            levelCategories.map { cat ->
+            prioritized.map { cat ->
                 async {
                     try {
                         if (tag != null) {

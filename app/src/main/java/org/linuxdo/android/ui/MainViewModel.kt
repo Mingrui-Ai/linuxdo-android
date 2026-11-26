@@ -901,6 +901,12 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     val feedStates = _feedStates.asStateFlow()
     private val _homeFilter = MutableStateFlow(org.linuxdo.android.data.HomeFilterState())
     val homeFilter: StateFlow<org.linuxdo.android.data.HomeFilterState> = _homeFilter.asStateFlow()
+    /** 按「筛选 + 排序」缓存首页已拉取结果，来回切换组合或清除筛选时瞬间秒出、后台静默刷新。 */
+    private val homeFilterCache = object : LinkedHashMap<String, Pair<TopicListUiState, Long>>(16, 0.75f, true) {
+        override fun removeEldestEntry(eldest: MutableMap.MutableEntry<String, Pair<TopicListUiState, Long>>?): Boolean = size > 18
+    }
+    private fun homeCacheKey(filter: org.linuxdo.android.data.HomeFilterState, sort: TopicListSort): String =
+        "${filter.sortKey()}|${sort.order.name}|${sort.ascending}"
     private val _topicListSorts = MutableStateFlow(store.getTopicListSorts())
     val topicListSorts = _topicListSorts.asStateFlow()
     private fun listSort(key: String) = _topicListSorts.value[key] ?: TopicListSort()
@@ -7571,25 +7577,99 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             if (next.level !in supported) next.copy(level = null) else next
         } else next
         if (normalized == _homeFilter.value) return
+        val prevFilter = _homeFilter.value
+        val prevSort = listSort(prevFilter.sortKey())
+        val prevList = _feedStates.value[_state.value.homeFeed] ?: _state.value.latest
+        if (prevList.items.isNotEmpty() && !prevList.needsRefresh) {
+            homeFilterCache[homeCacheKey(prevFilter, prevSort)] = prevList to SystemClock.elapsedRealtime()
+        }
         _homeFilter.value = normalized
         incomingProbeGeneration++
         val feed = _state.value.homeFeed
         loadingFeeds.remove(feed)?.cancel()
-        val retained = (_feedStates.value[feed] ?: _state.value.latest).copy(
-            refreshing = false,
-            loadingMore = false,
-            needsRefresh = true,
-            pendingPage = null,
-            incomingTopicIds = emptySet(),
-            highlightedTopicIds = emptySet(),
-            error = null,
-        )
-        _feedStates.update { it + (feed to retained) }
-        _state.update { it.copy(latest = retained) }
+
+        val nextSort = listSort(normalized.sortKey())
+        val cachedEntry = homeFilterCache[homeCacheKey(normalized, nextSort)]
+        val now = SystemClock.elapsedRealtime()
+        val cacheFresh = cachedEntry != null && (now - cachedEntry.second) < 60_000L
+
+        // 命中内存缓存立刻秒显；未命中时先用当前内存列表做即时本地预过滤，让用户零等待看到初步结果，同时后台拉取精准远端数据
+        val immediateState = if (cachedEntry != null) {
+            cachedEntry.first.copy(
+                refreshing = !cacheFresh,
+                loadingMore = false,
+                needsRefresh = !cacheFresh,
+                error = null,
+            )
+        } else {
+            val pool = buildList {
+                addAll(prevList.items)
+                homeFilterCache.values.forEach { addAll(it.first.items) }
+            }.distinctBy { it.topic.id }
+            val prefiltered = prefilterHomeItemsLocally(pool, normalized, categories, nextSort)
+            TopicListUiState(
+                items = prefiltered,
+                page = 0,
+                hasMore = true,
+                refreshing = prefiltered.isNotEmpty(),
+                initialLoading = prefiltered.isEmpty(),
+                needsRefresh = true,
+                error = null,
+            )
+        }
+        _feedStates.update { it + (feed to immediateState) }
+        _state.update { it.copy(latest = immediateState) }
         if (normalized.level != null && categories.isEmpty() && !_categories.value.loading) {
             loadCategories()
         }
-        viewModelScope.launch { loadFeed(feed, page = 0, pullRefresh = true) }
+        if (!cacheFresh) {
+            viewModelScope.launch { loadFeed(feed, page = 0, pullRefresh = immediateState.items.isNotEmpty()) }
+        }
+    }
+
+    /** 在远端筛选结果返回前，先从本机已加载的话题池即时过滤出匹配项，消除空白等待感。 */
+    private fun prefilterHomeItemsLocally(
+        pool: List<TopicListItem>,
+        filter: org.linuxdo.android.data.HomeFilterState,
+        categories: List<Category>,
+        sort: TopicListSort,
+    ): List<TopicListItem> {
+        if (pool.isEmpty()) return emptyList()
+        val flatById = org.linuxdo.android.data.flattenCategories(categories).associateBy { it.id }
+        val targetCatIds: Set<Int>? = if (filter.categoryId != null) {
+            val group = org.linuxdo.android.data.compactCategoryGroups(categories).firstOrNull { (p, subs) ->
+                p.id == filter.categoryId || subs.any { it.id == filter.categoryId }
+            }
+            if (filter.level != null) {
+                val exact = org.linuxdo.android.data.HomeFilterResolver.resolveCategoryWithLevel(categories, filter.categoryId, filter.level)
+                exact?.let { setOf(it.id) } ?: emptySet()
+            } else if (group != null) {
+                (listOf(group.first.id) + group.second.map { it.id }).toSet()
+            } else {
+                setOf(filter.categoryId)
+            }
+        } else null
+        val targetTag = filter.tag?.trim()?.takeIf { it.isNotEmpty() }
+
+        val matched = pool.filter { item ->
+            val catId = item.category?.id ?: item.topic.categoryId
+            if (targetCatIds != null && (catId == null || catId !in targetCatIds)) return@filter false
+            if (filter.level != null) {
+                val exact = filter.categoryId != null
+                if (!org.linuxdo.android.data.HomeFilterResolver.matchesLevel(item, categories, filter.level, exactOnly = exact)) {
+                    return@filter false
+                }
+            }
+            if (targetTag != null && item.topic.tags.none { it.equals(targetTag, ignoreCase = true) }) {
+                return@filter false
+            }
+            // 顺手补全 category 以便渲染
+            if (item.category == null && catId != null && flatById[catId] != null) true else true
+        }
+        return org.linuxdo.android.data.mergeAggregatedTopicPages(
+            listOf(org.linuxdo.android.data.TopicPage(matched, hasMore = true)),
+            sort,
+        )
     }
 
     fun selectHomeCategory(category: Category?) {
@@ -9582,6 +9662,7 @@ fun openTopicSearch(topicId: Long, title: String) {
         _topicCreator.value = TopicCreatorUiState()
         _drafts.value = DraftsUiState()
         _feedStates.value = emptyMap()
+        homeFilterCache.clear()
         _homeFilter.value = org.linuxdo.android.data.HomeFilterState()
         _chat.value = ChatUiState()
         _followList.value = FollowUiState()
@@ -10059,6 +10140,9 @@ fun openTopicSearch(topicId: Long, title: String) {
                 highlightedTopicIds = if (page == 0) emptySet() else latest.highlightedTopicIds,
             )
             _feedStates.update { it + (feed to newState) }
+            if (page == 0 && newState.items.isNotEmpty()) {
+                homeFilterCache[homeCacheKey(filter, sort)] = newState to SystemClock.elapsedRealtime()
+            }
             if (_state.value.homeFeed == feed) {
                 _state.update { it.copy(latest = newState) }
             }
