@@ -53,6 +53,8 @@
 
 “跟随系统”使用手机当前网络及系统代理/VPN（如 FlClash）。“内置网络”不使用系统 HTTP 代理，但底层流量仍可能被 Android 的 VPN 接管；如需完全绕过 FlClash，请在 FlClash 中将本 App 排除。切换后可返回原页面重试。
 
+应用广场仅保留侧边栏入口，点击后交由手机默认浏览器或对应应用打开；帖子、个人资料、剪贴板中的小程序链接也使用系统打开方式，移除内嵌显示参数。首页下拉只刷新，不再进入小程序，悬浮球也不再提供应用广场快捷入口。内置浏览器及登录、安全验证、其他网页流程保留；外部浏览器使用其自身登录状态和网络设置。
+
 ## 获取与构建
 
 从 [本仓库 Releases](https://github.com/Mingrui-Ai/linuxdo-android/releases/tag/enhanced-v1.0) 下载 `linuxdo-enhanced-1.0-arm64-v8a.apk`，支持 Android 8.0 及以上的 ARM64 设备。发布页同时提供 SHA-256 校验值、签名证书指纹和源码标签。

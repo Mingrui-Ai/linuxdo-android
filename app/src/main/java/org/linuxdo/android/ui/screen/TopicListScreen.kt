@@ -57,7 +57,6 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.gestures.detectHorizontalDragGestures
-import androidx.compose.foundation.gestures.detectVerticalDragGestures
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.offset
@@ -236,7 +235,6 @@ fun TopicListScreen(
     onNavigateToHistory: (() -> Unit)? = null,
     onNavigateToConnect: (() -> Unit)? = null,
     onNavigateToChat: (() -> Unit)? = null,
-    onNavigateToApps: (() -> Unit)? = null,
     onNavigateToLdcStore: (() -> Unit)? = null,
     onNavigateToLdcMail: (() -> Unit)? = null,
     onNavigateToBookmarks: (() -> Unit)? = null,
@@ -305,23 +303,6 @@ fun TopicListScreen(
     }
 
     val pullState = rememberPullToRefreshState()
-    val latestOnOpenMiniApps by rememberUpdatedState(onNavigateToApps)
-    val miniAppsHeaderThreshold = with(LocalDensity.current) { 72.dp.toPx() }
-    val miniAppsHeaderGesture = if (active && currentFeed != null && onNavigateToApps != null) {
-        Modifier.pointerInput(listState, miniAppsHeaderThreshold) {
-            var pullDistance = 0f
-            detectVerticalDragGestures(
-                onDragStart = { pullDistance = 0f },
-                onDragCancel = { pullDistance = 0f },
-                onDragEnd = {
-                    if (pullDistance >= miniAppsHeaderThreshold && !listState.canScrollBackward) latestOnOpenMiniApps?.invoke()
-                },
-                onVerticalDrag = { change, amount ->
-                    if (!listState.canScrollBackward) { pullDistance = (pullDistance + amount).coerceAtLeast(0f); change.consume() }
-                },
-            )
-        }
-    } else Modifier
     val scope = rememberCoroutineScope()
     val clipboardManager = LocalClipboardManager.current
     var noticeToast by remember { mutableStateOf<String?>(null) }
@@ -611,13 +592,7 @@ fun TopicListScreen(
 
     PullToRefreshBox(
         isRefreshing = effectiveState.refreshing,
-        onRefresh = {
-            if (active && currentFeed != null && onNavigateToApps != null && pullState.distanceFraction >= 1.55f) {
-                onNavigateToApps()
-            } else {
-                onRefresh()
-            }
-        },
+        onRefresh = onRefresh,
         state = pullState,
         modifier = modifier
             .onSizeChanged { containerWidthPx = it.width.toFloat() }
@@ -634,14 +609,7 @@ fun TopicListScreen(
                             alpha = if (effectiveState.refreshing) 1f else min(1f, fraction * 1.4f)
                         },
                 ) {
-                    if (currentFeed != null && onNavigateToApps != null && fraction >= 1.55f && !effectiveState.refreshing) {
-                        Column(horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                            WeChatThreeDotsLoader()
-                            Text("松开进入小程序", color = IosTheme.colors.secondaryLabel, fontSize = 12.sp)
-                        }
-                    } else {
-                        IosActivityIndicator(diameter = 22.dp)
-                    }
+                    IosActivityIndicator(diameter = 22.dp)
                 }
             }
         },
@@ -682,23 +650,21 @@ fun TopicListScreen(
             customLargeTitle = when {
                 effectiveFeed != null && onFeedSelect != null -> {
                     {
-                        Box(miniAppsHeaderGesture) {
-                            SectionHeader(
-                                labels = remember { HomeFeedType.entries.map { it.label } },
-                                selected = effectiveFeed.ordinal,
-                                onSelect = { animateSelectFeed(HomeFeedType.entries[it]) },
-                                indicatorPosition = {
-                                    effectiveFeed.ordinal + ((previewFeed ?: effectiveFeed).ordinal - effectiveFeed.ordinal) * slideProgress()
-                                },
-                                actionWidth = if (showHeaderActions) 88.dp else 48.dp,
-                                actions = {
-                                    if (showHeaderActions) TopicListHeaderActions(sortOrder, sortAscending,
-                                        onSort = { showSortDialog = true }, onSearch = onNavigateToSearch)
-                                    else trailing()
-                                },
-                                leading = homeLeading,
-                            )
-                        }
+                        SectionHeader(
+                            labels = remember { HomeFeedType.entries.map { it.label } },
+                            selected = effectiveFeed.ordinal,
+                            onSelect = { animateSelectFeed(HomeFeedType.entries[it]) },
+                            indicatorPosition = {
+                                effectiveFeed.ordinal + ((previewFeed ?: effectiveFeed).ordinal - effectiveFeed.ordinal) * slideProgress()
+                            },
+                            actionWidth = if (showHeaderActions) 88.dp else 48.dp,
+                            actions = {
+                                if (showHeaderActions) TopicListHeaderActions(sortOrder, sortAscending,
+                                    onSort = { showSortDialog = true }, onSearch = onNavigateToSearch)
+                                else trailing()
+                            },
+                            leading = homeLeading,
+                        )
                     }
                 }
                 hasCategoryDropdown -> {
@@ -789,7 +755,6 @@ fun TopicListScreen(
                                 FloatingAction.History -> onNavigateToHistory?.invoke()
                                 FloatingAction.Connect -> onNavigateToConnect?.invoke()
                                 FloatingAction.Chat -> onNavigateToChat?.invoke()
-                                FloatingAction.Apps -> onNavigateToApps?.invoke()
                                 FloatingAction.LdcStore -> onNavigateToLdcStore?.invoke()
                                 FloatingAction.LdcMail -> onNavigateToLdcMail?.invoke()
                             }
@@ -3936,7 +3901,6 @@ private fun floatingActionColor(action: FloatingAction): Color = when (action) {
     FloatingAction.History -> Color(0xFF7E57C2)     // 典雅紫罗兰
     FloatingAction.Connect -> Color(0xFF1E88E5)     // LinuxDo 极客蓝
     FloatingAction.Chat -> Color(0xFFE91E63)        // 活力珊瑚粉
-    FloatingAction.Apps -> Color(0xFF07C160)        // 微信小程序绿
     FloatingAction.LdcStore -> Color(0xFFF59E0B)
     FloatingAction.LdcMail -> Color(0xFF007AFF)
 }
@@ -4134,27 +4098,6 @@ private fun FloatingActionIcon(
                     drawCircle(tint, 1.1f, Offset(8.5f, 10f))
                     drawCircle(tint, 1.1f, Offset(12f, 10f))
                     drawCircle(tint, 1.1f, Offset(15.5f, 10f))
-                }
-                FloatingAction.Apps -> {
-                    // 小程序双环徽章
-                    drawArc(
-                        color = tint,
-                        startAngle = 120f,
-                        sweepAngle = 250f,
-                        useCenter = false,
-                        topLeft = Offset(3.5f, 3.5f),
-                        size = Size(11f, 11f),
-                        style = stroke,
-                    )
-                    drawArc(
-                        color = tint,
-                        startAngle = -60f,
-                        sweepAngle = 250f,
-                        useCenter = false,
-                        topLeft = Offset(9.5f, 9.5f),
-                        size = Size(11f, 11f),
-                        style = stroke,
-                    )
                 }
                 FloatingAction.LdcStore -> {
                     val bag = Path().apply {

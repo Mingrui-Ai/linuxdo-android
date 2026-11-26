@@ -585,7 +585,7 @@ class CookedParser(private val onUnknown: (String) -> Unit = {}) {
                                 else -> "嵌入内容 (${host.ifBlank { "点击打开" }})"
                             }
                         }
-                        val desc = if (isMiniApp) "点击进入微信小程序模式交互体验" else "点击打开嵌入内容"
+                        val desc = if (isMiniApp) "点击在浏览器或对应应用中打开" else "点击打开嵌入内容"
                         output += CookedBlock.Onebox(src, title, desc)
                     }
                 }
