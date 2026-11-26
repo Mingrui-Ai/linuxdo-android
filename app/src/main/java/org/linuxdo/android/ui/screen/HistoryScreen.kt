@@ -1,5 +1,6 @@
 package org.linuxdo.android.ui.screen
 
+import org.linuxdo.android.ui.design.ForumCategoryIcon
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.rememberLazyListState
@@ -308,12 +309,7 @@ private fun HistoryRow(
                         .padding(horizontal = 6.dp, vertical = 2.dp),
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
-                    Box(
-                        modifier = Modifier
-                            .size(5.dp)
-                            .clip(CircleShape)
-                            .background(catColor),
-                    )
+                    ForumCategoryIcon(null, 11.dp, catColor, name = entry.categoryName)
                     Spacer(Modifier.width(4.dp))
                     Text(
                         text = entry.categoryName,

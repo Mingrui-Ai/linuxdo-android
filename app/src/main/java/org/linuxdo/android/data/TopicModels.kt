@@ -302,6 +302,7 @@ data class DiscourseTag(
     @SerialName("staff_topic_count") val staffTopicCount: Int = 0,
     @SerialName("pm_count") val pmCount: Int = 0,
     val description: String? = null,
+    val slug: String? = null,
 ) {
     val displayName: String
         get() = name.ifBlank { text.ifBlank { id } }
@@ -510,6 +511,9 @@ data class DiscourseUser(
 )
 
 @Serializable
+data class CategoryLogo(val url: String? = null)
+
+@Serializable
 data class Category(
     val id: Int,
     val name: String,
@@ -528,6 +532,11 @@ data class Category(
     @SerialName("allowed_tags") val allowedTags: List<String> = emptyList(),
     @SerialName("read_restricted") val readRestricted: Boolean = false,
     val permission: Int? = null,
+    @SerialName("style_type") val styleType: String? = null,
+    val icon: String? = null,
+    val emoji: String? = null,
+    @SerialName("uploaded_logo") val logo: CategoryLogo? = null,
+    @SerialName("uploaded_logo_dark") val logoDark: CategoryLogo? = null,
     @SerialName("minimum_required_tags") val minimumRequiredTags: Int = 0,
     @SerialName("required_tag_groups") val requiredTagGroups: List<RequiredTopicTagGroup> = emptyList(),
     @SerialName("allowed_tag_groups") val allowedTagGroups: List<String> = emptyList(),

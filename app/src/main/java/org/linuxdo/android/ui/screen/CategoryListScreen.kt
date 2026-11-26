@@ -1,5 +1,7 @@
 package org.linuxdo.android.ui.screen
 
+import org.linuxdo.android.ui.design.ForumCategoryIcon
+import org.linuxdo.android.ui.design.ForumTagIcon
 import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.animation.core.LinearEasing
@@ -381,7 +383,7 @@ fun CategoryListScreen(
     }
 
     IosLargeTitleScaffold(
-        title = if (currentTab == CategorySectionTab.TAGS) "标签" else "分类",
+        title = if (currentTab == CategorySectionTab.TAGS) "标签" else "类别",
         modifier = Modifier.boundedTabSwipe(currentTab.ordinal, CategorySectionTab.entries.size,
             enabled = draggedId == null) { onTabChange(CategorySectionTab.entries[it]) },
         showLargeTitle = false,
@@ -390,7 +392,7 @@ fun CategoryListScreen(
         fixedHeader = {
             Box {
                 SectionHeader(
-                    labels = listOf("分类", "标签"),
+                    labels = listOf("类别", "标签"),
                     selected = currentTab.ordinal,
                     onSelect = { onTabChange(CategorySectionTab.entries[it]) },
                     actionWidth = 48.dp,
@@ -492,6 +494,7 @@ fun CategoryListScreen(
                                 levels.forEach { category ->
                                     val levelNum = extractLevelNumber(category.name)
                                     LevelBadgeChip(
+                                        category = category,
                                         level = levelNum,
                                         onClick = { onOpen(category) },
                                     )
@@ -1487,12 +1490,7 @@ private fun CategoryPickerSubDialog(
                             val color = runCatching {
                                 cat.color?.takeIf { it.isNotBlank() }?.let { Color(android.graphics.Color.parseColor("#$it")) }
                             }.getOrNull() ?: IosTheme.colors.accent
-                            Box(
-                                modifier = Modifier
-                                    .size(10.dp)
-                                    .clip(CircleShape)
-                                    .background(color),
-                            )
+                            ForumCategoryIcon(cat, 14.dp, color)
                             Spacer(Modifier.width(10.dp))
                             Text(
                                 text = cat.name,
@@ -1523,6 +1521,7 @@ private fun CategoryPickerSubDialog(
  */
 @Composable
 private fun LevelBadgeChip(
+    category: Category,
     level: Int,
     onClick: () -> Unit,
 ) {
@@ -1549,6 +1548,7 @@ private fun LevelBadgeChip(
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(3.dp),
             ) {
+                ForumCategoryIcon(category, 12.dp, contentColor)
                 Text(
                     text = label,
                     style = IosTheme.type.caption.copy(fontSize = 11.5.sp),
@@ -1578,6 +1578,7 @@ private fun LevelBadgeChip(
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(3.dp),
             ) {
+                ForumCategoryIcon(category, 12.dp, contentColor)
                 Text(
                     text = label,
                     style = IosTheme.type.caption.copy(fontSize = 11.5.sp),
@@ -1607,6 +1608,7 @@ private fun LevelBadgeChip(
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(3.dp),
             ) {
+                ForumCategoryIcon(category, 12.dp, contentColor)
                 Text(
                     text = label,
                     style = IosTheme.type.caption.copy(fontSize = 11.5.sp),
@@ -1647,8 +1649,6 @@ private fun LevelBadgeChip(
                 ),
             )
             val textColor = Color(0xFFFFD873)
-            val crownGold = Color(0xFFFFE9A8)
-            val crownShade = Color(0xFFC9971F)
             val shimmerColor = Color(0x66FFF3C4)
 
             Row(
@@ -1683,7 +1683,7 @@ private fun LevelBadgeChip(
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(3.5.dp),
             ) {
-                Lv3CrownEmblem(gold = crownGold, shade = crownShade)
+                ForumCategoryIcon(category, 13.dp, textColor)
                 Text(
                     text = label,
                     style = IosTheme.type.caption.copy(fontSize = 12.sp, letterSpacing = 0.2.sp),
@@ -1692,42 +1692,6 @@ private fun LevelBadgeChip(
                 )
                 BadgeArrowIcon(color = textColor, bold = true)
             }
-        }
-    }
-}
-
-/** Lv.3 专属纯金三尖皇冠 + 星芒徽记。 */
-@Composable
-private fun Lv3CrownEmblem(gold: Color, shade: Color) {
-    Canvas(Modifier.size(13.dp)) {
-        scale(size.width / 24f, size.height / 24f, pivot = Offset.Zero) {
-            // 皇冠主体
-            val crown = Path().apply {
-                moveTo(3f, 18f)
-                lineTo(2f, 8f)
-                lineTo(7.5f, 12.5f)
-                lineTo(12f, 5f)
-                lineTo(16.5f, 12.5f)
-                lineTo(22f, 8f)
-                lineTo(21f, 18f)
-                close()
-            }
-            drawPath(
-                path = crown,
-                brush = Brush.verticalGradient(listOf(gold, shade)),
-            )
-            // 皇冠底座金边
-            drawLine(
-                color = gold,
-                start = Offset(3f, 20.5f),
-                end = Offset(21f, 20.5f),
-                strokeWidth = 2.2f,
-                cap = StrokeCap.Round,
-            )
-            // 皇冠三颗尖顶明珠
-            drawCircle(color = gold, radius = 1.6f, center = Offset(2f, 6.2f))
-            drawCircle(color = gold, radius = 2.0f, center = Offset(12f, 3.2f))
-            drawCircle(color = gold, radius = 1.6f, center = Offset(22f, 6.2f))
         }
     }
 }
@@ -1792,11 +1756,7 @@ private fun TagCard(
             .padding(horizontal = 12.dp, vertical = 10.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        Text(
-            text = "#",
-            style = IosTheme.type.subheadline.copy(fontWeight = FontWeight.Bold, fontSize = 14.sp),
-            color = IosTheme.colors.accent,
-        )
+        ForumTagIcon(tag.displayName, 14.dp)
         Spacer(Modifier.width(6.dp))
         Text(
             text = tag.displayName,

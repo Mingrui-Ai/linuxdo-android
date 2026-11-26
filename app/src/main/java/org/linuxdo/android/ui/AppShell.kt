@@ -168,6 +168,16 @@ import org.linuxdo.android.ui.nav.TabBar
 @Composable
 fun AppShell(viewModel: MainViewModel, browser: BrowserSession) {
     val state by viewModel.state.collectAsStateWithLifecycle()
+    val categories by viewModel.categories.collectAsStateWithLifecycle()
+    val tags by viewModel.tags.collectAsStateWithLifecycle()
+    val visibleTags = remember(tags.tags, tags.searchedTags) { tags.tags + tags.searchedTags }
+    org.linuxdo.android.ui.design.ProvideForumIcons(state.username, state.screen == Screen.List, categories.items, visibleTags) {
+        AppShellContent(viewModel, browser, state)
+    }
+}
+
+@Composable
+private fun AppShellContent(viewModel: MainViewModel, browser: BrowserSession, state: UiState) {
     val loginUiState by viewModel.loginUiState.collectAsStateWithLifecycle()
     val updateState by viewModel.updateState.collectAsStateWithLifecycle()
     // 全局 WebView 在 CF 验证时显示；登录人机验证使用独立对话框。
@@ -1421,6 +1431,7 @@ private fun MainNavigation(state: UiState, viewModel: MainViewModel, lifecycle: 
                                 }
                                 TopicListScreen(
                                     title = "# ${route.tag}",
+                                    tagTitle = route.tag,
                                     showHeaderActions = true,
                                     state = topicState,
                                     feedGraphicMode = feedGraphicMode,

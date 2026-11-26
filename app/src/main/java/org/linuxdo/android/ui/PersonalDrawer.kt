@@ -1,5 +1,7 @@
 package org.linuxdo.android.ui
 
+import org.linuxdo.android.ui.design.ForumCategoryIcon
+import org.linuxdo.android.ui.design.ForumTagIcon
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
@@ -268,23 +270,23 @@ internal fun PersonalDrawerContent(
             DrawerGroupCard(Modifier.padding(top = 12.dp)) {
                 Text("浏览社区", color = colors.secondaryLabel, style = IosTheme.type.caption,
                     modifier = Modifier.padding(start = 16.dp, end = 16.dp, top = 12.dp, bottom = 4.dp))
-                DrawerDisclosure("社区分类", Icons.Default.List, onExpand = onLoadCategories) {
+                DrawerDisclosure("类别", Icons.Default.List, onExpand = onLoadCategories) {
                     val groups = remember(categories.items, categories.order) { orderedCategoryGroups(categories.items, categories.order) }
                     groups.take(3).forEach { (category, _) ->
                         DrawerSubRow(category.name, leading = {
                             val color = remember(category.color) {
                                 runCatching { Color(android.graphics.Color.parseColor("#${category.color?.removePrefix("#")}")) }.getOrNull()
                             } ?: colors.accent
-                            Box(Modifier.size(8.dp).clip(RoundedCornerShape(3.dp)).background(color))
+                            ForumCategoryIcon(category, 15.dp, color)
                         }) { onAction(PersonalDrawerAction.CategoryTopics(category)) }
                     }
                     DrawerLoadState(categories.loading, categories.error, groups.isEmpty())
-                    DrawerSubRow("全部分类", Icons.Default.List) { onAction(PersonalDrawerAction.Categories) }
+                    DrawerSubRow("全部类别", Icons.Default.List) { onAction(PersonalDrawerAction.Categories) }
                 }
                 IosDivider(startIndent = 45.dp)
                 DrawerDisclosure("标签", Icons.Default.List, onExpand = onLoadTags) {
                     tags.tags.take(3).forEach { tag ->
-                        DrawerSubRow(tag.displayName) { onAction(PersonalDrawerAction.TagTopics(tag.displayName)) }
+                        DrawerSubRow(tag.displayName, leading = { ForumTagIcon(tag.displayName, 14.dp) }) { onAction(PersonalDrawerAction.TagTopics(tag.displayName)) }
                     }
                     DrawerLoadState(tags.loading, tags.error, tags.tags.isEmpty())
                     DrawerSubRow("全部标签", Icons.Default.List) { onAction(PersonalDrawerAction.Tags) }

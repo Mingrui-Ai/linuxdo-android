@@ -1,5 +1,7 @@
 package org.linuxdo.android.ui.screen
 
+import org.linuxdo.android.ui.design.ForumTagIcon
+import org.linuxdo.android.ui.design.ForumTagText
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.Canvas
@@ -9783,7 +9785,7 @@ private fun TopicTagSelector(
                     .widthIn(max = 112.dp),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
-                Text("#", style = textStyle, color = IosTheme.colors.tertiaryLabel)
+                ForumTagIcon(primaryTag, 12.dp)
                 Spacer(Modifier.width(2.dp))
                 Text(
                     text = primaryTag,
@@ -9829,8 +9831,8 @@ private fun TopicTagSelector(
                 ) {
                     tags.forEach { tag ->
                         val isCurrent = tag == primaryTag
-                        Text(
-                            text = "# $tag",
+                        ForumTagText(
+                            tag = tag,
                             style = textStyle,
                             color = if (isCurrent) IosTheme.colors.accent else IosTheme.colors.label,
                             maxLines = 1,

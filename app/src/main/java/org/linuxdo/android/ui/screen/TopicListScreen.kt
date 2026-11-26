@@ -1,5 +1,7 @@
 package org.linuxdo.android.ui.screen
 
+import org.linuxdo.android.ui.design.ForumCategoryIcon
+import org.linuxdo.android.ui.design.ForumTagText
 import org.linuxdo.android.ui.html.CookedParser
 
 import androidx.compose.foundation.lazy.LazyColumn
@@ -211,6 +213,7 @@ fun TopicListScreen(
     onPreloadFeed: ((HomeFeedType) -> Unit)? = null,
     hasUnread: Boolean = false,
     categoryVariants: List<Category> = emptyList(),
+    tagTitle: String? = null,
     currentCategoryId: Int? = null,
     onSelectCategoryVariant: ((Category) -> Unit)? = null,
     onApplyIncoming: (() -> Unit)? = null,
@@ -678,6 +681,7 @@ fun TopicListScreen(
                         )
                     }
                 }
+                tagTitle != null -> { { ForumTagText(tagTitle, IosTheme.type.largeTitle, IosTheme.colors.label) } }
                 else -> null
             },
             customCollapsedTitle = when {
@@ -692,6 +696,7 @@ fun TopicListScreen(
                         )
                     }
                 }
+                tagTitle != null -> { { ForumTagText(tagTitle, IosTheme.type.subheadline, IosTheme.colors.label) } }
                 else -> null
             },
             floatingOverlay = {
@@ -1468,8 +1473,8 @@ private fun TopicPreviewDialog(
                             modifier = Modifier.horizontalScroll(rememberScrollState())
                         ) {
                             tags.forEach { tag ->
-                                Text(
-                                    text = "#$tag",
+                                ForumTagText(
+                                    tag = tag,
                                     style = IosTheme.type.caption,
                                     color = IosTheme.colors.secondaryLabel
                                 )
@@ -2751,10 +2756,10 @@ internal fun CrownGlyph(color: Color) {
 
 @Composable
 private fun TagChip(tag: String) {
-    Text(
-        text = tag,
-        fontSize = 10.sp,
-        lineHeight = 12.sp,
+    ForumTagText(
+        tag = tag,
+        fallbackHash = false,
+        style = IosTheme.type.caption.copy(fontSize = 10.sp, lineHeight = 12.sp),
         color = IosTheme.colors.secondaryLabel,
         maxLines = 1,
         modifier = Modifier
@@ -3047,12 +3052,7 @@ internal fun CategoryTag(category: Category, prominent: Boolean = false, onClick
             .background(pillBg)
             .padding(horizontal = 7.dp, vertical = 2.5.dp),
     ) {
-        Box(
-            Modifier
-                .size(if (prominent) 6.dp else 5.dp)
-                .clip(CircleShape)
-                .background(catColor),
-        )
+        ForumCategoryIcon(category, if (prominent) 15.dp else 12.dp, catColor, directory = prominent)
         Spacer(Modifier.width(4.5.dp))
         Text(
             text = category.name,
@@ -3151,6 +3151,8 @@ private fun CategoryVariantSelector(
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(8.dp),
         ) {
+            if (currentCategory != null) ForumCategoryIcon(currentCategory, if (collapsed) 16.dp else 22.dp,
+                parseCategoryColor(currentCategory.color) ?: IosTheme.colors.accent)
             Text(
                 text = baseTitle,
                 style = if (collapsed) {

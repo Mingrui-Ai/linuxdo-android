@@ -1,5 +1,6 @@
 package org.linuxdo.android.ui.screen
 
+import org.linuxdo.android.ui.design.ForumCategoryIcon
 import org.linuxdo.android.data.ProfileDisplayField.*
 
 import androidx.compose.foundation.background
@@ -266,12 +267,7 @@ private fun UserReplyCard(
                     }
                     item.categoryColor?.let { hex ->
                         val dotColor = runCatching { Color(android.graphics.Color.parseColor("#$hex")) }.getOrDefault(IosTheme.colors.accent)
-                        Box(
-                            modifier = Modifier
-                                .size(7.dp)
-                                .clip(CircleShape)
-                                .background(dotColor),
-                        )
+                        ForumCategoryIcon(null, 12.dp, dotColor, catName, item.categoryId?.toInt())
                         Spacer(Modifier.width(4.dp))
                     }
                     Text(
@@ -1165,12 +1161,7 @@ private fun UserSummaryView(
                             val catColor = cat.color?.let {
                                 runCatching { Color(android.graphics.Color.parseColor("#$it")) }.getOrNull()
                             } ?: IosTheme.colors.accent
-                            Box(
-                                modifier = Modifier
-                                    .size(10.dp)
-                                    .clip(CircleShape)
-                                    .background(catColor)
-                            )
+                            ForumCategoryIcon(null, 15.dp, catColor, name = cat.name)
                             Text(
                                 text = cat.name,
                                 fontSize = 13.5.sp,

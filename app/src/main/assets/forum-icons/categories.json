@@ -1,0 +1,138 @@
+[
+  {
+    "id": 4,
+    "name": "开发调优",
+    "slug": "develop",
+    "icon": "code",
+    "style_type": "icon",
+    "color": "32c3c3"
+  },
+  {
+    "id": 98,
+    "name": "国产替代",
+    "slug": "domestic",
+    "icon": "seedling",
+    "style_type": "icon",
+    "color": "D12C25"
+  },
+  {
+    "id": 14,
+    "name": "资源荟萃",
+    "slug": "resource",
+    "icon": "square-share-nodes",
+    "style_type": "icon",
+    "color": "12A89D"
+  },
+  {
+    "id": 94,
+    "name": "网盘资源",
+    "slug": "cloud-asset",
+    "icon": "hard-drive",
+    "style_type": "icon",
+    "color": "16b176"
+  },
+  {
+    "id": 42,
+    "name": "文档共建",
+    "slug": "wiki",
+    "icon": "book",
+    "style_type": "icon",
+    "color": "9cb6c4"
+  },
+  {
+    "id": 27,
+    "name": "非我莫属",
+    "slug": "job",
+    "icon": "briefcase",
+    "style_type": "icon",
+    "color": "a8c6fe"
+  },
+  {
+    "id": 32,
+    "name": "读书成诗",
+    "slug": "reading",
+    "icon": "book-open-reader",
+    "style_type": "icon",
+    "color": "e0d900"
+  },
+  {
+    "id": 34,
+    "name": "前沿快讯",
+    "slug": "news",
+    "icon": "newspaper",
+    "style_type": "icon",
+    "color": "BB8FCE"
+  },
+  {
+    "id": 92,
+    "name": "网络记忆",
+    "slug": "feeds",
+    "icon": "rss",
+    "style_type": "icon",
+    "color": "F7941D"
+  },
+  {
+    "id": 36,
+    "name": "福利羊毛",
+    "slug": "welfare",
+    "icon": "piggy-bank",
+    "style_type": "icon",
+    "color": "E45735"
+  },
+  {
+    "id": 11,
+    "name": "搞七捻三",
+    "slug": "gossip",
+    "icon": "droplet",
+    "style_type": "icon",
+    "color": "3AB54A"
+  },
+  {
+    "id": 110,
+    "name": "虫洞广场",
+    "slug": "square",
+    "icon": "hurricane",
+    "style_type": "icon",
+    "color": "ff00f7"
+  },
+  {
+    "id": 2,
+    "name": "运营反馈",
+    "slug": "feedback",
+    "icon": "comments",
+    "style_type": "icon",
+    "color": "808281"
+  },
+  {
+    "id": 49,
+    "name": "公告",
+    "slug": "announcement",
+    "icon": "bullhorn",
+    "style_type": "icon",
+    "color": "F1592A"
+  },
+  {
+    "id": 123,
+    "name": "悬赏",
+    "slug": "bounty",
+    "icon": "award",
+    "style_type": "icon",
+    "color": "c4b512"
+  },
+  {
+    "id": 30,
+    "name": "活动",
+    "slug": "activity",
+    "icon": "users",
+    "style_type": "icon",
+    "color": "38571A"
+  },
+  {
+    "id": 124,
+    "name": "模板",
+    "slug": "template",
+    "icon": "clone",
+    "style_type": "icon",
+    "color": "04a407"
+  }
+]

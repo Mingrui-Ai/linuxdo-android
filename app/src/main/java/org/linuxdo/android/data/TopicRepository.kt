@@ -511,6 +511,17 @@ class TopicRepository(
     private val tagGate = Mutex()
     private var emojiCache: Map<String, String>? = null
 
+    internal suspend fun forumIconSnapshot(previous: ForumIconSnapshot): ForumIconSnapshot = withContext(Dispatchers.IO) {
+        val html = request(Config.BASE_URL + "/", present = false, retryAllowed = false)
+        val theme = readForumTheme(html)
+        val symbols = when {
+            theme.sprite == null -> emptyMap()
+            theme.sprite == previous.sprite && previous.symbols.isNotEmpty() -> previous.symbols
+            else -> readForumSprite(request(theme.sprite, present = false, retryAllowed = false))
+        }
+        theme.copy(checkedAt = System.currentTimeMillis(), symbols = symbols)
+    }
+
     suspend fun emojiUrls(): Map<String, String> {
         emojiCache?.let { return it }
         val result = mutableMapOf<String, String>()
@@ -3896,6 +3907,11 @@ class TopicRepository(
             return if (siteCat != null) {
                 category.copy(
                     permission = siteCat.permission,
+                    styleType = siteCat.styleType ?: category.styleType,
+                    icon = siteCat.icon ?: category.icon,
+                    emoji = siteCat.emoji ?: category.emoji,
+                    logo = category.logo ?: siteCat.logo,
+                    logoDark = category.logoDark ?: siteCat.logoDark,
                     parentCategoryId = category.parentCategoryId ?: siteCat.parentCategoryId,
                     allowedTags = siteCat.allowedTags.ifEmpty { category.allowedTags },
                     minimumRequiredTags = siteCat.minimumRequiredTags,

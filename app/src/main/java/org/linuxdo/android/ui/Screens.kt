@@ -1,5 +1,7 @@
 package org.linuxdo.android.ui
 
+import org.linuxdo.android.ui.design.ForumCategoryIcon
+import org.linuxdo.android.ui.design.ForumTagText
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.WindowInsetsSides
 import androidx.compose.foundation.layout.displayCutout
@@ -5418,12 +5420,7 @@ private fun DraftCard(
                                 verticalAlignment = Alignment.CenterVertically,
                                 modifier = Modifier.padding(vertical = 1.dp),
                             ) {
-                                Box(
-                                    Modifier
-                                        .size(9.dp)
-                                        .clip(RoundedCornerShape(2.5.dp))
-                                        .background(dotColor),
-                                )
+                                ForumCategoryIcon(category, 14.dp, dotColor)
                                 Spacer(Modifier.width(5.dp))
                                 Text(
                                     text = baseName,
@@ -5462,8 +5459,8 @@ private fun DraftCard(
                                     .background(IosTheme.colors.fieldBackground)
                                     .padding(horizontal = 6.dp, vertical = 2.dp),
                             ) {
-                                Text(
-                                    text = tag,
+                                ForumTagText(
+                                    tag = tag,
                                     style = IosTheme.type.caption.copy(fontSize = 11.sp),
                                     color = IosTheme.colors.secondaryLabel,
                                 )
@@ -7208,12 +7205,7 @@ fun TopicCreatorSheet(
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
                     if (selectedCategory != null) {
-                        Box(
-                            Modifier
-                                .size(9.dp)
-                                .clip(CircleShape)
-                                .background(dotColor),
-                        )
+                        ForumCategoryIcon(selectedCategory, 14.dp, dotColor)
                         Spacer(Modifier.width(6.dp))
                         if (isRestricted) {
                             ComposerLockIcon(
@@ -7294,14 +7286,12 @@ fun TopicCreatorSheet(
                                 color = IosTheme.colors.secondaryLabel,
                             )
                         } else {
-                            Text(
-                                text = state.tags.joinToString(", "),
-                                style = IosTheme.type.subheadline.copy(fontWeight = FontWeight.Medium),
-                                color = IosTheme.colors.accent,
-                                maxLines = 1,
-                                overflow = TextOverflow.Ellipsis,
-                                modifier = Modifier.weight(1f, fill = false),
-                            )
+                            Row(Modifier.weight(1f, fill = false).horizontalScroll(rememberScrollState()),
+                                horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                                state.tags.forEach { tag ->
+                                    ForumTagText(tag, IosTheme.type.subheadline, IosTheme.colors.accent)
+                                }
+                            }
                             Spacer(Modifier.width(4.dp))
                             Text(
                                 text = "▾",
@@ -7428,8 +7418,8 @@ fun TopicCreatorSheet(
                                                         )
                                                         .padding(horizontal = 7.dp, vertical = 3.dp),
                                                 ) {
-                                                    Text(
-                                                        text = tagItem.text.ifBlank { tagItem.name },
+                                                    ForumTagText(
+                                                        tag = tagItem.name, label = tagItem.text.ifBlank { tagItem.name },
                                                         style = IosTheme.type.subheadline.copy(
                                                             fontWeight = if (isSelected) FontWeight.SemiBold else FontWeight.Medium,
                                                             fontSize = 13.5.sp,
@@ -7922,12 +7912,7 @@ private fun CategoryPickerDialog(
                             modifier = Modifier.fillMaxWidth(),
                             verticalAlignment = Alignment.CenterVertically,
                         ) {
-                            Box(
-                                Modifier
-                                    .size(11.dp)
-                                    .clip(RoundedCornerShape(3.dp))
-                                    .background(dotColor),
-                            )
+                            ForumCategoryIcon(parent, 14.dp, dotColor)
                             Spacer(Modifier.width(8.dp))
                             Text(
                                 text = baseName,
@@ -8082,8 +8067,8 @@ private fun TagPickerDialog(
                                     .padding(horizontal = 12.dp, vertical = 7.dp),
                                 contentAlignment = Alignment.Center,
                             ) {
-                                Text(
-                                    text = if (isSelected) "# $tag ✓" else "# $tag",
+                                ForumTagText(
+                                    tag = tag, suffix = if (isSelected) " ✓" else "",
                                     style = IosTheme.type.subheadline.copy(
                                         fontSize = 13.sp,
                                         fontWeight = if (isSelected) FontWeight.SemiBold else FontWeight.Normal,
@@ -9834,7 +9819,7 @@ internal fun TopicMetadataEditorSheet(
                                 Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(7.dp)) {
                                     Text("分类", style = IosTheme.type.footnote, color = IosTheme.colors.secondaryLabel)
                                     Row(verticalAlignment = Alignment.CenterVertically) {
-                                        Box(Modifier.size(8.dp).clip(CircleShape).background(category?.color?.let(::parseCategoryColor) ?: IosTheme.colors.accent))
+                                        ForumCategoryIcon(category, 14.dp, category?.color?.let(::parseCategoryColor) ?: IosTheme.colors.accent)
                                         Spacer(Modifier.width(8.dp))
                                         Text(category?.name ?: "请选择分类", style = IosTheme.type.body, color = IosTheme.colors.label,
                                             maxLines = 2, overflow = TextOverflow.Ellipsis)
@@ -9851,7 +9836,7 @@ internal fun TopicMetadataEditorSheet(
                                 }
                                 androidx.compose.foundation.layout.FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                                     state.tags.forEach { tag ->
-                                        Text(tag + if (editable && state.rules?.canTagTopics == true) "  ×" else "",
+                                        ForumTagText(tag, suffix = if (editable && state.rules?.canTagTopics == true) "  ×" else "",
                                             style = IosTheme.type.footnote, color = IosTheme.colors.accent,
                                             modifier = Modifier.clip(RoundedCornerShape(9.dp)).background(IosTheme.colors.accent.copy(alpha = 0.1f))
                                                 .clickable(enabled = editable && state.rules?.canTagTopics == true) { onTags(state.tags - tag) }
@@ -9875,7 +9860,7 @@ internal fun TopicMetadataEditorSheet(
                                     }
                                     androidx.compose.foundation.layout.FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                                         state.tagOptions.filterNot { it.name in state.tags }.forEach { option ->
-                                            Text("+ " + option.text, style = IosTheme.type.footnote, color = IosTheme.colors.label,
+                                            ForumTagText(option.name, label = "+ " + option.text, style = IosTheme.type.footnote, color = IosTheme.colors.label,
                                                 modifier = Modifier.clip(RoundedCornerShape(9.dp)).background(IosTheme.colors.fieldBackground)
                                                     .clickable(enabled = editable) { onTags(state.tags + option.name) }
                                                     .padding(horizontal = 11.dp, vertical = 9.dp))
