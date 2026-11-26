@@ -1,5 +1,7 @@
 package org.linuxdo.android.ui.screen
 
+import org.linuxdo.android.data.ProfileDisplayField.*
+
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -357,6 +359,7 @@ fun UserProfileScreen(
     onBack: (() -> Unit)? = null,
     onSwitchAccount: (() -> Unit)? = null,
     onEditProfile: (() -> Unit)? = null,
+    onOpenDisplaySettings: () -> Unit,
     menuActions: List<ProfileMenuAction> = emptyList(),
     communityScore: Int? = null,
     communityScoreLoading: Boolean = false,
@@ -652,6 +655,7 @@ fun UserProfileScreen(
                     username = username, card = userCard,
                     initialAvatarUrl = initialAvatarUrl, initialStaticAvatarUrl = initialStaticAvatarUrl,
                     onBack = onBack, onSwitchAccount = onSwitchAccount, onEditProfile = onEditProfile,
+                    onOpenDisplaySettings = onOpenDisplaySettings,
                     onChat = onChat?.let { callback -> { callback(username) } },
                     onPrivateMessage = onComposePrivateMessage?.let { callback -> { callback(username) } },
                     menuActions = relationshipActions + menuActions,
@@ -660,6 +664,7 @@ fun UserProfileScreen(
                     onOpenLevel = onOpenLevel,
                     badges = badges, badgesLoading = badgesLoading, onOpenBadges = onOpenBadges,
                     onOpenNetwork = onOpenNetwork, onOpenWebsite = onOpenWebsite, onOpenTopic = onOpenTopic,
+                    onOpenUser = onOpenUser,
                 )
                 profileError?.let { message ->
                     Row(verticalAlignment = Alignment.CenterVertically) {
@@ -834,6 +839,27 @@ private fun UserSummaryView(
     val context = LocalContext.current
     val isDark = IosTheme.colors.isDark
     val summaryScroll = scrollState
+    val display = org.linuxdo.android.ui.rememberProfileDisplayPreferences()
+    val viewerId = (context.applicationContext as App).container.sessionStore.currentUserId()
+    val ownProfile = viewerId > 0 && userCard?.id == viewerId
+    val stats = buildList<Pair<String, String>> {
+        fun metric(field: org.linuxdo.android.data.ProfileDisplayField, label: String, value: String?) {
+            if (display[field] && value != null) add(label to value)
+        }
+        if (summary.canSeeSummaryStats) {
+            metric(DaysVisited, "📅 访问天数", formatCount(summary.daysVisited))
+            metric(TimeRead, "⏱️ 阅读时长", formatTimeRead(summary.timeRead))
+            metric(PostsRead, "📖 已读帖子", formatCount(summary.postsReadCount))
+            metric(TopicsEntered, "👀 浏览话题", formatCount(summary.topicsEntered))
+            metric(TopicCount, "📝 建立话题", formatCount(summary.topicCount))
+            metric(PostCount, "💬 发表回复", formatCount(summary.postCount))
+            metric(LikesReceived, "❤️ 获得点赞", formatCount(summary.likesReceived))
+            metric(LikesGiven, "👍 送出点赞", formatCount(summary.likesGiven))
+            metric(RecentTimeRead, "⏳ 最近阅读", summary.recentTimeRead?.let(::formatTimeRead))
+            metric(Solutions, "✅ 解决方案", summary.solvedCount?.let { formatCount(it) })
+        }
+        if (ownProfile) metric(Bookmarks, "🔖 书签", summary.bookmarkCount?.let { formatCount(it) })
+    }
     val cardBg = if (isDark) Color(0xFF18181A) else Color.White
     val cardBorder = if (isDark) Color(0xFF262628) else Color(0xFFE5E7EB)
     val textPrimary = if (isDark) Color.White else Color(0xFF111827)
@@ -847,8 +873,8 @@ private fun UserSummaryView(
             .padding(16.dp),
         verticalArrangement = Arrangement.spacedBy(16.dp),
     ) {
-        // 核心统计与历史总结内容完整保留。
-        Column(
+        // 隐藏或无权限的统计不占位，原有 emoji 与四列布局保留。
+        if (stats.isNotEmpty()) Column(
             modifier = Modifier
                 .fillMaxWidth()
                 .clip(RoundedCornerShape(16.dp))
@@ -857,17 +883,6 @@ private fun UserSummaryView(
                 .padding(12.dp),
             verticalArrangement = Arrangement.spacedBy(8.dp),
         ) {
-            val stats = listOf(
-                "📅 访问天数" to formatCount(summary.daysVisited),
-                "⏱️ 阅读时长" to formatTimeRead(summary.timeRead),
-                "📖 已读帖子" to formatCount(summary.postsReadCount),
-                "👀 浏览话题" to formatCount(summary.topicsEntered),
-                "📝 建立话题" to formatCount(summary.topicCount),
-                "💬 发表回复" to formatCount(summary.postCount),
-                "❤️ 获得点赞" to formatCount(summary.likesReceived),
-                "👍 送出点赞" to formatCount(summary.likesGiven),
-            )
-
             stats.chunked(4).forEachIndexed { index, row ->
                 if (index > 0) IosDivider()
                 Row(
@@ -893,6 +908,7 @@ private fun UserSummaryView(
                             )
                         }
                     }
+                    repeat(4 - row.size) { Spacer(Modifier.weight(1f)) }
                 }
             }
         }

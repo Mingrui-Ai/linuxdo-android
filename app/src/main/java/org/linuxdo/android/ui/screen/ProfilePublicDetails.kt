@@ -15,6 +15,8 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import org.jsoup.Jsoup
 import org.linuxdo.android.data.*
+import org.linuxdo.android.data.ProfileDisplayField.*
+import org.linuxdo.android.ui.rememberProfileDisplayPreferences
 import org.linuxdo.android.ui.design.IosTheme
 
 /** 详细主页的公开信息；缺失、隐藏和被撤回的字段不占位。 */
@@ -24,8 +26,9 @@ internal fun ProfilePublicDetails(
     onOpenWebsite: (String) -> Unit,
     onOpenTopic: (Long, String, Int?) -> Unit,
 ) {
-    val website = profileWebsiteUrl(card?.website)
-    val topic = card?.featuredTopic?.takeIf { it.id > 0 && it.title.isNotBlank() }
+    val display = rememberProfileDisplayPreferences()
+    val website = profileWebsiteUrl(card?.website).takeIf { display[Website] }
+    val topic = card?.featuredTopic?.takeIf { display[FeaturedTopic] && it.id > 0 && it.title.isNotBlank() }
     val colors = IosTheme.colors
     if (website == null && topic == null) return
     Column(Modifier.fillMaxWidth().padding(top = 4.dp)) {

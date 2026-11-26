@@ -170,6 +170,7 @@ class AppContainer(context: Context) {
     }
 
     val preferences = context.getSharedPreferences("display_preferences", Context.MODE_PRIVATE)
+    val profileDisplayStore = org.linuxdo.android.data.ProfileDisplayStore(preferences)
     val diagnostics = Diagnostics(File(context.filesDir, "diagnostics.log")).also {
         org.linuxdo.android.net.NetDiagnostics.sink = it
     }

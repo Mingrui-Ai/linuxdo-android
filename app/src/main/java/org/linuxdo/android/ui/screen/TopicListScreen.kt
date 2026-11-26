@@ -75,6 +75,10 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Search
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.awaitCancellation
@@ -200,6 +204,7 @@ fun TopicListScreen(
     active: Boolean = true,
     scrollToTopRequest: Int = 0,
     trailing: @Composable () -> Unit = {},
+    showHeaderActions: Boolean = false,
     homeLeading: @Composable () -> Unit = {},
     currentFeed: HomeFeedType? = null,
     feedStates: Map<HomeFeedType, TopicListUiState> = emptyMap(),
@@ -647,7 +652,20 @@ fun TopicListScreen(
             compactTop = onBack == null,
             showLargeTitle = showLargeTitle,
             scrollToTopRequest = scrollToTopRequest,
-            trailing = trailing,
+            trailingWidth = if (showHeaderActions) 88.dp else 0.dp,
+            trailing = {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    trailing()
+                    if (showHeaderActions) {
+                        onNavigateToSearch?.let { openSearch ->
+                            IconButton(onClick = openSearch, modifier = Modifier.size(44.dp)) {
+                                Icon(Icons.Default.Search, contentDescription = "搜索", tint = IosTheme.colors.label)
+                            }
+                        }
+                        TopicSortButton(sortOrder, sortAscending, onClick = { showSortDialog = true }, floating = false)
+                    }
+                }
+            },
             pageOffsetXProvider = if (effectiveFeed != null) ({ feedOffset }) else null,
             secondaryListState = secondaryListState,
             secondaryPageOffsetXProvider = if (incomingFeed != null) {
@@ -779,8 +797,8 @@ fun TopicListScreen(
                         },
                         modifier = Modifier.fillMaxSize(),
                     )
-                } else if (currentFeed == null) {
-                    // 首页关闭悬浮球后不再补显示独立按钮，发帖统一从底栏进入。
+                } else if (currentFeed == null && currentCategoryId == null && !showHeaderActions) {
+                    // 分类、标签话题页的排序位于顶栏，不再补显示独立发帖/排序悬浮按钮。
                     Column(
                         modifier = Modifier
                             .align(Alignment.BottomEnd)
@@ -788,7 +806,7 @@ fun TopicListScreen(
                         horizontalAlignment = Alignment.CenterHorizontally,
                         verticalArrangement = Arrangement.spacedBy(10.dp),
                     ) {
-                        TopicSortFab(
+                        TopicSortButton(
                             sortOrder = sortOrder,
                             ascending = sortAscending,
                             onClick = { showSortDialog = true },
@@ -911,28 +929,29 @@ private fun CreateTopicFab(onClick: () -> Unit) {
     }
 }
 
-/** 列表右下角悬浮排序按钮（垂直双向箭头，位于发帖按钮上方）。 */
+/** 复用同一双向箭头与排序操作；顶栏模式使用普通图标按钮外观。 */
 @Composable
-private fun TopicSortFab(
+private fun TopicSortButton(
     sortOrder: TopicSortOrder,
     ascending: Boolean,
     onClick: () -> Unit,
+    floating: Boolean = true,
 ) {
     val isDefault = sortOrder == TopicSortOrder.Default
     val activeColor = IosTheme.colors.accent
-    val tintColor = if (isDefault) IosTheme.colors.secondaryLabel else activeColor
+    val tintColor = if (!isDefault) activeColor else if (floating) IosTheme.colors.secondaryLabel else IosTheme.colors.label
     val bgBase = IosTheme.colors.card.copy(alpha = 0.94f)
     val borderColor = if (isDefault) IosTheme.colors.separator.copy(alpha = 0.4f) else activeColor.copy(alpha = 0.45f)
 
     Box(
         Modifier
             .size(44.dp)
-            .shadow(elevation = 3.dp, shape = CircleShape, clip = false)
+            .then(if (floating) Modifier.shadow(elevation = 3.dp, shape = CircleShape, clip = false) else Modifier)
             .clip(CircleShape)
-            .background(bgBase)
-            .border(1.dp, borderColor, CircleShape)
-            .clickable(onClick = onClick)
-            .semantics { contentDescription = "列表排序：${sortOrder.label}" },
+            .then(if (floating) Modifier.background(bgBase).border(1.dp, borderColor, CircleShape) else Modifier)
+            .clickable(role = Role.Button, onClick = onClick)
+            .semantics { contentDescription = "列表排序：${sortOrder.label}" +
+                if (isDefault) "" else if (ascending) "，升序" else "，降序" },
         contentAlignment = Alignment.Center,
     ) {
         Canvas(Modifier.size(19.dp)) {
@@ -3034,7 +3053,7 @@ internal fun formatCount(value: Int): String {
 }
 
 @Composable
-internal fun CategoryTag(category: Category, prominent: Boolean = false) {
+internal fun CategoryTag(category: Category, prominent: Boolean = false, onClick: (() -> Unit)? = null) {
     val catColor = parseCategoryColor(category.color) ?: IosTheme.colors.accent
     val isDark = IosTheme.colors.isDark
     val chipShape = RoundedCornerShape(8.dp)
@@ -3044,6 +3063,9 @@ internal fun CategoryTag(category: Category, prominent: Boolean = false) {
         verticalAlignment = Alignment.CenterVertically,
         modifier = Modifier
             .clip(chipShape)
+            .then(if (onClick != null) Modifier.clickable(
+                role = Role.Button, onClickLabel = "浏览${category.name}分类", onClick = onClick,
+            ) else Modifier)
             .border(width = 0.75.dp, color = borderColor, shape = chipShape)
             .background(pillBg)
             .padding(horizontal = 7.dp, vertical = 2.5.dp),

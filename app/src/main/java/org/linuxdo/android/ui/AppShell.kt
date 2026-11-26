@@ -1031,6 +1031,10 @@ private fun MainNavigation(state: UiState, viewModel: MainViewModel, lifecycle: 
                 PersonalDrawerContent(state.username, drawerAccount, drawerProfile, drawerScore, drawerBadges, drawerVisible, categories, tagsState,
                     onLoadCategories = { viewModel.loadCategories() }, onLoadTags = { viewModel.loadTags() },
                     onAction = onDrawerAction,
+                    onOpenUser = { name ->
+                        stack.push(Route.UserProfile(name))
+                        drawerScope.launch { drawerState.close() }
+                    },
                     onAccounts = { viewModel.refreshAccounts(); showDrawerAccounts = true },
                     onCommunityScore = { viewModel.loadCdkScore(userInitiated = true); showDrawerScore = true },
                     onToggleTheme = { viewModel.setThemeMode(if (drawerDark) ThemeMode.Light else ThemeMode.Dark) },
@@ -1224,6 +1228,9 @@ private fun MainNavigation(state: UiState, viewModel: MainViewModel, lifecycle: 
                                     savedTopicCount = savedTopics.size,
                                     onOpenSavedTopics = { showSavedTopics = true },
                                     onBack = { stack.pop() },
+                                    onOpenCategory = { category ->
+                                        stack.push(Route.CategoryTopics(category.id, category.slug, category.name))
+                                    },
                                     onRetry = { viewModel.retryTopic(route.topicId, resumePostNumber) },
                                     onRefresh = { viewModel.refreshTopic(route.topicId) },
                                     onLoadMore = { viewModel.loadTopic(route.topicId, more = true) },
@@ -1412,6 +1419,7 @@ private fun MainNavigation(state: UiState, viewModel: MainViewModel, lifecycle: 
                                 }
                                 TopicListScreen(
                                     title = "# ${route.tag}",
+                                    showHeaderActions = true,
                                     state = topicState,
                                     feedGraphicMode = feedGraphicMode,
                                     feedDisplayMode = feedDisplayMode,
@@ -1438,7 +1446,7 @@ private fun MainNavigation(state: UiState, viewModel: MainViewModel, lifecycle: 
                                     },
                                     sortOrder = topicSortOrder,
                                     sortAscending = topicSortAscending,
-                                    onSortChange = { viewModel.setTopicSort(it) },
+                                    onSortChange = { viewModel.setTopicSort(it, currentTag = route.tag) },
                                     floatingBallEnabled = floatingBallEnabled,
                                     floatingBallActions = floatingBallActions,
                                     floatingBallXRatio = floatingBallXRatio,
@@ -1490,6 +1498,7 @@ private fun MainNavigation(state: UiState, viewModel: MainViewModel, lifecycle: 
                                 TopicListScreen(
                                     title = route.name,
                                     state = categoryTopics[route.categoryId] ?: TopicListUiState(),
+                                    showHeaderActions = true,
                                     feedGraphicMode = feedGraphicMode,
                                     feedDisplayMode = feedDisplayMode,
                                     showTopicUnreadDot = showTopicUnreadDot,
@@ -1612,6 +1621,7 @@ private fun MainNavigation(state: UiState, viewModel: MainViewModel, lifecycle: 
                                         onOpenWebsite = { globalBrowserUrl = it },
                                         onOpenConnect = { showConnectSheet = true },
                                         onEditProfile = { globalBrowserUrl = "${Config.BASE_URL}/my/preferences/profile" },
+                                        onOpenDisplaySettings = { stack.push(Route.SettingsDetail(org.linuxdo.android.ui.nav.SettingsPage.ProfileDisplay)) },
                                         cdkScore = cdkScoreState.score.takeIf { cdkScoreState.username.equals(profileUsername, ignoreCase = true) },
                                         cdkScoreLoading = drawerScore.loading,
                                         cdkScoreError = drawerScore.error,
@@ -1635,6 +1645,7 @@ private fun MainNavigation(state: UiState, viewModel: MainViewModel, lifecycle: 
                                         onChat = { target -> viewModel.openChatWithUser(target) { stack.push(it) } },
                                         onComposePrivateMessage = { privateMessageRecipient = it },
                                         onSetFollowing = viewModel::setProfileFollowing,
+                                        onOpenDisplaySettings = { stack.push(Route.SettingsDetail(org.linuxdo.android.ui.nav.SettingsPage.ProfileDisplay)) },
                                         isBlocked = profileRoute.username.lowercase() in blockedUsernameSet,
                                         onToggleBlock = viewModel::toggleProfileBlacklist,
                                         onBack = { stack.pop() },

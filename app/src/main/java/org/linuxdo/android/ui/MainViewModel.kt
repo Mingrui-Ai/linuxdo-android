@@ -3817,6 +3817,21 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                     loading = false,
                 )
 
+                // Keep the lightweight card immediate, then load the inviter from the full profile.
+                if (container.profileDisplayStore.settings.value[org.linuxdo.android.data.ProfileDisplayField.Inviter]) {
+                    val complete = try { repository.fetchUserProfile(target) }
+                    catch (cancelled: CancellationException) { throw cancelled }
+                    catch (_: Exception) { null }
+                    if (complete != null && _userCard.value.user?.username?.equals(target, ignoreCase = true) == true) {
+                        val current = _userCard.value.user ?: complete
+                        _userCard.value = _userCard.value.copy(user = current.copy(
+                            invitedBy = complete.invitedBy, email = complete.email,
+                            gamificationScore = complete.gamificationScore,
+                            profileBackgroundUploadUrl = complete.profileBackgroundUploadUrl,
+                        ))
+                    }
+                }
+
                 if (effectiveUser.animatedAvatar.isNullOrBlank()) {
                     val enriched = runCatching { repository.enrichUserCardAvatar(target, effectiveUser) }.getOrNull()
                     if (!enriched?.animatedAvatar.isNullOrBlank() &&
@@ -7606,7 +7621,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
-    fun setTopicSort(order: TopicSortOrder, currentCategoryId: Int? = null, currentCategorySlug: String? = null) {
+    fun setTopicSort(order: TopicSortOrder, currentCategoryId: Int? = null, currentCategorySlug: String? = null, currentTag: String? = null) {
         val currentOrder = _topicSortOrder.value
         val currentAscending = _topicSortAscending.value
         val (newOrder, newAscending) = if (order != TopicSortOrder.Default && order == currentOrder) {
@@ -7624,9 +7639,12 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         _feedStates.value = emptyMap()
         _categoryTopics.value = emptyMap()
         _userTopicStates.value = emptyMap()
+        pageJobs.keys.filter { it.startsWith("tag:") }.forEach { pageJobs.remove(it)?.cancel() }
+        _tagTopics.value = emptyMap()
         if (currentCategoryId != null && !currentCategorySlug.isNullOrBlank()) {
             loadCategory(currentCategoryId, currentCategorySlug, refresh = true)
         }
+        if (!currentTag.isNullOrBlank()) loadTagTopics(currentTag, refresh = true)
         refreshLatest()
     }
 
@@ -8728,6 +8746,7 @@ fun openTopicSearch(topicId: Long, title: String) {
                 val sortAscending = _topicSortAscending.value.takeIf { sortOrder != null }
                 val result = repository.fetchTagTopics(tag, page, order = sortOrder, ascending = sortAscending)
                 ExcerptCache.loadBatchFromStore(result.items.map { it.topic.id })
+                if (!isActive) return@launch
                 val items = if (more) (previous.items + result.items).distinctBy { it.topic.id } else result.items
                 val hasMore = result.hasMore && result.items.isNotEmpty() && (!more || page > previous.page)
                 _tagTopics.update { it + (tag to TopicListUiState(
@@ -8739,10 +8758,11 @@ fun openTopicSearch(topicId: Long, title: String) {
             } catch (error: CancellationException) {
                 throw error
             } catch (error: Exception) {
+                if (!isActive) return@launch
                 _tagTopics.update { it + (tag to previous.copy(initialLoading = false, error = error.message ?: "加载失败")) }
                 handlePageFailure(error) { loadTagTopics(tag, refresh = !more, more = more) }
             } finally {
-                _tagTopics.update { states -> states[tag]?.let {
+                if (isActive) _tagTopics.update { states -> states[tag]?.let {
                     states + (tag to it.copy(initialLoading = false, refreshing = false, loadingMore = false))
                 } ?: states }
             }

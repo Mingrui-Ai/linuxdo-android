@@ -44,6 +44,7 @@ sealed interface Route : Serializable {
 /** 设置的二级子页。标题同时用作首页品目名与子页导航栏标题。 */
 enum class SettingsPage(val title: String) {
     Appearance("外观"),
+    ProfileDisplay("主页显示设置"),
     Reading("阅读与浏览"),
     FloatingBall("辅助悬浮球"),
     Notifications("通知与保活"),

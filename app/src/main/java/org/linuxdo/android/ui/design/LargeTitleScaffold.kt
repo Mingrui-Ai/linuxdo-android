@@ -84,6 +84,7 @@ fun IosLargeTitleScaffold(
     backLabel: String = "返回",
     scrollToTopRequest: Int = 0,
     trailing: @Composable () -> Unit = {},
+    trailingWidth: Dp = 0.dp,
     fixedHeader: (@Composable () -> Unit)? = null,
     customLargeTitle: (@Composable () -> Unit)? = null,
     customCollapsedTitle: (@Composable () -> Unit)? = null,
@@ -207,6 +208,7 @@ fun IosLargeTitleScaffold(
                     ),
                     onBack = onBack,
                     trailing = trailing,
+                    trailingWidth = trailingWidth,
                     customTitle = customCollapsedTitle,
                 )
             }
@@ -230,6 +232,7 @@ fun IosNavBar(
     background: Color = IosTheme.colors.card,
     onBack: (() -> Unit)? = null,
     trailing: @Composable () -> Unit = {},
+    trailingWidth: Dp = 0.dp,
     customTitle: (@Composable () -> Unit)? = null,
 ) {
     val density = LocalDensity.current
@@ -252,7 +255,7 @@ fun IosNavBar(
                         .alpha(titleAlpha)
                         .padding(
                             start = if (onBack != null) backPadding else 48.dp,
-                            end = if (onBack != null) 56.dp else 48.dp,
+                            end = maxOf(trailingWidth, if (onBack != null) 56.dp else 48.dp),
                         ),
                     contentAlignment = Alignment.Center,
                 ) {
@@ -268,7 +271,7 @@ fun IosNavBar(
                     textAlign = TextAlign.Center,
                     modifier = Modifier
                         .alpha(titleAlpha)
-                        .padding(start = backPadding, end = 56.dp),
+                        .padding(start = backPadding, end = maxOf(56.dp, trailingWidth)),
                 )
             }
             if (onBack != null) {

@@ -1728,13 +1728,17 @@ class TopicRepository(
             }
             return existingCached
         }
+        val generation = sessionStore?.sessionGeneration
         val root = objectRequest("/u/${encode(username)}/card.json", burst = true)
+        if (generation != sessionStore?.sessionGeneration) throw CancellationException("会话已切换")
         return cacheUserCardResponse(username, root)
     }
 
     /** 详细主页直接读取完整资料；card.json 不包含个人主页背景。 */
     suspend fun fetchUserProfile(username: String): UserCardData {
+        val generation = sessionStore?.sessionGeneration
         val root = objectRequest("/u/${encode(username)}.json", burst = true)
+        if (generation != sessionStore?.sessionGeneration) throw CancellationException("会话已切换")
         return cacheUserCardResponse(username, root)
     }
 
@@ -3328,8 +3332,10 @@ class TopicRepository(
 
     suspend fun fetchUserSummary(username: String): UserSummaryData {
         val userPath = URLEncoder.encode(username, "UTF-8")
+        val generation = sessionStore?.sessionGeneration
         val raw = objectRequest("/u/$userPath/summary.json")
-        val summary = raw["user_summary"] as? JsonObject ?: JsonObject(emptyMap())
+        if (generation != sessionStore?.sessionGeneration) throw CancellationException("会话已切换")
+        val summary = raw["user_summary"] as? JsonObject ?: error("响应缺少用户总结")
 
         val topicsList = raw.objects("topics").map { t ->
             SummaryTopicItem(
@@ -3412,7 +3418,10 @@ class TopicRepository(
             topicCount = summary.number("topic_count")?.toInt() ?: 0,
             postCount = summary.number("post_count")?.toInt() ?: 0,
             timeRead = summary.number("time_read")?.toInt() ?: 0,
-            bookmarkCount = summary.number("bookmark_count")?.toInt() ?: 0,
+            bookmarkCount = summary.number("bookmark_count")?.toInt()?.takeIf { it >= 0 },
+            recentTimeRead = summary.number("recent_time_read")?.toInt()?.takeIf { it >= 0 },
+            solvedCount = summary.number("solved_count")?.toInt()?.takeIf { it >= 0 },
+            canSeeSummaryStats = (summary["can_see_summary_stats"] as? JsonPrimitive)?.booleanOrNull != false,
             topicsEntered = summary.number("topics_entered")?.toInt() ?: 0,
             topTopics = topicsList,
             topReplies = repliesList,

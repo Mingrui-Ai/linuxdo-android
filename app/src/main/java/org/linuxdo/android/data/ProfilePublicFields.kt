@@ -18,6 +18,17 @@ data class ProfileStatus(
 @Serializable
 data class ProfileFeaturedTopic(val id: Long = 0, val title: String = "")
 
+@Serializable
+data class ProfileInviter(
+    val username: String = "",
+    val name: String? = null,
+    @SerialName("avatar_template") val avatarTemplate: String? = null,
+)
+
+/** Account-only contact data must never be shown while viewing another user's cached card. */
+internal fun visibleProfileEmail(card: UserCardData?, viewerId: Long): String? =
+    card?.email?.trim()?.takeIf { it.isNotEmpty() && viewerId > 0 && card.id == viewerId }
+
 /** 兼容旧版“找工作”快捷项保存的非 Discourse 名称。 */
 internal fun normalizeProfileStatusEmoji(raw: String): String = raw.trim().trim(':').let {
     if (it == "magnifying_glass_tilted_left") "mag" else it
