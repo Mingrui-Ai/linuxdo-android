@@ -32,6 +32,7 @@ import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.animate
 import kotlinx.coroutines.Job
 import androidx.compose.animation.core.FastOutSlowInEasing
+import androidx.compose.animation.core.animateDpAsState
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.snap
 import androidx.compose.animation.core.tween
@@ -714,6 +715,9 @@ fun TopicListScreen(
             }
         },
     ) {
+        var visibleHeaderHeight by remember(useHomeFilterHeader, onBack) {
+            mutableStateOf(if (useHomeFilterHeader) 94.dp else if (onBack == null) 54.dp else IosMetrics.navBarHeight)
+        }
         IosLargeTitleScaffold(
             title = title,
             listState = listState,
@@ -722,6 +726,7 @@ fun TopicListScreen(
             showLargeTitle = showLargeTitle,
             scrollToTopRequest = scrollToTopRequest,
             trailingWidth = if (showHeaderActions) 88.dp else 0.dp,
+            onVisibleHeaderHeightChanged = { visibleHeaderHeight = it },
             trailing = {
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     trailing()
@@ -864,23 +869,42 @@ fun TopicListScreen(
             },
             floatingOverlay = {
                 var lastApplyIncomingClickTime by remember { mutableLongStateOf(0L) }
+                val incomingTopPadding by animateDpAsState(
+                    targetValue = visibleHeaderHeight + 8.dp,
+                    animationSpec = tween(durationMillis = 200, easing = FastOutSlowInEasing),
+                    label = "incomingBannerTopPadding",
+                )
+                val incomingAvatars = remember(effectiveState.pendingPage, effectiveState.incomingTopicIds) {
+                    val pending = effectiveState.pendingPage?.items.orEmpty()
+                    val incomingSet = effectiveState.incomingTopicIds
+                    val prioritized = pending.filter { it.topic.id in incomingSet }.ifEmpty { pending }
+                    prioritized
+                        .mapNotNull { item ->
+                            val primary = item.avatarUrl?.takeIf { it.isNotBlank() }
+                            val fallback = item.staticAvatarUrl?.takeIf { it.isNotBlank() }
+                            if (primary == null && fallback == null) null
+                            else Triple(item.authorUsername, primary, fallback)
+                        }
+                        .distinctBy { it.first?.lowercase() ?: it.second ?: it.third }
+                        .take(3)
+                }
 
                 AnimatedVisibility(
                     visible = effectiveState.incomingTopicIds.isNotEmpty() &&
                         pullState.distanceFraction == 0f && !effectiveState.refreshing,
-                    enter = fadeIn(tween(200)) + slideInVertically(tween(250)) { -it },
+                    enter = fadeIn(tween(200)) + slideInVertically(tween(240)) { -it },
                     exit = fadeOut(tween(150)) + slideOutVertically(tween(200)) { -it },
                     modifier = Modifier
                         .align(Alignment.TopCenter)
-                        .padding(top = if (useHomeFilterHeader) 98.dp else if (onBack == null) 58.dp else IosMetrics.navBarHeight + 8.dp),
+                        .padding(top = incomingTopPadding),
                 ) {
                     var bannerAlphaTarget by remember { mutableFloatStateOf(1f) }
                     LaunchedEffect(listState) {
                         snapshotFlow { listState.isScrollInProgress }.collectLatest { scrolling ->
                             bannerAlphaTarget = 1f
                             if (!scrolling) {
-                                delay(2000L)
-                                bannerAlphaTarget = FLOATING_BALL_IDLE_ALPHA
+                                delay(2200L)
+                                bannerAlphaTarget = 0.88f
                             }
                         }
                     }
@@ -891,6 +915,7 @@ fun TopicListScreen(
                     )
                     IncomingTopicsBanner(
                         count = effectiveState.incomingTopicIds.size,
+                        avatars = incomingAvatars,
                         onClick = {
                             val now = android.os.SystemClock.elapsedRealtime()
                             if (now - lastApplyIncomingClickTime > 400L) {
@@ -3425,42 +3450,94 @@ private fun DropdownChevronGlyph(
     }
 }
 
+/**
+ * X（Twitter）风格的新发布悬浮胶囊：左侧向上箭头 + 叠放发帖者头像 + 简洁文案，
+ * 位置紧贴当前可见顶栏（或二级筛选栏）正下方，随顶栏收起平滑上移。
+ */
 @Composable
 fun IncomingTopicsBanner(
     count: Int,
+    avatars: List<Triple<String?, String?, String?>> = emptyList(),
     onClick: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
+    val pillBg = IosTheme.colors.accent
+    val pillContent = Color.White
+    val avatarSize = 22.dp
+    val avatarStep = 14.dp
+
     Box(
         modifier = modifier
-            .padding(horizontal = 20.dp, vertical = 4.dp)
             .shadow(
                 elevation = 8.dp,
-                shape = RoundedCornerShape(22.dp),
-                spotColor = Color(0x33007AFF),
-                ambientColor = Color(0x22007AFF),
+                shape = CircleShape,
+                spotColor = pillBg.copy(alpha = 0.42f),
+                ambientColor = pillBg.copy(alpha = 0.25f),
             )
-            .clip(RoundedCornerShape(22.dp))
-            .background(IosTheme.colors.card)
-            .border(1.dp, IosTheme.colors.accent.copy(alpha = 0.35f), RoundedCornerShape(22.dp))
-            .clickable(onClick = onClick)
-            .padding(horizontal = 16.dp, vertical = 9.dp),
+            .clip(CircleShape)
+            .background(pillBg)
+            .clickable(role = Role.Button, onClickLabel = "查看 $count 条新发布", onClick = onClick)
+            .padding(start = 11.dp, end = 10.dp, top = 6.dp, bottom = 6.dp),
         contentAlignment = Alignment.Center,
     ) {
         Row(
             verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.Center,
+            horizontalArrangement = Arrangement.spacedBy(7.dp),
         ) {
-            Canvas(modifier = Modifier.size(7.dp)) {
-                drawCircle(color = Color(0xFF007AFF))
+            // 左侧向上箭头
+            Canvas(Modifier.size(14.dp)) {
+                scale(size.width / 24f, size.height / 24f, pivot = Offset.Zero) {
+                    val stroke = Stroke(width = 2.6f, cap = StrokeCap.Round, join = StrokeJoin.Round)
+                    drawLine(pillContent, Offset(12f, 19.5f), Offset(12f, 5.0f), strokeWidth = 2.6f, cap = StrokeCap.Round)
+                    val head = Path().apply {
+                        moveTo(6.0f, 11.0f)
+                        lineTo(12f, 5.0f)
+                        lineTo(18.0f, 11.0f)
+                    }
+                    drawPath(head, pillContent, style = stroke)
+                }
             }
-            Spacer(Modifier.width(8.dp))
+
+            // 中间精简文案
             Text(
-                text = "有 $count 条新话题动态，点击查看 ↑",
-                style = IosTheme.type.footnote,
-                color = IosTheme.colors.accent,
-                fontWeight = FontWeight.SemiBold,
+                text = if (avatars.isNotEmpty()) "新发布" else "$count 条新发布",
+                style = IosTheme.type.footnote.copy(
+                    fontSize = 12.5.sp,
+                    fontWeight = FontWeight.SemiBold,
+                ),
+                color = pillContent,
+                maxLines = 1,
             )
+
+            // 右侧叠放至多 3 位新帖发帖者头像（带与胶囊同色的描边分隔，复刻 X 样式）
+            if (avatars.isNotEmpty()) {
+                val stackWidth = avatarSize + avatarStep * (avatars.size - 1)
+                Box(
+                    modifier = Modifier
+                        .width(stackWidth)
+                        .height(avatarSize),
+                ) {
+                    avatars.forEachIndexed { idx, (username, primaryUrl, fallbackUrl) ->
+                        Box(
+                            modifier = Modifier
+                                .offset(x = avatarStep * idx)
+                                .size(avatarSize)
+                                .clip(CircleShape)
+                                .background(pillBg)
+                                .padding(1.4.dp)
+                                .clip(CircleShape),
+                        ) {
+                            UserAvatar(
+                                avatarUrl = primaryUrl,
+                                fallbackUrl = fallbackUrl,
+                                username = username,
+                                modifier = Modifier.fillMaxSize(),
+                                cornerRadius = avatarSize / 2,
+                            )
+                        }
+                    }
+                }
+            }
         }
     }
 }

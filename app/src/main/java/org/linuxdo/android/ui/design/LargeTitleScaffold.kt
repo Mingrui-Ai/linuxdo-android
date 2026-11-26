@@ -88,6 +88,7 @@ fun IosLargeTitleScaffold(
     fixedHeader: (@Composable () -> Unit)? = null,
     stickySubHeader: (@Composable () -> Unit)? = null,
     stickySubHeaderAlwaysVisible: Boolean = false,
+    onVisibleHeaderHeightChanged: ((Dp) -> Unit)? = null,
     customLargeTitle: (@Composable () -> Unit)? = null,
     customCollapsedTitle: (@Composable () -> Unit)? = null,
     floatingOverlay: (@Composable BoxScope.() -> Unit)? = null,
@@ -192,6 +193,7 @@ fun IosLargeTitleScaffold(
                     .fillMaxWidth()
                     .onSizeChanged { measured ->
                         val h = with(density) { measured.height.toDp() }
+                        onVisibleHeaderHeightChanged?.invoke(h)
                         if (h > 0.dp && (barsVisible || customHeaderHeight == 0.dp)) {
                             customHeaderHeight = h
                         }
@@ -201,8 +203,17 @@ fun IosLargeTitleScaffold(
             }
         } else {
             val showNavBar = feedHeader || !compactTop || collapse > 0.01f || !showLargeTitle
+            val navVisible = showNavBar && (stickySubHeaderAlwaysVisible || LocalListBars.current?.value != false)
+            LaunchedEffect(navVisible, navBarHeight, titleBoxHeight, feedHeader) {
+                val h = when {
+                    !navVisible -> 0.dp
+                    feedHeader -> titleBoxHeight
+                    else -> navBarHeight
+                }
+                onVisibleHeaderHeightChanged?.invoke(h)
+            }
             AnimatedVisibility(
-                visible = showNavBar && (stickySubHeaderAlwaysVisible || LocalListBars.current?.value != false),
+                visible = navVisible,
                 enter = slideInVertically(animationSpec = tween(220)) { -it } + fadeIn(animationSpec = tween(180)),
                 exit = slideOutVertically(animationSpec = tween(220)) { -it } + fadeOut(animationSpec = tween(180)),
                 modifier = Modifier.align(Alignment.TopStart),
