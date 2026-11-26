@@ -514,12 +514,17 @@ class TopicRepository(
     internal suspend fun forumIconSnapshot(previous: ForumIconSnapshot): ForumIconSnapshot = withContext(Dispatchers.IO) {
         val html = request(Config.BASE_URL + "/", present = false, retryAllowed = false)
         val theme = readForumTheme(html)
-        val symbols = when {
-            theme.sprite == null -> emptyMap()
+        val fetchedSymbols = when {
+            theme.sprite == null -> null
             theme.sprite == previous.sprite && previous.symbols.isNotEmpty() -> previous.symbols
             else -> readForumSprite(request(theme.sprite, present = false, retryAllowed = false))
         }
-        theme.copy(checkedAt = System.currentTimeMillis(), symbols = symbols)
+        mergeForumIconSnapshot(
+            previous = previous,
+            theme = theme,
+            fetchedSymbols = fetchedSymbols,
+            checkedAt = System.currentTimeMillis(),
+        )
     }
 
     suspend fun emojiUrls(): Map<String, String> {

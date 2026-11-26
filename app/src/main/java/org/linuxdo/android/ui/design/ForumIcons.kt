@@ -117,15 +117,22 @@ internal fun ForumTagText(
     label: String = tag, suffix: String = "", fallbackHash: Boolean = true,
     maxLines: Int = 1, overflow: TextOverflow = TextOverflow.Ellipsis,
 ) {
+    val icon = LocalIcons.current.tags[tag.trim().lowercase()]
+    val showLeading = icon != null || fallbackHash
+    val iconSize = with(LocalDensity.current) {
+        style.fontSize.toDp().coerceIn(10.dp, 26.dp)
+    }
     Row(modifier, verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(3.dp)) {
-        ForumTagIcon(tag, with(LocalDensity.current) { style.fontSize.toDp() }, fallbackHash)
+        if (showLeading) {
+            ForumTagIcon(tag, iconSize, fallbackHash)
+        }
         Text(label + suffix, style = style, color = color, maxLines = maxLines, overflow = overflow)
     }
 }
 
 @Composable
 private fun SiteSymbol(icon: ForumIcon, tint: Color, size: Dp, fallback: @Composable () -> Unit) {
-    val key = icon.name.removePrefix("fas-").removePrefix("fa-")
+    val key = icon.name.lowercase().removePrefix("fas-").removePrefix("far-").removePrefix("fab-").removePrefix("fa-")
     val color = parseCategoryColor(icon.color) ?: tint
     val catalog = LocalIcons.current
     val svg = catalog.symbols[key]
@@ -157,7 +164,11 @@ internal fun ForumTagIcon(tag: String, size: Dp, fallbackHash: Boolean = true) {
     val icon = LocalIcons.current.tags[tag.trim().lowercase()]
     val tint = IosTheme.colors.secondaryLabel
     val fallback: @Composable () -> Unit = {
-        if (fallbackHash) Text("#", Modifier.clearAndSetSemantics {}, color = tint, fontSize = with(LocalDensity.current) { size.toSp() })
+        if (fallbackHash) {
+            Box(Modifier.size(size), contentAlignment = Alignment.Center) {
+                Text("#", Modifier.clearAndSetSemantics {}, color = tint, fontSize = with(LocalDensity.current) { size.toSp() })
+            }
+        }
     }
     if (icon != null) SiteSymbol(icon, tint, size, fallback) else fallback()
 }
@@ -169,7 +180,9 @@ internal fun ForumCategoryIcon(category: Category?, size: Dp, color: Color,
     val cat = if (category?.styleType != null || category?.icon != null) category else
         catalog.byId[category?.id ?: id] ?: category ?: catalog.byName[name]
     val fallback: @Composable () -> Unit = {
-        Box(Modifier.size(size * .6f).background(color, RoundedCornerShape(2.dp)))
+        Box(Modifier.size(size), contentAlignment = Alignment.Center) {
+            Box(Modifier.size(size * .6f).background(color, RoundedCornerShape(2.dp)))
+        }
     }
     if (cat == null) { fallback(); return }
     val themeIcon = catalog.categories[cat.slug.lowercase()] ?: catalog.categories[cat.id.toString()]
@@ -179,8 +192,11 @@ internal fun ForumCategoryIcon(category: Category?, size: Dp, color: Color,
         themeIcon != null -> SiteSymbol(themeIcon, color, size, fallback)
         style == "emoji" && !cat.emoji.isNullOrBlank() -> {
             val code = cat.emoji.trim(':')
-            if (code.any { it.code > 127 }) Text(code, Modifier.clearAndSetSemantics {}, fontSize = with(LocalDensity.current) { size.toSp() })
-            else {
+            if (code.any { it.code > 127 }) {
+                Box(Modifier.size(size), contentAlignment = Alignment.Center) {
+                    Text(code, Modifier.clearAndSetSemantics {}, fontSize = with(LocalDensity.current) { (size * .9f).toSp() })
+                }
+            } else {
                 val url = catalogEmojiUrl(code)
                 if (url != null) IconImage(url, size, null, fallback) else fallback()
             }

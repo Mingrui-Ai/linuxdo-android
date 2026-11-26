@@ -9798,6 +9798,9 @@ fun openTopicSearch(topicId: Long, title: String) {
             if (page == 0 && pageJobs["sync:categories"]?.isActive != true && repository.cachedCategoryList() == null) {
                 syncCategoriesInBackground()
             }
+            if (page == 0 && pageJobs["sync:tags"]?.isActive != true && repository.cachedTagList() == null) {
+                syncTagsInBackground(delayMs = 4_000L)
+            }
             val knownCategories = repository.cachedCategoryMap()
             val freshItems = if (knownCategories.isNotEmpty()) {
                 result.items.map { item ->

@@ -11,11 +11,22 @@ import org.linuxdo.android.Config
 internal data class ForumIcon(val name: String, val color: String?)
 internal val forumIconName = Regex("[a-z0-9][a-z0-9-]{0,95}")
 
+internal fun parseHexRgbColor(hex: String?): Long? {
+    val cleaned = hex?.trim()?.removePrefix("#") ?: return null
+    val expanded = when (cleaned.length) {
+        3 -> buildString(6) { for (ch in cleaned) { append(ch); append(ch) } }
+        6 -> cleaned
+        else -> return null
+    }
+    return expanded.toLongOrNull(16)?.or(0xFF000000L)
+}
+
 internal fun parseForumIcons(raw: String): Map<String, ForumIcon> = buildMap {
     for (entry in raw.split('|', '\n')) {
         val parts = entry.split(',').map(String::trim)
-        if (parts.size < 2 || parts[0].isBlank() || !forumIconName.matches(parts[1])) continue
-        put(parts[0].lowercase(), ForumIcon(parts[1], parts.getOrNull(2)?.takeIf(String::isNotBlank)))
+        val iconName = parts.getOrNull(1)?.lowercase()
+        if (parts.size < 2 || parts[0].isBlank() || iconName == null || !forumIconName.matches(iconName)) continue
+        put(parts[0].lowercase(), ForumIcon(iconName, parts.getOrNull(2)?.takeIf(String::isNotBlank)))
     }
 }
 
@@ -27,6 +38,29 @@ internal data class ForumIconSnapshot(
     val tags: String? = null,
     val categories: String? = null,
 )
+
+internal fun mergeForumIconSnapshot(
+    previous: ForumIconSnapshot,
+    theme: ForumIconSnapshot,
+    fetchedSymbols: Map<String, String>? = null,
+    checkedAt: Long,
+): ForumIconSnapshot {
+    val sprite = theme.sprite ?: previous.sprite
+    val symbols = when {
+        fetchedSymbols != null && fetchedSymbols.isNotEmpty() -> fetchedSymbols
+        previous.symbols.isNotEmpty() -> previous.symbols
+        else -> emptyMap()
+    }
+    val tags = theme.tags?.takeIf { it.isNotBlank() } ?: previous.tags
+    val categories = theme.categories?.takeIf { it.isNotBlank() } ?: previous.categories
+    return ForumIconSnapshot(
+        checkedAt = checkedAt,
+        sprite = sprite,
+        symbols = symbols,
+        tags = tags,
+        categories = categories,
+    )
+}
 
 internal fun tagIconsByName(config: Map<String, ForumIcon>, tags: List<DiscourseTag>): Map<String, ForumIcon> =
     config.toMutableMap().apply {

@@ -3176,12 +3176,9 @@ internal fun EmptyNotice() {
     }
 }
 
-/** Discourse 下发的分类色是不带 # 的六位十六进制。 */
-fun parseCategoryColor(hex: String?): Color? {
-    val cleaned = hex?.removePrefix("#")?.trim() ?: return null
-    if (cleaned.length != 6) return null
-    return runCatching { Color(cleaned.toLong(16) or 0xFF000000L) }.getOrNull()
-}
+/** Discourse 下发的分类色通常是 6 位十六进制，主题配置里也可能出现 3 位简写或带 # 前缀。 */
+fun parseCategoryColor(hex: String?): Color? =
+    org.linuxdo.android.data.parseHexRgbColor(hex)?.let(::Color)
 
 private val CATEGORY_LEVEL_REGEX = Regex("[,，\\s]*Lv\\s*(\\d+)\\s*$", RegexOption.IGNORE_CASE)
 
