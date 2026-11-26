@@ -1752,6 +1752,7 @@ fun TopicDetailScreen(
                 }
             }
             if (composer.open) {
+                key(composer.draftKey, composer.target) {
                 ComposerSheet(
                     composer = composer,
                     onDraftChange = onDraftChange,
@@ -1760,6 +1761,7 @@ fun TopicDetailScreen(
                     onAttach = onAttach,
                     onRemoveAttachment = onRemoveComposerAttachment,
                 )
+                }
             }
             boostTarget?.let { target ->
                 BoostSheet(
@@ -2886,7 +2888,7 @@ private fun FloorScrollbarPreview(floor: State<Int>, total: Int, modifier: Modif
 
 /** 全屏/退出全屏切换按钮图标 (四个朝外直角展开 / 四个朝内折角收起) */
 @Composable
-private fun FullscreenToggleIcon(isFullScreen: Boolean, tint: Color, modifier: Modifier = Modifier) {
+internal fun FullscreenToggleIcon(isFullScreen: Boolean, tint: Color, modifier: Modifier = Modifier) {
     Canvas(modifier.size(18.dp)) {
         scale(size.width / 24f, size.height / 24f, pivot = Offset.Zero) {
             val stroke = Stroke(width = 2.2f, cap = StrokeCap.Round, join = StrokeJoin.Round)
@@ -2979,58 +2981,6 @@ internal fun ComposerAttachmentIcon(tint: Color, modifier: Modifier = Modifier) 
 
 /** 贴吧风格表情图标：圆脸轮廓 + 双眼 + 微笑弧线 */
 @Composable
-internal fun ComposerEmojiIcon(tint: Color, modifier: Modifier = Modifier) {
-    Canvas(modifier.size(22.dp)) {
-        scale(size.width / 24f, size.height / 24f, pivot = Offset.Zero) {
-            val stroke = Stroke(width = 1.8f, cap = StrokeCap.Round, join = StrokeJoin.Round)
-            drawCircle(tint, radius = 9f, center = Offset(12f, 12f), style = stroke)
-            drawCircle(tint, radius = 1.3f, center = Offset(8.8f, 10f))
-            drawCircle(tint, radius = 1.3f, center = Offset(15.2f, 10f))
-            drawArc(
-                color = tint,
-                startAngle = 22f,
-                sweepAngle = 136f,
-                useCenter = false,
-                topLeft = Offset(7.8f, 10.5f),
-                size = androidx.compose.ui.geometry.Size(8.4f, 6.2f),
-                style = stroke,
-            )
-        }
-    }
-}
-
-/** 粗体图标：加粗大写英文字母 B 矢量轮廓，与图片/附件/表情图标保持完全一致的视觉规范 */
-@Composable
-fun ComposerBoldIcon(tint: Color, modifier: Modifier = Modifier) {
-    Canvas(modifier.size(22.dp)) {
-        scale(size.width / 24f, size.height / 24f, pivot = Offset.Zero) {
-            val stroke = Stroke(width = 2.2f, cap = StrokeCap.Round, join = StrokeJoin.Round)
-            // 坚线主干
-            drawLine(tint, Offset(7f, 4f), Offset(7f, 20f), strokeWidth = 2.6f, cap = StrokeCap.Round)
-            // 上半弧
-            val upper = Path().apply {
-                moveTo(7f, 4.5f)
-                lineTo(13f, 4.5f)
-                cubicTo(16f, 4.5f, 17f, 6.2f, 17f, 8.2f)
-                cubicTo(17f, 10.2f, 15.5f, 11.8f, 13f, 11.8f)
-                lineTo(7f, 11.8f)
-            }
-            drawPath(upper, tint, style = stroke)
-            // 下半弧
-            val lower = Path().apply {
-                moveTo(7f, 11.8f)
-                lineTo(13.8f, 11.8f)
-                cubicTo(17f, 11.8f, 18.5f, 13.8f, 18.5f, 16.2f)
-                cubicTo(18.5f, 18.8f, 16.5f, 19.5f, 13.5f, 19.5f)
-                lineTo(7f, 19.5f)
-            }
-            drawPath(lower, tint, style = stroke)
-        }
-    }
-}
-
-/** 投票图标：对齐 Fluxdo squarePollVertical，圆角方框 + 三根高低错落投票柱状条，与粗体/表情/图片图标保持一致的 22.dp 规范 */
-@Composable
 fun ComposerPollIcon(tint: Color, modifier: Modifier = Modifier) {
     Canvas(modifier.size(22.dp)) {
         scale(size.width / 24f, size.height / 24f, pivot = Offset.Zero) {
@@ -3098,289 +3048,6 @@ fun ComposerLockIcon(tint: Color, modifier: Modifier = Modifier) {
     }
 }
 
-private data class EmojiCategory(
-    val title: String,
-    val icon: String,
-    val emojis: List<String>,
-)
-
-private val EMOJI_CATEGORIES = listOf(
-    EmojiCategory(
-        title = "表情",
-        icon = "😀",
-        emojis = listOf(
-            "😀", "😃", "😄", "😁", "😆", "😅", "🤣", "😂",
-            "🙂", "🙃", "😉", "😊", "😇", "🥰", "😍", "🤩",
-            "😘", "😗", "😚", "😙", "😋", "😛", "😜", "🤪",
-            "😝", "🤑", "🤗", "🫢", "🫣", "🤫", "🤔", "🫡",
-            "🤐", "🤨", "😐", "😑", "😶", "🫥", "😏", "😒",
-            "🙄", "😬", "😮‍💨", "🤥", "😌", "😔", "😪", "🤤",
-            "😴", "😷", "🤒", "🤕", "🤢", "🤮", "🤧", "🥵",
-            "🥶", "🥴", "😵", "😵‍💫", "🤯", "🤠", "🥳", "🥸",
-            "😎", "🤓", "🧐", "😕", "🫤", "😟", "🙁", "☹️",
-            "😮", "😯", "😲", "😳", "🥺", "🥹", "😦", "😧",
-            "😨", "😰", "😥", "😢", "😭", "😱", "😖", "😣",
-            "😞", "😓", "😩", "😫", "🥱", "😤", "😡", "😠",
-            "🤬", "😈", "👿", "💀", "☠️", "💩", "🤡", "👹",
-            "👺", "👻", "👽", "👾", "🤖", "😺", "😸", "😹",
-        )
-    ),
-    EmojiCategory(
-        title = "人物手势",
-        icon = "👋",
-        emojis = listOf(
-            "👋", "🤚", "🖐️", "✋", "🖖", "🫱", "🫲", "🫳",
-            "🫴", "🫷", "🫸", "👌", "🤌", "🤏", "✌️", "🤞",
-            "🫰", "🤟", "🤘", "🤙", "👈", "👉", "👆", "🖕",
-            "👇", "☝️", "🫵", "👍", "👎", "✊", "👊", "🤛",
-            "🤜", "👏", "🙌", "🫶", "👐", "🤲", "🤝", "🙏",
-            "✍️", "💅", "🤳", "💪", "🦾", "🦿", "🦵", "🦶",
-            "👂", "🦻", "👃", "🫀", "🫁", "🧠", "👀", "👁️",
-            "🧑", "👶", "👧", "🧒", "👦", "👩", "👨", "🧓",
-            "👴", "👵", "👮", "🕵️", "💂", "👷", "🤴", "👸",
-        )
-    ),
-    EmojiCategory(
-        title = "动物自然",
-        icon = "🐶",
-        emojis = listOf(
-            "🐶", "🐱", "🐭", "🐹", "🐰", "🦊", "🐻", "🐼",
-            "🐻‍❄️", "🐨", "🐯", "🦁", "🐮", "🐷", "🐸", "🐵",
-            "🐔", "🐧", "🐦", "🐤", "🦆", "🦅", "🦉", "🦇",
-            "🐺", "🐗", "🐴", "🦄", "🐝", "🐛", "🦋", "🐌",
-            "🐞", "🐜", "🪰", "🪲", "🪳", "🦟", "🦗", "🕷️",
-            "🦂", "🐢", "🐍", "🦎", "🐙", "🦑", "🦐", "🦞",
-            "🦀", "🐡", "🐠", "🐟", "🐬", "🐳", "🐋", "🦈",
-            "🐊", "🐆", "🐅", "🐃", "🐂", "🐄", "🐎", "🐖",
-            "🐏", "🐑", "🦙", "🐐", "🦌", "🐕", "🐩", "🐈",
-            "🐓", "🦃", "🦚", "🦜", "🦢", "🕊️", "🐇", "🦝",
-            "🌲", "🌳", "🌴", "🌵", "🌾", "🌿", "🍀", "🍁",
-            "🍂", "🍃", "🌸", "🌺", "🌼", "🌻", "🌞", "🌝",
-            "🌙", "⭐️", "🌟", "✨", "⚡️", "🔥", "🌈", "☀️",
-            "⛅️", "☁️", "🌧️", "⛈️", "❄️", "☃️", "💨", "🌊",
-        )
-    ),
-    EmojiCategory(
-        title = "美食饮品",
-        icon = "🍔",
-        emojis = listOf(
-            "🍏", "🍎", "🍐", "🍊", "🍋", "🍌", "🍉", "🍇",
-            "🍓", "🫐", "🍈", "🍒", "🍑", "🥭", "🍍", "🥥",
-            "🥝", "🍅", "🍆", "🥑", "🥦", "🥬", "🥒", "🌶️",
-            "🌽", "🥕", "🧄", "🧅", "🥔", "🍠", "🥐", "🥯",
-            "🍞", "🥖", "🥨", "🧀", "🥚", "🍳", "🧈", "🥞",
-            "🧇", "🥓", "🥩", "🍗", "🍖", "🌭", "🍔", "🍟",
-            "🍕", "🥪", "🥙", "🌮", "🌯", "🥗", "🥘", "🥫",
-            "🍝", "🍜", "🍲", "🍛", "🍣", "🍱", "🥟", "🍤",
-            "🍙", "🍚", "🍘", "🍢", "🍡", "🍧", "🍨", "🍦",
-            "🍰", "🎂", "🍮", "🍭", "🍬", "🍫", "🍿", "🍩",
-            "🍪", "🌰", "🥜", "🍯", "🥛", "☕️", "🍵", "🧃",
-            "🥤", "🧋", "🍶", "🍺", "🍻", "🥂", "🍷", "🍸",
-        )
-    ),
-    EmojiCategory(
-        title = "活动旅行",
-        icon = "⚽️",
-        emojis = listOf(
-            "⚽️", "🏀", "🏈", "⚾️", "🥎", "🎾", "🏐", "🏉",
-            "🥏", "🎱", "🏓", "🏸", "🏒", "⛳️", "🏹", "🎣",
-            "🥊", "🥋", "🛹", "🛼", "🎿", "🏂", "🏋️", "🤸",
-            "⛹️", "🚴", "🏆", "🥇", "🥈", "🥉", "🏅", "🎖️",
-            "🎫", "🎟️", "🎪", "🎨", "🎬", "🎤", "🎧", "🎼",
-            "🎹", "🥁", "🎷", "🎺", "🎸", "🎻", "🎲", "🎯",
-            "🎳", "🎮", "🎰", "🧩", "🚗", "🚕", "🚙", "🚌",
-            "🏎️", "🚓", "🚑", "🚒", "🚐", "🛻", "🚚", "🚜",
-            "🚲", "🛵", "🏍️", "🚨", "🚄", "🚅", "🚇", "✈️",
-            "🛫", "🛬", "🚀", "🛸", "⛵️", "🚤", "🛳️", "🚢",
-        )
-    ),
-    EmojiCategory(
-        title = "物品符号",
-        icon = "💡",
-        emojis = listOf(
-            "⌚️", "📱", "💻", "⌨️", "🖥️", "🖨️", "📷", "📸",
-            "📹", "🎥", "📞", "☎️", "📺", "📻", "🎙️", "⏰",
-            "🕰️", "⏳", "🔋", "🔌", "💡", "🔦", "🕯️", "💸",
-            "💵", "💴", "💶", "💰", "💳", "💎", "⚖️", "🔧",
-            "🔨", "⚒️", "🛠️", "⛏️", "🔩", "⚙️", "💣", "🔪",
-            "🗡️", "⚔️", "🛡️", "⚰️", "🔮", "💈", "💊", "💉",
-            "🩺", "🏷️", "🔖", "🔑", "🗝️", "🚪", "📦", "✉️",
-            "📩", "📨", "📧", "💌", "📥", "📤", "📮", "📜",
-            "📄", "📑", "🧾", "📊", "📈", "📉", "📁", "📂",
-            "📰", "📓", "📕", "📗", "📘", "📙", "📚", "📖",
-            "🔗", "📎", "✂️", "📌", "📍", "✏️", "✒️", "🔍",
-            "🔎", "🔒", "🔓", "❤️", "🧡", "💛", "💚", "💙",
-            "💜", "🖤", "🤍", "🤎", "💔", "❣️", "💕", "💞",
-            "💓", "💗", "💖", "💘", "💝", "💯", "💢", "💥",
-            "💫", "💬", "💭", "🗯️", "💤", "⚠️", "⛔️", "🚫",
-            "✅", "❌", "❓", "❗️", "➕", "➖", "➗", "✖️",
-            "0️⃣", "1️⃣", "2️⃣", "3️⃣", "4️⃣", "5️⃣", "6️⃣", "7️⃣",
-            "8️⃣", "9️⃣", "🔟", "▶️", "⏸️", "⏹️", "🔄", "🔝",
-        )
-    ),
-)
-
-private val ALL_EMOJIS_FLAT = EMOJI_CATEGORIES.flatMap { it.emojis }.distinct()
-
-@Composable
-internal fun QuickEmojiPicker(
-    enabled: Boolean = true,
-    onSelect: (String) -> Unit,
-) {
-    var selectedCategoryIndex by rememberSaveable { mutableIntStateOf(0) }
-    var searchQuery by rememberSaveable { mutableStateOf("") }
-    val isDark = IosTheme.colors.isDark
-    val containerBg = if (isDark) Color(0xFF1E1E20) else IosTheme.colors.fieldBackground
-
-    val displayedEmojis = remember(selectedCategoryIndex, searchQuery) {
-        val query = searchQuery.trim()
-        if (query.isEmpty()) {
-            EMOJI_CATEGORIES.getOrNull(selectedCategoryIndex)?.emojis ?: EMOJI_CATEGORIES[0].emojis
-        } else {
-            ALL_EMOJIS_FLAT.filter { it.contains(query) }
-        }
-    }
-
-    Column(
-        modifier = Modifier
-            .fillMaxWidth()
-            .height(210.dp)
-            .clip(RoundedCornerShape(12.dp))
-            .background(containerBg)
-            .padding(horizontal = 6.dp, vertical = 6.dp),
-    ) {
-        // 顶部操作栏：搜索框与分类标签
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(bottom = 6.dp),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            // 搜索框
-            Row(
-                modifier = Modifier
-                    .weight(1f)
-                    .height(30.dp)
-                    .clip(RoundedCornerShape(8.dp))
-                    .background(if (isDark) Color(0xFF2C2C2E) else Color(0x1F767680))
-                    .padding(horizontal = 8.dp),
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                Text("🔍", fontSize = 12.sp)
-                Spacer(Modifier.width(4.dp))
-                BasicTextField(
-                    value = searchQuery,
-                    onValueChange = { searchQuery = it },
-                    singleLine = true,
-                    textStyle = TextStyle(
-                        fontSize = 13.sp,
-                        color = IosTheme.colors.label,
-                    ),
-                    modifier = Modifier.weight(1f),
-                    decorationBox = { innerTextField ->
-                        if (searchQuery.isEmpty()) {
-                            Text(
-                                "搜索表情...",
-                                fontSize = 13.sp,
-                                color = IosTheme.colors.secondaryLabel,
-                            )
-                        }
-                        innerTextField()
-                    },
-                )
-                if (searchQuery.isNotEmpty()) {
-                    Text(
-                        "✕",
-                        fontSize = 11.sp,
-                        color = IosTheme.colors.secondaryLabel,
-                        modifier = Modifier
-                            .clickable { searchQuery = "" }
-                            .padding(2.dp),
-                    )
-                }
-            }
-        }
-
-        // 分类切换 Tab（未搜索时展示）
-        if (searchQuery.isEmpty()) {
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .horizontalScroll(rememberScrollState())
-                    .padding(bottom = 6.dp),
-                horizontalArrangement = Arrangement.spacedBy(4.dp),
-            ) {
-                EMOJI_CATEGORIES.forEachIndexed { index, cat ->
-                    val selected = index == selectedCategoryIndex
-                    val tabBg = if (selected) IosTheme.colors.accent.copy(alpha = 0.15f) else Color.Transparent
-                    val textColor = if (selected) IosTheme.colors.accent else IosTheme.colors.secondaryLabel
-                    Row(
-                        modifier = Modifier
-                            .clip(RoundedCornerShape(6.dp))
-                            .background(tabBg)
-                            .clickable { selectedCategoryIndex = index }
-                            .padding(horizontal = 7.dp, vertical = 3.dp),
-                        verticalAlignment = Alignment.CenterVertically,
-                    ) {
-                        Text(cat.icon, fontSize = 12.sp)
-                        Spacer(Modifier.width(3.dp))
-                        Text(
-                            cat.title,
-                            fontSize = 12.sp,
-                            fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Normal,
-                            color = textColor,
-                        )
-                    }
-                }
-            }
-        }
-
-        // Emoji 网格展示
-        Column(
-            modifier = Modifier
-                .fillMaxWidth()
-                .weight(1f)
-                .verticalScroll(rememberScrollState()),
-            verticalArrangement = Arrangement.spacedBy(2.dp),
-        ) {
-            if (displayedEmojis.isEmpty()) {
-                Box(Modifier.fillMaxWidth().padding(top = 24.dp), contentAlignment = Alignment.Center) {
-                    Text("未找到相关表情", style = IosTheme.type.footnote, color = IosTheme.colors.secondaryLabel)
-                }
-            } else {
-                displayedEmojis.chunked(8).forEach { rowEmojis ->
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        verticalAlignment = Alignment.CenterVertically,
-                    ) {
-                        rowEmojis.forEach { emoji ->
-                            Box(
-                                modifier = Modifier
-                                    .weight(1f)
-                                    .height(36.dp)
-                                    .clip(RoundedCornerShape(6.dp))
-                                    .clickable(enabled = enabled) { onSelect(emoji) },
-                                contentAlignment = Alignment.Center,
-                            ) {
-                                Text(text = emoji, fontSize = 20.sp)
-                            }
-                        }
-                        if (rowEmojis.size < 8) {
-                            repeat(8 - rowEmojis.size) {
-                                Spacer(Modifier.weight(1f))
-                            }
-                        }
-                    }
-                }
-            }
-        }
-    }
-}
-
-/**
- * 附件横向可视化预览栏。
- * 图片直接显示缩略图，并支持点击大图全屏预览；文件显示图标与名称；右上角提供删除按钮。
- */
 @Composable
 fun AttachmentPreviewRow(
     attachments: List<AttachedMedia>,
@@ -3499,16 +3166,17 @@ private fun ComposerSheet(
     }
     val keyboardController = LocalSoftwareKeyboardController.current
     var isFullScreen by rememberSaveable { mutableStateOf(false) }
-    var showEmojiPicker by rememberSaveable { mutableStateOf(false) }
     var showPollDialog by remember { mutableStateOf(false) }
     var editingPollTarget by remember { mutableStateOf<Pair<CreatorPollSpan, PollBuilderSpec>?>(null) }
     var previewingImage by remember { mutableStateOf<String?>(null) }
     var editorView by remember(target) { mutableStateOf<RichMarkdownEditorView?>(null) }
+    var editorContentHeight by remember(target) { mutableIntStateOf(0) }
+    val compactEditorHeight = with(LocalDensity.current) { editorContentHeight.toDp().coerceIn(44.dp, 180.dp) }
     var pickingAttachment by remember { mutableStateOf(false) }
     val dismiss = rememberComposerDismiss(
         enabled = !showPollDialog && previewingImage == null,
         canDismiss = !composer.submitting,
-        ignoreKeyboardHide = showEmojiPicker || pickingAttachment,
+        ignoreKeyboardHide = pickingAttachment,
     ) {
         editorView?.exportToMarkdown()?.let(onDraftChange)
         onClose()
@@ -3531,10 +3199,6 @@ private fun ComposerSheet(
 
     LaunchedEffect(composer.attachments) {
         editorView?.syncAttachments(composer.attachments)
-    }
-
-    val insertToken = { token: String ->
-        editorView?.insertToken(token)
     }
 
     // 系统相册选择器和 SAF 文件选择器都不需要声明存储权限。
@@ -3568,10 +3232,8 @@ private fun ComposerSheet(
         Column(
             modifier = Modifier
                 .fillMaxWidth()
-                .then(
-                    Modifier.height(if (isFullScreen) maxHeight * 0.92f
-                        else minOf(maxHeight * 0.92f, if (showEmojiPicker) 426.dp else 216.dp))
-                )
+                .heightIn(max = maxHeight * 0.92f)
+                .then(if (isFullScreen) Modifier.height(maxHeight * 0.92f) else Modifier)
                 .clip(RoundedCornerShape(topStart = 16.dp, topEnd = 16.dp))
                 .background(IosTheme.colors.card)
                 .clickable(
@@ -3619,7 +3281,8 @@ private fun ComposerSheet(
             Box(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .weight(1f)
+                    .weight(1f, fill = isFullScreen)
+                    .then(if (isFullScreen) Modifier else Modifier.height(compactEditorHeight))
                     .clip(RoundedCornerShape(12.dp))
                     .background(IosTheme.colors.fieldBackground),
             ) {
@@ -3633,6 +3296,7 @@ private fun ComposerSheet(
                                 setOnDismissInputListener(dismiss)
                                 updateThemeColors(textColorInt, hintColorInt)
                                 setCompletionSource(completionSource, topicId = target.topicId)
+                                setOnContentHeightChangeListener { editorContentHeight = it }
                                 setInitialMarkdown(composer.draft, composer.attachments)
                                 setOnMarkdownChangeListener { newRaw -> onDraftChange(newRaw) }
                                 setOnRemoveAttachmentListener { mediaId -> onRemoveAttachment(mediaId) }
@@ -3659,12 +3323,12 @@ private fun ComposerSheet(
                 }
             }
 
-            composer.syncStatus?.let { Text(it, style = IosTheme.type.caption, color = IosTheme.colors.secondaryLabel) }
+            composer.syncStatus?.let { Text(it, style = IosTheme.type.caption, color = IosTheme.colors.secondaryLabel, maxLines = 1, overflow = TextOverflow.Ellipsis) }
             composer.error?.let {
                 Text(it, style = IosTheme.type.footnote, color = IosTheme.colors.destructive, maxLines = 1)
             }
 
-            // 底部操作栏: 图片/附件/表情 Icon + 上传状态 + 右侧发送胶囊
+            // 底部操作栏：图片、附件、投票和发送
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -3707,53 +3371,6 @@ private fun ComposerSheet(
 
                 Spacer(Modifier.width(8.dp))
 
-                // 表情 Icon
-                Box(
-                    modifier = Modifier
-                        .size(36.dp)
-                        .clip(CircleShape)
-                        .background(if (showEmojiPicker) IosTheme.colors.accent.copy(alpha = 0.12f) else Color.Transparent)
-                        .clickable(enabled = !busy) {
-                            val next = !showEmojiPicker
-                            showEmojiPicker = next
-                            if (next) {
-                                keyboardController?.hide()
-                            } else {
-                                editorView?.requestInputFocus()
-                            }
-                        }
-                        .semantics { contentDescription = "选择表情" },
-                    contentAlignment = Alignment.Center,
-                ) {
-                    ComposerEmojiIcon(
-                        tint = when {
-                            busy -> IosTheme.colors.tertiaryLabel
-                            showEmojiPicker -> IosTheme.colors.accent
-                            else -> IosTheme.colors.label
-                        },
-                    )
-                }
-
-                Spacer(Modifier.width(8.dp))
-
-                // 粗体 Icon
-                Box(
-                    modifier = Modifier
-                        .size(36.dp)
-                        .clip(CircleShape)
-                        .clickable(enabled = !busy) {
-                            insertToken("**粗体文字**")
-                        }
-                        .semantics { contentDescription = "加粗文字" },
-                    contentAlignment = Alignment.Center,
-                ) {
-                    ComposerBoldIcon(
-                        tint = if (busy) IosTheme.colors.tertiaryLabel else IosTheme.colors.label,
-                    )
-                }
-
-                Spacer(Modifier.width(8.dp))
-
                 // 投票 Icon
                 Box(
                     modifier = Modifier
@@ -3762,7 +3379,6 @@ private fun ComposerSheet(
                         .background(if (showPollDialog) IosTheme.colors.accent.copy(alpha = 0.12f) else Color.Transparent)
                         .clickable(enabled = !busy) {
                             keyboardController?.hide()
-                            showEmojiPicker = false
                             editingPollTarget = null
                             showPollDialog = true
                         }
@@ -3819,11 +3435,6 @@ private fun ComposerSheet(
                 }
             }
 
-            if (showEmojiPicker) {
-                QuickEmojiPicker(enabled = !busy) { emoji ->
-                    insertToken(emoji)
-                }
-            }
         }
     }
 
@@ -5131,8 +4742,7 @@ private fun BoostSheet(
 ) {
     val focus = remember { FocusRequester() }
     val keyboardController = LocalSoftwareKeyboardController.current
-    var showEmojiPicker by rememberSaveable { mutableStateOf(false) }
-    val dismiss = rememberComposerDismiss(canDismiss = !busy, ignoreKeyboardHide = showEmojiPicker, onDismiss = onDismiss)
+    val dismiss = rememberComposerDismiss(canDismiss = !busy, onDismiss = onDismiss)
     var textFieldValue by remember {
         mutableStateOf(TextFieldValue(draft, selection = TextRange(draft.length)))
     }
@@ -5148,17 +4758,6 @@ private fun BoostSheet(
         }
     }
 
-    val insertToken = { token: String ->
-        val currentText = textFieldValue.text
-        val start = textFieldValue.selection.min.coerceIn(0, currentText.length)
-        val end = textFieldValue.selection.max.coerceIn(0, currentText.length)
-        val newText = currentText.replaceRange(start, end, token)
-        if (newText.length <= BoostLength.RAW_INPUT_CAP) {
-            val newCursor = start + token.length
-            textFieldValue = TextFieldValue(newText, selection = TextRange(newCursor))
-            onDraftChange(newText)
-        }
-    }
     val length = remember(draft) { measureBoost(draft) }
     val over = length.overVisible || length.overEmoji
     val canSend = length.submittable && !busy
@@ -5209,7 +4808,7 @@ private fun BoostSheet(
             Box(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .heightIn(min = 56.dp, max = 96.dp)
+                    .heightIn(min = 44.dp, max = 160.dp)
                     .clip(RoundedCornerShape(12.dp))
                     .background(IosTheme.colors.fieldBackground)
                     .verticalScroll(rememberScrollState())
@@ -5250,33 +4849,6 @@ private fun BoostSheet(
                     horizontalArrangement = Arrangement.spacedBy(8.dp),
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
-                    Box(
-                        modifier = Modifier
-                            .size(34.dp)
-                            .clip(CircleShape)
-                            .background(if (showEmojiPicker) IosTheme.colors.accent.copy(alpha = 0.12f) else Color.Transparent)
-                            .clickable(enabled = !busy) {
-                                val next = !showEmojiPicker
-                                showEmojiPicker = next
-                                if (next) {
-                                    keyboardController?.hide()
-                                } else {
-                                    runCatching { focus.requestFocus() }
-                                    keyboardController?.show()
-                                }
-                            }
-                            .semantics { contentDescription = "选择表情" },
-                        contentAlignment = Alignment.Center,
-                    ) {
-                        ComposerEmojiIcon(
-                            tint = when {
-                                busy -> IosTheme.colors.tertiaryLabel
-                                showEmojiPicker -> IosTheme.colors.accent
-                                else -> IosTheme.colors.label
-                            },
-                            modifier = Modifier.size(20.dp),
-                        )
-                    }
                     Text(
                         text = "可见 ${length.visible}/${BoostLength.MAX_VISIBLE} · 表情 ${length.emoji}/${BoostLength.MAX_EMOJI}",
                         style = IosTheme.type.caption,
@@ -5299,11 +4871,6 @@ private fun BoostSheet(
                 }
             }
 
-            if (showEmojiPicker) {
-                QuickEmojiPicker(enabled = !busy) { emoji ->
-                    insertToken(emoji)
-                }
-            }
         }
     }
 

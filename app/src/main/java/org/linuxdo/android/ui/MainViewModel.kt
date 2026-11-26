@@ -494,10 +494,19 @@ sealed interface ComposerTarget {
     ) : ComposerTarget
 }
 
+/** 每个话题、回复楼层与编辑楼层分别保留草稿；服务端键最多 40 字符。 */
+internal fun composerDraftKey(target: ComposerTarget): String = when (target) {
+    is ComposerTarget.NewReply -> "topic_${target.topicId}_r"
+    is ComposerTarget.ReplyTo -> "topic_${target.topicId}_r${target.postNumber}"
+    is ComposerTarget.Edit -> "topic_${target.topicId}_e${target.postId.toString(36)}"
+}
+
 data class DraftConflictUi(val local: LocalSyncedDraft, val remote: RemoteDraft)
 
 data class ComposerUiState(
     val target: ComposerTarget? = null,
+    // 从草稿箱打开时沿用所选草稿的原编号，兼容网页和旧版的共享草稿。
+    val draftKey: String = target?.let(::composerDraftKey).orEmpty(),
     val draft: String = "",
     val syncStatus: String? = null,
     val remoteRevision: Long = 0,
@@ -5660,11 +5669,12 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     fun closeComposer() {
         persistComposerDraft()
         val target = _composer.value.target
+        val key = _composer.value.draftKey
         pageJobs["composer"]?.cancel()
         pageJobs.remove("upload")?.cancel()
         (target as? ComposerTarget.Edit)?.let { pageJobs.remove("draft:${it.postId}")?.cancel() }
         _composer.value = ComposerUiState()
-        target?.let { scheduleDraftSync(composerDraftKey(it)) }
+        if (target != null) scheduleDraftSync(key)
     }
 
     private fun assembleRaw(raw: String, attachments: List<AttachedMedia>): String {
@@ -5793,7 +5803,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         persistComposerDraft()
         val content = composerDraftContent(current) ?: return
         val raw = assembleRaw(current.draft, current.attachments)
-        val key = composerDraftKey(target)
+        val key = current.draftKey
         pageJobs["composer"] = viewModelScope.launch {
             _composer.update { it.copy(submitting = true, error = null) }
             try {
@@ -5833,7 +5843,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     private fun isDraftSubmitting(key: String): Boolean =
-        (_composer.value.submitting && _composer.value.target?.let(::composerDraftKey) == key) ||
+        (_composer.value.submitting && _composer.value.open && _composer.value.draftKey == key) ||
             (_topicCreator.value.submitting && _topicCreator.value.draftKey == key)
 
     /** 发送当前内容无需先备份到网页；锁只用于等待已发出的保存完成，避免旧草稿复活。 */
@@ -5901,11 +5911,9 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     private fun ComposerTarget.quoteOrNull(): String? = (this as? ComposerTarget.ReplyTo)?.quote
 
-    private fun composerDraftKey(target: ComposerTarget): String = "topic_${target.topicId}"
-
     private fun composerDraftContent(current: ComposerUiState): SyncedDraftContent? {
         val target = current.target ?: return null
-        val saved = accountDraftStore.get(store.currentUserId(), composerDraftKey(target))?.content
+        val saved = accountDraftStore.get(store.currentUserId(), current.draftKey)?.content
         return (saved ?: SyncedDraftContent()).copy(raw = assembleRaw(current.draft, current.attachments), topicId = target.topicId,
             action = if (target is ComposerTarget.Edit) saved?.action?.takeIf { it.startsWith("edit") } ?: "edit" else "reply",
             postId = (target as? ComposerTarget.Edit)?.postId,
@@ -5919,7 +5927,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         topicId = current.replyTopicId, replyToPostNumber = current.replyToPostNumber)
 
     private fun activeDraftKeys(): Set<String> = buildSet {
-        _composer.value.target?.let { add(composerDraftKey(it)) }
+        if (_composer.value.open) add(_composer.value.draftKey)
         if (_topicCreator.value.open) add(_topicCreator.value.draftKey)
     }
 
@@ -5941,7 +5949,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         val current = _composer.value
         if (current.loadingDraft || current.submitting) return
         val content = composerDraftContent(current) ?: return
-        persistDraft(composerDraftKey(current.target!!), content)
+        persistDraft(current.draftKey, content)
     }
 
     private fun persistCreatorDraft() {
@@ -5951,12 +5959,12 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     private fun setDraftSyncStatus(key: String, status: String) {
-        _composer.update { if (it.target?.let(::composerDraftKey) == key) it.copy(syncStatus = status) else it }
+        _composer.update { if (it.open && it.draftKey == key) it.copy(syncStatus = status) else it }
         _topicCreator.update { if (it.open && it.draftKey == key) it.copy(syncStatus = status) else it }
     }
 
     private fun isDraftUploading(key: String): Boolean =
-        (_composer.value.uploading && _composer.value.target?.let(::composerDraftKey) == key) ||
+        (_composer.value.uploading && _composer.value.open && _composer.value.draftKey == key) ||
             (_topicCreator.value.uploading && _topicCreator.value.draftKey == key)
 
     /** 只在编辑器边界或用户主动处理草稿时同步，不随输入或前台轮询重试。 */
@@ -6052,7 +6060,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 false
             } finally {
                 if (currentRequest()) {
-                    _composer.update { if (it.target?.let(::composerDraftKey) == key) it.copy(loadingDraft = false) else it }
+                    _composer.update { if (it.open && it.draftKey == key) it.copy(loadingDraft = false) else it }
                     _topicCreator.update { if (it.open && it.draftKey == key) it.copy(loadingDraft = false) else it }
                 }
             }
@@ -6061,14 +6069,16 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     private fun applyDraftContent(key: String, content: SyncedDraftContent, sequence: Long) {
         _composer.update { current ->
-            if (current.target?.let(::composerDraftKey) != key || current.submitting || current.uploading) current else {
+            val currentTarget = current.target ?: return@update current
+            if (current.draftKey != key || current.submitting || current.uploading) current else {
                 val target = when {
-                    content.action.startsWith("edit") && content.postId != null -> ComposerTarget.Edit(content.topicId ?: current.target.topicId, content.postId, 1)
-                    content.replyToPostNumber != null -> ComposerTarget.ReplyTo(content.topicId ?: current.target.topicId, content.replyToPostNumber, "")
-                    else -> ComposerTarget.NewReply(content.topicId ?: current.target.topicId)
+                    content.action.startsWith("edit") && content.postId != null -> ComposerTarget.Edit(content.topicId ?: currentTarget.topicId, content.postId, 1)
+                    content.replyToPostNumber != null -> ComposerTarget.ReplyTo(content.topicId ?: currentTarget.topicId, content.replyToPostNumber, "")
+                    else -> ComposerTarget.NewReply(content.topicId ?: currentTarget.topicId)
                 }
                 if (composerDraftContent(current) == content) current else
-                    current.copy(target = target, draft = content.raw, attachments = emptyList(), remoteRevision = current.remoteRevision + 1)
+                    current.copy(target = if (composerDraftKey(target) == composerDraftKey(currentTarget)) currentTarget else target,
+                        draft = content.raw, attachments = emptyList(), remoteRevision = current.remoteRevision + 1)
             }
         }
         _topicCreator.update { current ->
@@ -6091,12 +6101,12 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             accountDraftStore.get(userId, key)?.let { applyDraftContent(key, it.content, it.sequence ?: 0L) }
             accountDraftStore.markLegacyImported(userId, key)
             // 本机内容恢复后即可编辑；开始输入会使这次打开检查失效，留到关闭时合并。
-            _composer.update { if (it.target?.let(::composerDraftKey) == key) it.copy(loadingDraft = false) else it }
+            _composer.update { if (it.open && it.draftKey == key) it.copy(loadingDraft = false) else it }
             _topicCreator.update { if (it.open && it.draftKey == key) it.copy(loadingDraft = false) else it }
             scheduleDraftSync(key, showConflict = true)
         } catch (error: Exception) {
             setDraftSyncStatus(key, "手机草稿暂不可读取，请稍后重试")
-            _composer.update { if (it.target?.let(::composerDraftKey) == key) it.copy(loadingDraft = false) else it }
+            _composer.update { if (it.open && it.draftKey == key) it.copy(loadingDraft = false) else it }
             _topicCreator.update { if (it.open && it.draftKey == key) it.copy(loadingDraft = false) else it }
         }
     }
@@ -6315,6 +6325,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     /** 如果是话题回复类草稿，直接打开该话题的回复栏并将草稿内容填入。 */
     fun openReplyWithDraft(draft: DraftItem) {
+        if (_composer.value.submitting || store.sessionChanging || _accounts.value.switching) return
+        if (_composer.value.open) closeComposer()
         if (!cacheSelectedDraft(draft)) return
         val topicId = draft.topicId ?: return
         val target = if (draft.replyToPostNumber != null) {
@@ -6324,6 +6336,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         }
         _composer.value = ComposerUiState(
             target = if (draft.action.startsWith("edit") && draft.postId != null) ComposerTarget.Edit(topicId, draft.postId, 1) else target,
+            draftKey = draft.draftKey,
             draft = draft.raw,
             loadingDraft = true,
             submitting = false,

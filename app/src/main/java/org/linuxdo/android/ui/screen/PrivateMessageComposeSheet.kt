@@ -34,11 +34,14 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -88,13 +91,17 @@ internal fun PrivateMessageComposeSheet(
     var pendingAttachments by remember { mutableStateOf(initialDraft?.attachments.orEmpty()) }
     var isUploading by remember { mutableStateOf(false) }
     var pickingAttachment by remember { mutableStateOf(false) }
-    var showEmojiPicker by rememberSaveable { mutableStateOf(false) }
     var sending by remember { mutableStateOf(false) }
     var error by remember { mutableStateOf<String?>(null) }
     val scope = rememberCoroutineScope()
     val keyboard = LocalSoftwareKeyboardController.current
     val completionSource = LocalEditorSuggestionSource.current
     var editorView by remember { mutableStateOf<RichMarkdownEditorView?>(null) }
+    var editorExpanded by remember { mutableStateOf(false) }
+    var editorContentHeight by remember { mutableIntStateOf(0) }
+    val compactEditorHeight = with(androidx.compose.ui.platform.LocalDensity.current) {
+        editorContentHeight.toDp().coerceIn(44.dp, 180.dp)
+    }
     val textColor = IosTheme.colors.label.toArgb()
     val hintColor = IosTheme.colors.tertiaryLabel.toArgb()
 
@@ -141,7 +148,7 @@ internal fun PrivateMessageComposeSheet(
     }
     FullscreenDialog(onDismissRequest = close) {
         val dismiss = rememberComposerDismiss(canDismiss = !sending && !isUploading,
-            ignoreKeyboardHide = showEmojiPicker || pickingAttachment, onDismiss = close)
+            ignoreKeyboardHide = pickingAttachment, onDismiss = close)
 
         Column(
             modifier = Modifier
@@ -294,8 +301,9 @@ internal fun PrivateMessageComposeSheet(
             // 正文内容输入区 (填满剩余空间)
             Box(
                 modifier = Modifier
-                    .weight(1f)
+                    .weight(1f, fill = editorExpanded)
                     .fillMaxWidth()
+                    .then(if (editorExpanded) Modifier else Modifier.height(compactEditorHeight + 24.dp))
                     .padding(horizontal = 16.dp, vertical = 12.dp),
             ) {
                 AndroidView(
@@ -305,6 +313,7 @@ internal fun PrivateMessageComposeSheet(
                             setOnDismissInputListener(dismiss)
                             updateThemeColors(textColor, hintColor)
                             setCompletionSource(completionSource)
+                            setOnContentHeightChangeListener { editorContentHeight = it }
                             setInitialMarkdown(raw, pendingAttachments)
                             setOnMarkdownChangeListener { raw = it }
                             hint = "在此撰写私信正文，支持 Markdown"
@@ -438,45 +447,15 @@ internal fun PrivateMessageComposeSheet(
 
                 Spacer(Modifier.width(6.dp))
 
-                // 表情按钮
-                Box(
-                    modifier = Modifier
-                        .size(36.dp)
-                        .clip(RoundedCornerShape(8.dp))
-                        .background(
-                            if (showEmojiPicker) IosTheme.colors.accent.copy(alpha = 0.14f) else Color.Transparent,
-                        )
-                        .clickable(enabled = !isUploading && !sending) {
-                            if (!showEmojiPicker) keyboard?.hide()
-                            showEmojiPicker = !showEmojiPicker
-                        },
-                    contentAlignment = Alignment.Center,
-                ) {
-                    ComposerEmojiIcon(
-                        tint = if (showEmojiPicker) IosTheme.colors.accent
-                        else if (isUploading || sending) IosTheme.colors.tertiaryLabel
-                        else IosTheme.colors.secondaryLabel,
-                    )
-                }
-
-                Spacer(Modifier.width(6.dp))
-
-                // 粗体 B
-                Box(
-                    modifier = Modifier
-                        .size(36.dp)
-                        .clip(RoundedCornerShape(8.dp))
-                        .clickable(enabled = !isUploading && !sending) {
-                            editorView?.insertToken("**粗体文字**")
-                        },
-                    contentAlignment = Alignment.Center,
-                ) {
-                    ComposerBoldIcon(
-                        tint = if (isUploading || sending) IosTheme.colors.tertiaryLabel else IosTheme.colors.secondaryLabel,
-                    )
-                }
-
                 Spacer(Modifier.weight(1f))
+                Box(
+                    Modifier.size(40.dp).clip(CircleShape).clickable { editorExpanded = !editorExpanded }
+                        .semantics { contentDescription = if (editorExpanded) "恢复默认高度" else "展开正文输入区" },
+                    contentAlignment = Alignment.Center,
+                ) {
+                    FullscreenToggleIcon(isFullScreen = editorExpanded, tint = IosTheme.colors.secondaryLabel)
+                }
+
 
                 if (isUploading) {
                     IosActivityIndicator(diameter = 14.dp)
@@ -495,16 +474,6 @@ internal fun PrivateMessageComposeSheet(
                 }
             }
 
-            // 表情选择面板
-            if (showEmojiPicker) {
-                IosDivider()
-                QuickEmojiPicker(
-                    enabled = !isUploading && !sending,
-                    onSelect = { emoji ->
-                        editorView?.insertToken(emoji)
-                    },
-                )
-            }
         }
     }
 }

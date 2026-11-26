@@ -229,9 +229,8 @@ import org.linuxdo.android.data.flattenCategories
 import org.linuxdo.android.ui.design.IosNavBar
 import org.linuxdo.android.ui.format.RelativeTime
 import org.linuxdo.android.ui.screen.ComposerAttachmentIcon
-import org.linuxdo.android.ui.screen.ComposerEmojiIcon
+import org.linuxdo.android.ui.screen.FullscreenToggleIcon
 import org.linuxdo.android.ui.screen.ComposerImageIcon
-import org.linuxdo.android.ui.screen.ComposerBoldIcon
 import org.linuxdo.android.ui.screen.ComposerPollIcon
 import android.graphics.Typeface
 import android.text.TextUtils
@@ -240,7 +239,6 @@ import org.linuxdo.android.ui.screen.ComposerTagIcon
 import org.linuxdo.android.ui.screen.ComposerLockIcon
 import org.linuxdo.android.ui.screen.PostAction
 import org.linuxdo.android.ui.screen.PostActionIcon
-import org.linuxdo.android.ui.screen.QuickEmojiPicker
 import org.linuxdo.android.ui.screen.LevelBadge
 import org.linuxdo.android.ui.screen.categoryBaseNameOf
 import org.linuxdo.android.ui.screen.categoryLevelOf
@@ -6318,6 +6316,29 @@ private sealed interface InitialSpanItem {
 
 internal class RichMarkdownEditorView(context: Context) : EditText(context) {
 
+    private var onContentHeightChange: ((Int) -> Unit)? = null
+    private var reportedContentHeight = -1
+    private val contentHeightRunnable = Runnable {
+        val textLayout = layout ?: return@Runnable
+        val contentHeight = textLayout.height + compoundPaddingTop + compoundPaddingBottom
+        if (reportedContentHeight != contentHeight) {
+            reportedContentHeight = contentHeight
+            onContentHeightChange?.invoke(contentHeight)
+        }
+    }
+
+    fun setOnContentHeightChangeListener(listener: (Int) -> Unit) {
+        onContentHeightChange = listener
+        reportedContentHeight = -1
+        post(contentHeightRunnable)
+    }
+
+    override fun onLayout(changed: Boolean, left: Int, top: Int, right: Int, bottom: Int) {
+        super.onLayout(changed, left, top, right, bottom)
+        removeCallbacks(contentHeightRunnable)
+        post(contentHeightRunnable)
+    }
+
     private var onMarkdownChange: ((String) -> Unit)? = null
     private var onDismissInput: (() -> Unit)? = null
 
@@ -6346,7 +6367,7 @@ internal class RichMarkdownEditorView(context: Context) : EditText(context) {
         hint = "请文明发帖，支持Markdown..."
         val padH = (16 * density).toInt()
         val padV = (8 * density).toInt()
-        setPadding(padH, padV, padH, (24 * density).toInt())
+        setPadding(padH, padV, padH, padV)
         isVerticalScrollBarEnabled = true
         isSingleLine = false
         inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_FLAG_MULTI_LINE or InputType.TYPE_TEXT_FLAG_CAP_SENTENCES
@@ -6364,6 +6385,8 @@ internal class RichMarkdownEditorView(context: Context) : EditText(context) {
             override fun onTextChanged(s: CharSequence?, start: Int, before: Int, count: Int) {}
 
             override fun afterTextChanged(s: Editable?) {
+                removeCallbacks(contentHeightRunnable)
+                post(contentHeightRunnable)
                 if (isInternalUpdating) return
                 if (s != null) {
                     for (pollSpan in s.getSpans(0, s.length, CreatorPollSpan::class.java)) {
@@ -6409,6 +6432,7 @@ internal class RichMarkdownEditorView(context: Context) : EditText(context) {
     }
 
     override fun onDetachedFromWindow() {
+        removeCallbacks(contentHeightRunnable)
         removeCallbacks(completionRunnable)
         dismissCompletion()
         completionScope?.cancel()
@@ -6944,7 +6968,6 @@ fun TopicCreatorSheet(
 ) {
     val completionSource = LocalEditorSuggestionSource.current
     val keyboard = LocalSoftwareKeyboardController.current
-    var showEmojiPicker by remember { mutableStateOf(false) }
     var showPollDialog by remember { mutableStateOf(false) }
     var editingPollTarget by remember { mutableStateOf<Pair<CreatorPollSpan, PollBuilderSpec>?>(null) }
     var showCategoryDialog by remember { mutableStateOf(false) }
@@ -6954,16 +6977,15 @@ fun TopicCreatorSheet(
     var pickingAttachment by remember { mutableStateOf(false) }
 
     var editorView by remember { mutableStateOf<RichMarkdownEditorView?>(null) }
+    var editorExpanded by remember { mutableStateOf(false) }
+    var editorContentHeight by remember { mutableIntStateOf(0) }
+    val compactEditorHeight = with(LocalDensity.current) { editorContentHeight.toDp().coerceIn(44.dp, 180.dp) }
 
     LaunchedEffect(editorView, state.loadingDraft, state.remoteRevision) {
         if (!state.loadingDraft) editorView?.setInitialMarkdown(state.raw, state.attachments)
     }
     LaunchedEffect(state.attachments) {
         editorView?.syncAttachments(state.attachments)
-    }
-
-    val appendTextToken = { token: String ->
-        editorView?.insertToken(token)
     }
 
     val imagePicker = rememberLauncherForActivityResult(
@@ -6988,7 +7010,7 @@ fun TopicCreatorSheet(
     val dismiss = rememberComposerDismiss(
         enabled = !showPollDialog && !showCategoryDialog && !showTagDialog && !showCloseConfirmDialog && previewingImage == null,
         canDismiss = !state.savingDraft && !state.submitting,
-        ignoreKeyboardHide = showEmojiPicker || pickingAttachment,
+        ignoreKeyboardHide = pickingAttachment,
     ) {
         editorView?.exportToMarkdown()?.let(onRawChange)
         attemptClose()
@@ -7513,7 +7535,8 @@ fun TopicCreatorSheet(
         Box(
             modifier = Modifier
                 .fillMaxWidth()
-                .weight(1f),
+                .weight(1f, fill = editorExpanded)
+                .then(if (editorExpanded) Modifier else Modifier.height(compactEditorHeight)),
         ) {
             AndroidView(
                 modifier = Modifier.fillMaxSize(),
@@ -7522,6 +7545,7 @@ fun TopicCreatorSheet(
                         setOnDismissInputListener(dismiss)
                         updateThemeColors(textColorInt, hintColorInt)
                         setCompletionSource(completionSource, categoryId = state.categoryId)
+                        setOnContentHeightChangeListener { editorContentHeight = it }
                         setInitialMarkdown(state.raw, state.attachments)
                         setOnMarkdownChangeListener { newRaw -> onRawChange(newRaw) }
                         setOnRemoveAttachmentListener { mediaId -> onRemoveAttachment(mediaId) }
@@ -7574,7 +7598,7 @@ fun TopicCreatorSheet(
 
         IosDivider()
 
-        // 底部工具栏：图片上传、文件上传、Emoji、快捷 Markdown、字数提示
+        // 底部工具栏：图片、文件、投票与字数
         val canPickMedia = !state.loadingDraft && !state.uploading && !state.submitting && !state.savingDraft
         Row(
             modifier = Modifier
@@ -7619,46 +7643,6 @@ fun TopicCreatorSheet(
 
             Spacer(Modifier.width(4.dp))
 
-            // Emoji 面板开关
-            Box(
-                modifier = Modifier
-                    .size(36.dp)
-                    .clip(RoundedCornerShape(8.dp))
-                    .background(
-                        if (showEmojiPicker) IosTheme.colors.accent.copy(alpha = 0.14f) else Color.Transparent,
-                    )
-                    .clickable(enabled = canPickMedia) {
-                        if (!showEmojiPicker) keyboard?.hide()
-                        showEmojiPicker = !showEmojiPicker
-                    },
-                contentAlignment = Alignment.Center,
-            ) {
-                ComposerEmojiIcon(
-                    tint = if (showEmojiPicker) IosTheme.colors.accent
-                    else if (canPickMedia) IosTheme.colors.secondaryLabel
-                    else IosTheme.colors.tertiaryLabel,
-                )
-            }
-
-            Spacer(Modifier.width(4.dp))
-
-            // 粗体图标：与表情/图片/附件图标完全一致的 36.dp 规范与矢量绘制
-            Box(
-                modifier = Modifier
-                    .size(36.dp)
-                    .clip(RoundedCornerShape(8.dp))
-                    .clickable(enabled = canPickMedia) {
-                        appendTextToken("**粗体文字**")
-                    },
-                contentAlignment = Alignment.Center,
-            ) {
-                ComposerBoldIcon(
-                    tint = if (canPickMedia) IosTheme.colors.secondaryLabel else IosTheme.colors.tertiaryLabel,
-                )
-            }
-
-            Spacer(Modifier.width(4.dp))
-
             // 投票图标：参照 Fluxdo PollBuilderDialog，点击弹出可视化投票构建器并在光标处插入所见即所得投票卡片
             Box(
                 modifier = Modifier
@@ -7669,7 +7653,6 @@ fun TopicCreatorSheet(
                     )
                     .clickable(enabled = canPickMedia) {
                         keyboard?.hide()
-                        showEmojiPicker = false
                         editingPollTarget = null
                         showPollDialog = true
                     },
@@ -7683,6 +7666,14 @@ fun TopicCreatorSheet(
             }
 
             Spacer(Modifier.weight(1f))
+            Box(
+                Modifier.size(40.dp).clip(CircleShape).clickable { editorExpanded = !editorExpanded }
+                    .semantics { contentDescription = if (editorExpanded) "恢复默认高度" else "展开正文输入区" },
+                contentAlignment = Alignment.Center,
+            ) {
+                FullscreenToggleIcon(isFullScreen = editorExpanded, tint = IosTheme.colors.secondaryLabel)
+            }
+
 
             if (state.uploading) {
                 IosActivityIndicator(diameter = 14.dp)
@@ -7701,12 +7692,6 @@ fun TopicCreatorSheet(
             }
         }
 
-        if (showEmojiPicker) {
-            IosDivider()
-            QuickEmojiPicker(
-                onSelect = { token -> appendTextToken(token) },
-            )
-        }
     }
 
     // 分类选择弹窗

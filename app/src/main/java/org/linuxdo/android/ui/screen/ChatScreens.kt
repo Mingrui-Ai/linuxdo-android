@@ -24,6 +24,7 @@ import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.safeDrawingPadding
@@ -250,7 +251,6 @@ fun ChatRoomScreen(
     val messages = state.messagesByChannel[channelId].orEmpty()
     val listState = rememberLazyListState()
     var draft by rememberSaveable(channelId) { mutableStateOf("") }
-    var showEmojiPicker by remember(channelId) { mutableStateOf(false) }
     var showComposerSheet by remember(channelId) { mutableStateOf(false) }
     var pendingAttachments by remember(channelId) { mutableStateOf<List<AttachedMedia>>(emptyList()) }
     var isUploading by remember(channelId) { mutableStateOf(false) }
@@ -261,7 +261,6 @@ fun ChatRoomScreen(
             draft = ""
             pendingAttachments = emptyList()
             showComposerSheet = false
-            showEmojiPicker = false
             keyboard?.hide()
         }
     }
@@ -538,18 +537,6 @@ fun ChatRoomScreen(
                         ComposerAttachmentIcon(tint = if (isUploading) IosTheme.colors.tertiaryLabel else IosTheme.colors.label)
                     }
 
-                    // 表情按钮
-                    Box(
-                        modifier = Modifier
-                            .size(36.dp)
-                            .clip(CircleShape)
-                            .background(if (showEmojiPicker) IosTheme.colors.accent.copy(alpha = 0.15f) else Color.Transparent)
-                            .clickable { showEmojiPicker = !showEmojiPicker },
-                        contentAlignment = Alignment.Center,
-                    ) {
-                        ComposerEmojiIcon(tint = if (showEmojiPicker) IosTheme.colors.accent else IosTheme.colors.label)
-                    }
-
                     // 胶囊文本输入框 (点击弹出评论样式全屏/半屏输入框)
                     Box(
                         modifier = Modifier
@@ -605,25 +592,6 @@ fun ChatRoomScreen(
                     }
                 }
 
-                // 常用表情快捷行
-                if (showEmojiPicker) {
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .background(IosTheme.colors.fieldBackground)
-                            .horizontalScroll(rememberScrollState())
-                            .padding(horizontal = 12.dp, vertical = 8.dp),
-                        horizontalArrangement = Arrangement.spacedBy(14.dp),
-                    ) {
-                        listOf("👍", "😀", "😂", "🤣", "😍", "🎉", "🔥", "🙏", "❤️", "🤔", "👏", "🫡", "👀", "🚀", "🍻", "💯").forEach { emoji ->
-                            Text(
-                                text = emoji,
-                                fontSize = 24.sp,
-                                modifier = Modifier.clickable { draft += emoji },
-                            )
-                        }
-                    }
-                }
             }
         }
     }
@@ -887,11 +855,14 @@ private fun ChatComposerBottomSheet(
 ) {
     val completionSource = org.linuxdo.android.ui.LocalEditorSuggestionSource.current
     var isFullScreen by rememberSaveable { mutableStateOf(false) }
-    var showSheetEmojiPicker by rememberSaveable { mutableStateOf(false) }
     var editorView by remember { mutableStateOf<RichMarkdownEditorView?>(null) }
+    var editorContentHeight by remember { mutableIntStateOf(0) }
+    val compactEditorHeight = with(androidx.compose.ui.platform.LocalDensity.current) {
+        editorContentHeight.toDp().coerceIn(44.dp, 180.dp)
+    }
     val keyboard = LocalSoftwareKeyboardController.current
     val dismiss = rememberComposerDismiss(canDismiss = !isSending,
-        ignoreKeyboardHide = showSheetEmojiPicker || pickingAttachment) {
+        ignoreKeyboardHide = pickingAttachment) {
         editorView?.exportToMarkdown()?.let(onDraftChange)
         onDismiss()
     }
@@ -927,12 +898,8 @@ private fun ChatComposerBottomSheet(
         Column(
             modifier = Modifier
                 .fillMaxWidth()
-                .then(
-                    Modifier.height(if (isFullScreen) maxHeight * 0.92f
-                        else minOf(maxHeight * 0.92f, 216.dp +
-                            (if (pendingAttachments.isNotEmpty() || isUploading) 36.dp else 0.dp) +
-                            (if (showSheetEmojiPicker) 52.dp else 0.dp)))
-                )
+                .heightIn(max = maxHeight * 0.92f)
+                .then(if (isFullScreen) Modifier.height(maxHeight * 0.92f) else Modifier)
                 .clip(RoundedCornerShape(topStart = 16.dp, topEnd = 16.dp))
                 .background(IosTheme.colors.card)
                 .clickable(
@@ -976,11 +943,12 @@ private fun ChatComposerBottomSheet(
             // 中间输入区域 (圆角灰色底，内嵌原生富文本图文流编辑器)
             Box(
                 modifier = Modifier
-                    .weight(1f)
+                    .weight(1f, fill = isFullScreen)
                     .fillMaxWidth()
+                    .then(if (isFullScreen) Modifier else Modifier.height(compactEditorHeight +
+                        (if (pendingAttachments.isNotEmpty() || isUploading) 44.dp else 0.dp)))
                     .clip(RoundedCornerShape(12.dp))
-                    .background(IosTheme.colors.fieldBackground)
-                    .padding(horizontal = 8.dp, vertical = 6.dp),
+                    .background(IosTheme.colors.fieldBackground),
             ) {
                 Column(modifier = Modifier.fillMaxSize()) {
                     Box(modifier = Modifier.weight(1f).fillMaxWidth()) {
@@ -992,6 +960,7 @@ private fun ChatComposerBottomSheet(
                                     hint = "发送消息…"
                                     updateThemeColors(textColorInt, hintColorInt)
                                     setCompletionSource(completionSource)
+                                    setOnContentHeightChangeListener { editorContentHeight = it }
                                     setInitialMarkdown(draft, pendingAttachments)
                                     setOnMarkdownChangeListener { newRaw -> onDraftChange(newRaw) }
                                     setOnRemoveAttachmentListener { mediaId -> onRemoveAttachment(mediaId) }
@@ -1082,7 +1051,7 @@ private fun ChatComposerBottomSheet(
 
             error?.let { Text(it, style = IosTheme.type.footnote, color = IosTheme.colors.destructive, maxLines = 2) }
 
-            // 底部操作栏: 图片, 文件, 表情, B, 以及蓝底发送按钮
+            // 底部操作栏：图片、文件和发送
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 verticalAlignment = Alignment.CenterVertically,
@@ -1114,43 +1083,6 @@ private fun ChatComposerBottomSheet(
                         ComposerAttachmentIcon(tint = if (isUploading) IosTheme.colors.tertiaryLabel else IosTheme.colors.label)
                     }
 
-                    // 表情按钮
-                    Box(
-                        modifier = Modifier
-                            .size(36.dp)
-                            .clip(CircleShape)
-                            .background(if (showSheetEmojiPicker) IosTheme.colors.accent.copy(alpha = 0.15f) else Color.Transparent)
-                            .clickable {
-                                showSheetEmojiPicker = !showSheetEmojiPicker
-                                if (showSheetEmojiPicker) keyboard?.hide() else editorView?.requestInputFocus()
-                            },
-                        contentAlignment = Alignment.Center,
-                    ) {
-                        ComposerEmojiIcon(tint = if (showSheetEmojiPicker) IosTheme.colors.accent else IosTheme.colors.label)
-                    }
-
-                    // 粗体 B
-                    Box(
-                        modifier = Modifier
-                            .size(36.dp)
-                            .clip(CircleShape)
-                            .clickable {
-                                editorView?.insertToken("****") ?: run {
-                                    onDraftChange(if (draft.endsWith(" ") || draft.isEmpty()) "${draft}****" else "$draft ****")
-                                }
-                            },
-                        contentAlignment = Alignment.Center,
-                    ) {
-                        Text(
-                            text = "B",
-                            style = TextStyle(
-                                fontSize = 18.sp,
-                                fontWeight = FontWeight.Bold,
-                                fontFamily = FontFamily.Serif,
-                                color = IosTheme.colors.label,
-                            ),
-                        )
-                    }
                 }
 
                 // 蓝底发表/发送按钮
@@ -1178,27 +1110,6 @@ private fun ChatComposerBottomSheet(
                 }
             }
 
-            // 表情快速面板
-            if (showSheetEmojiPicker) {
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .background(IosTheme.colors.fieldBackground)
-                        .horizontalScroll(rememberScrollState())
-                        .padding(horizontal = 12.dp, vertical = 8.dp),
-                    horizontalArrangement = Arrangement.spacedBy(14.dp),
-                ) {
-                    listOf("👍", "😀", "😂", "🤣", "😍", "🎉", "🔥", "🙏", "❤️", "🤔", "👏", "🫡", "👀", "🚀", "🍻", "💯").forEach { emoji ->
-                        Text(
-                            text = emoji,
-                            fontSize = 24.sp,
-                            modifier = Modifier.clickable {
-                                editorView?.insertToken(emoji) ?: run { onDraftChange(draft + emoji) }
-                            },
-                        )
-                    }
-                }
-            }
         }
     }
 }
