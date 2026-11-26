@@ -3451,7 +3451,7 @@ private fun DropdownChevronGlyph(
 }
 
 /**
- * X（Twitter）风格的新发布悬浮胶囊：左侧向上箭头 + 叠放发帖者头像 + 简洁文案，
+ * X（Twitter）风格的新发布悬浮胶囊：左侧向上箭头 + 右侧叠放大尺寸发帖者头像（无冗余文字），
  * 位置紧贴当前可见顶栏（或二级筛选栏）正下方，随顶栏收起平滑上移。
  */
 @Composable
@@ -3463,8 +3463,8 @@ fun IncomingTopicsBanner(
 ) {
     val pillBg = IosTheme.colors.accent
     val pillContent = Color.White
-    val avatarSize = 22.dp
-    val avatarStep = 14.dp
+    val avatarSize = 28.dp
+    val avatarStep = 18.dp
 
     Box(
         modifier = modifier
@@ -3477,40 +3477,34 @@ fun IncomingTopicsBanner(
             .clip(CircleShape)
             .background(pillBg)
             .clickable(role = Role.Button, onClickLabel = "查看 $count 条新发布", onClick = onClick)
-            .padding(start = 11.dp, end = 10.dp, top = 6.dp, bottom = 6.dp),
+            .padding(
+                start = 11.dp,
+                end = if (avatars.isNotEmpty()) 6.dp else 12.dp,
+                top = 5.dp,
+                bottom = 5.dp,
+            ),
         contentAlignment = Alignment.Center,
     ) {
         Row(
             verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(7.dp),
+            horizontalArrangement = Arrangement.spacedBy(6.dp),
         ) {
             // 左侧向上箭头
-            Canvas(Modifier.size(14.dp)) {
+            Canvas(Modifier.size(16.dp)) {
                 scale(size.width / 24f, size.height / 24f, pivot = Offset.Zero) {
                     val stroke = Stroke(width = 2.6f, cap = StrokeCap.Round, join = StrokeJoin.Round)
-                    drawLine(pillContent, Offset(12f, 19.5f), Offset(12f, 5.0f), strokeWidth = 2.6f, cap = StrokeCap.Round)
+                    drawLine(pillContent, Offset(12f, 19.5f), Offset(12f, 4.8f), strokeWidth = 2.6f, cap = StrokeCap.Round)
                     val head = Path().apply {
-                        moveTo(6.0f, 11.0f)
-                        lineTo(12f, 5.0f)
-                        lineTo(18.0f, 11.0f)
+                        moveTo(5.8f, 11.0f)
+                        lineTo(12f, 4.8f)
+                        lineTo(18.2f, 11.0f)
                     }
                     drawPath(head, pillContent, style = stroke)
                 }
             }
 
-            // 中间精简文案
-            Text(
-                text = if (avatars.isNotEmpty()) "新发布" else "$count 条新发布",
-                style = IosTheme.type.footnote.copy(
-                    fontSize = 12.5.sp,
-                    fontWeight = FontWeight.SemiBold,
-                ),
-                color = pillContent,
-                maxLines = 1,
-            )
-
-            // 右侧叠放至多 3 位新帖发帖者头像（带与胶囊同色的描边分隔，复刻 X 样式）
             if (avatars.isNotEmpty()) {
+                // 右侧叠放至多 3 位新帖发帖者大头像（带与胶囊同色的描边分隔，纯 X 样式无文字）
                 val stackWidth = avatarSize + avatarStep * (avatars.size - 1)
                 Box(
                     modifier = Modifier
@@ -3524,7 +3518,7 @@ fun IncomingTopicsBanner(
                                 .size(avatarSize)
                                 .clip(CircleShape)
                                 .background(pillBg)
-                                .padding(1.4.dp)
+                                .padding(1.6.dp)
                                 .clip(CircleShape),
                         ) {
                             UserAvatar(
@@ -3537,6 +3531,16 @@ fun IncomingTopicsBanner(
                         }
                     }
                 }
+            } else {
+                Text(
+                    text = "+$count",
+                    style = IosTheme.type.footnote.copy(
+                        fontSize = 13.sp,
+                        fontWeight = FontWeight.Bold,
+                    ),
+                    color = pillContent,
+                    maxLines = 1,
+                )
             }
         }
     }
