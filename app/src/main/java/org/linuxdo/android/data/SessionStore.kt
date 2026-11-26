@@ -1217,6 +1217,57 @@ class SessionStore(context: Context) : org.linuxdo.android.net.DohConfigProvider
         plainPrefs.edit().remove(KEY_CATEGORY_ORDER).commit()
     }
 
+    fun savePinnedCategoryIds(ids: List<Long>) {
+        plainPrefs.edit().putString(KEY_PINNED_CATEGORY_IDS, ids.filter { it > 0L }.distinct().joinToString(",")).commit()
+    }
+
+    fun loadPinnedCategoryIds(): List<Long> {
+        val raw = plainPrefs.getString(KEY_PINNED_CATEGORY_IDS, null) ?: return emptyList()
+        return raw.split(",").mapNotNull { it.trim().toLongOrNull()?.takeIf { id -> id > 0L } }.distinct()
+    }
+
+    fun savePinnedTags(tags: List<String>) {
+        val cleaned = tags.map { it.trim() }.filter { it.isNotEmpty() }.distinctBy { it.lowercase() }
+        val arr = org.json.JSONArray().apply { cleaned.forEach(::put) }
+        plainPrefs.edit().putString(KEY_PINNED_TAGS, arr.toString()).commit()
+    }
+
+    fun loadPinnedTags(): List<String> {
+        val raw = plainPrefs.getString(KEY_PINNED_TAGS, null) ?: return emptyList()
+        return runCatching {
+            val arr = org.json.JSONArray(raw)
+            buildList {
+                for (i in 0 until arr.length()) {
+                    val v = arr.optString(i).trim()
+                    if (v.isNotEmpty()) add(v)
+                }
+            }.distinctBy { it.lowercase() }
+        }.getOrDefault(emptyList())
+    }
+
+    fun saveTagOrder(tags: List<String>) {
+        val cleaned = tags.map { it.trim() }.filter { it.isNotEmpty() }.distinctBy { it.lowercase() }
+        val arr = org.json.JSONArray().apply { cleaned.forEach(::put) }
+        plainPrefs.edit().putString(KEY_TAG_ORDER, arr.toString()).commit()
+    }
+
+    fun loadTagOrder(): List<String> {
+        val raw = plainPrefs.getString(KEY_TAG_ORDER, null) ?: return emptyList()
+        return runCatching {
+            val arr = org.json.JSONArray(raw)
+            buildList {
+                for (i in 0 until arr.length()) {
+                    val v = arr.optString(i).trim()
+                    if (v.isNotEmpty()) add(v)
+                }
+            }.distinctBy { it.lowercase() }
+        }.getOrDefault(emptyList())
+    }
+
+    fun resetTagOrder() {
+        plainPrefs.edit().remove(KEY_TAG_ORDER).commit()
+    }
+
     fun saveCustomSection(section: CustomSection?) {
         if (section == null) {
             plainPrefs.edit().remove(KEY_CUSTOM_SECTION).commit()
@@ -1650,6 +1701,9 @@ class SessionStore(context: Context) : org.linuxdo.android.net.DohConfigProvider
         private const val KEY_SAVED_PASSWORD = "saved_password"
         private const val KEY_REMEMBER_PASSWORD = "remember_password"
         private const val KEY_CATEGORY_ORDER = "category_custom_order"
+        private const val KEY_PINNED_CATEGORY_IDS = "category_pinned_ids"
+        private const val KEY_PINNED_TAGS = "tag_pinned_names"
+        private const val KEY_TAG_ORDER = "tag_custom_order"
         private const val KEY_CUSTOM_SECTION = "custom_section_json"
         private const val KEY_TOPIC_NOTIFICATION_LEVELS = "topic_notification_levels"
         private const val KEY_AUTO_REFRESH_INCOMING = "auto_refresh_incoming"

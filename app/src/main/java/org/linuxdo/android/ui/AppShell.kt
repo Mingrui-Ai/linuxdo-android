@@ -1127,116 +1127,43 @@ private fun MainNavigation(state: UiState, viewModel: MainViewModel, lifecycle: 
                             }
                         }
                         when (route) {
-                            Route.TopicList -> {
-                                val homeSort = topicListSorts[homeFilter.sortKey()] ?: TopicListSort()
-                                TopicListScreen(
-                                    title = "LINUX DO",
-                                    state = state.latest,
-                                    feedGraphicMode = feedGraphicMode,
-                                    feedDisplayMode = feedDisplayMode,
-                                    showTopicUnreadDot = showTopicUnreadDot,
-                                    topicUnreadDotPosition = topicUnreadDotPosition,
-                                    blockedUsernames = blockedUsernameSet,
-                                    onRefresh = viewModel::refreshLatest,
-                                    onLoadMore = viewModel::loadMoreLatest,
-                                    onOpenTopic = { topic ->
-                                        viewModel.recordTopicListOpen(topic.id, topic.postsCount)
-                                        stack.push(Route.TopicDetail(topic.id, topic.title))
-                                    },
-                                    onOpenUser = { username, primaryAvatarUrl, staticAvatarUrl, displayName ->
-                                        viewModel.openUserCard(username, primaryAvatarUrl, staticAvatarUrl, displayName)
-                                    },
-                                    onPrefetchExcerpt = viewModel::prefetchTopicExcerpt,
-                                    onScrollBusyChanged = viewModel::setTopicListScrollBusy,
-                                    active = active && listForeground,
-                                    scrollToTopRequest = scrollToTopRequest,
-                                    homeLeading = { PersonalDrawerAvatar(state.username, drawerAccount, ::openPersonalDrawer) },
-                                    homeFilter = homeFilter,
-                                    homeCategories = categories.items,
-                                    homeCategoriesLoading = categories.loading,
-                                    homeCategoryOrder = categories.order,
-                                    homeTags = tagsState.tags,
-                                    homeTagsLoading = tagsState.loading,
-                                    homeSearchedTags = tagsState.searchedTags,
-                                    homeTagSearchQuery = tagSearchQuery,
-                                    onSelectHomeCategory = viewModel::selectHomeCategory,
-                                    onSelectHomeLevel = viewModel::selectHomeLevel,
-                                    onSelectHomeTag = viewModel::selectHomeTag,
-                                    onClearHomeFilters = viewModel::clearHomeFilters,
-                                    onEnsureHomeCategories = { if (!categories.loaded && !categories.loading) viewModel.loadCategories() },
-                                    onEnsureHomeTags = { if (!tagsState.loaded && !tagsState.loading) viewModel.loadTags() },
-                                    onHomeTagSearchQueryChange = viewModel::updateTagSearchQuery,
-                                    showHeaderActions = true,
-                                    currentFeed = state.homeFeed,
-                                    miniAppHomePullEnabled = miniAppHomePullEnabled && !isKeyboardOpen,
-                                    onOpenMiniApps = {
-                                        if (browsing && listForeground && !isKeyboardOpen &&
-                                            selected == MainTab.Latest && stack.current == Route.TopicList) {
-                                            globalBrowserUrl = org.linuxdo.android.ui.screen.LINUXDO_APPS_PLAZA_URL
-                                        }
-                                    },
-                                    feedStates = feedStates,
-                                    onFeedSelect = viewModel::switchHomeFeed,
-                                    onPreloadFeed = viewModel::preloadHomeFeed,
-                                    hasUnread = state.unreadCount > 0,
-                                    onApplyIncoming = { viewModel.applyIncomingTopics(state.homeFeed) },
-                                    onSetNotificationLevel = { topic, level ->
-                                        viewModel.setTopicNotificationLevel(topic.id, level)
-                                    },
-                                    onCreateTopic = if (state.username != null) ({ openDrafts() }) else null,
-                                    onBookmarkTopic = { topic, onResult ->
-                                        viewModel.bookmarkTopicFromList(topic.id, onResult)
-                                    },
-                                    onFlagTopic = { topic, reasonId, message, onSuccess, onError ->
-                                        viewModel.submitTopicFlagFromList(topic.id, reasonId, message, onSuccess, onError)
-                                    },
-                                    onSaveTopic = if (savedTopicsUserId > 0L) viewModel::saveTopicFromList else null,
-                                    sortOrder = homeSort.order,
-                                    sortAscending = homeSort.ascending,
-                                    onSortChange = { viewModel.setTopicSort(it) },
-                                    floatingBallEnabled = floatingBallEnabled,
-                                    floatingBallActions = floatingBallActions,
-                                    floatingBallXRatio = floatingBallXRatio,
-                                    floatingBallYRatio = floatingBallYRatio,
-                                    floatingBallOnRight = floatingBallOnRight,
-                                    onFloatingBallPositionChange = viewModel::updateFloatingBallPosition,
-                                    onNavigateToDrafts = { stack.push(Route.Drafts) },
-                                    onNavigateToSearch = {
-                                        val scope = org.linuxdo.android.data.HomeFilterResolver.toSearchScope(homeFilter, categories.items)
-                                        openScopedSearch(scope)
-                                    },
-                                    onNavigateToCategories = ::openCategories,
-                                    onNavigateToHistory = { stack.push(Route.BrowsingHistory) },
-                                    onNavigateToConnect = { showConnectSheet = true },
-                                    onNavigateToChat = openChat,
-                                    onNavigateToLdcStore = { globalBrowserUrl = org.linuxdo.android.ui.screen.ProfileWebApp.Store.url },
-                                    onNavigateToLdcMail = { globalBrowserUrl = org.linuxdo.android.ui.screen.ProfileWebApp.Mail.url },
-                                    onNavigateToBookmarks = {
-                                        val username = state.username
-                                        if (!username.isNullOrBlank()) {
-                                            stack.push(Route.UserTopics(username, "我的收藏", isBookmark = true))
-                                        }
-                                    },
-                                    onNavigateToFollowing = {
-                                        val username = state.username
-                                        if (!username.isNullOrBlank()) {
-                                            stack.push(Route.FollowList(username))
-                                        }
-                                    },
-                                    onNavigateToLikes = {
-                                        val username = state.username
-                                        if (!username.isNullOrBlank()) {
-                                            stack.push(Route.UserReplies(username, "我的点赞", filter = "1"))
-                                        }
-                                    },
-                                    onNavigateToReplies = {
-                                        val username = state.username
-                                        if (!username.isNullOrBlank()) {
-                                            stack.push(Route.UserReplies(username, "我的回复", filter = "5"))
-                                        }
-                                    },
-                                )
-                            }
+                            Route.TopicList -> HomeTopicListRoute(
+                                state = state,
+                                viewModel = viewModel,
+                                stack = stack,
+                                selected = selected,
+                                active = active,
+                                browsing = browsing,
+                                listForeground = listForeground,
+                                isKeyboardOpen = isKeyboardOpen,
+                                scrollToTopRequest = scrollToTopRequest,
+                                drawerAccount = drawerAccount,
+                                categories = categories,
+                                tagsState = tagsState,
+                                tagSearchQuery = tagSearchQuery,
+                                homeFilter = homeFilter,
+                                feedStates = feedStates,
+                                topicListSorts = topicListSorts,
+                                feedGraphicMode = feedGraphicMode,
+                                feedDisplayMode = feedDisplayMode,
+                                showTopicUnreadDot = showTopicUnreadDot,
+                                topicUnreadDotPosition = topicUnreadDotPosition,
+                                blockedUsernameSet = blockedUsernameSet,
+                                miniAppHomePullEnabled = miniAppHomePullEnabled,
+                                savedTopicsUserId = savedTopicsUserId,
+                                floatingBallEnabled = floatingBallEnabled,
+                                floatingBallActions = floatingBallActions,
+                                floatingBallXRatio = floatingBallXRatio,
+                                floatingBallYRatio = floatingBallYRatio,
+                                floatingBallOnRight = floatingBallOnRight,
+                                onOpenPersonalDrawer = ::openPersonalDrawer,
+                                onOpenDrafts = ::openDrafts,
+                                onOpenScopedSearch = ::openScopedSearch,
+                                onOpenCategories = ::openCategories,
+                                onOpenChat = openChat,
+                                onOpenConnect = { showConnectSheet = true },
+                                onOpenBrowserUrl = { globalBrowserUrl = it },
+                            )
 
                             is Route.TopicDetail -> {
                                 val lifecycleState by lifecycle.currentStateFlow.collectAsStateWithLifecycle()
@@ -2834,4 +2761,162 @@ private fun AttachmentDownloadOverlayCard(
             }
         }
     }
+}
+
+/** 独立拆出首页路由渲染函数，避免 MainNavigation 的单方法字节码超出 JVM 64KB 限制。 */
+@Composable
+private fun HomeTopicListRoute(
+    state: UiState,
+    viewModel: MainViewModel,
+    stack: NavStack,
+    selected: MainTab,
+    active: Boolean,
+    browsing: Boolean,
+    listForeground: Boolean,
+    isKeyboardOpen: Boolean,
+    scrollToTopRequest: Int,
+    drawerAccount: org.linuxdo.android.data.AccountSession?,
+    categories: CategoriesUiState,
+    tagsState: TagsUiState,
+    tagSearchQuery: String,
+    homeFilter: org.linuxdo.android.data.HomeFilterState,
+    feedStates: Map<HomeFeedType, TopicListUiState>,
+    topicListSorts: Map<String, TopicListSort>,
+    feedGraphicMode: Boolean,
+    feedDisplayMode: String,
+    showTopicUnreadDot: Boolean,
+    topicUnreadDotPosition: TopicUnreadDotPosition,
+    blockedUsernameSet: Set<String>,
+    miniAppHomePullEnabled: Boolean,
+    savedTopicsUserId: Long,
+    floatingBallEnabled: Boolean,
+    floatingBallActions: List<org.linuxdo.android.data.FloatingAction>,
+    floatingBallXRatio: Float,
+    floatingBallYRatio: Float,
+    floatingBallOnRight: Boolean,
+    onOpenPersonalDrawer: () -> Unit,
+    onOpenDrafts: () -> Unit,
+    onOpenScopedSearch: (TopicSearchScope?) -> Unit,
+    onOpenCategories: () -> Unit,
+    onOpenChat: () -> Unit,
+    onOpenConnect: () -> Unit,
+    onOpenBrowserUrl: (String) -> Unit,
+) {
+    val homeSort = topicListSorts[homeFilter.sortKey()] ?: TopicListSort()
+    TopicListScreen(
+        title = "LINUX DO",
+        state = state.latest,
+        feedGraphicMode = feedGraphicMode,
+        feedDisplayMode = feedDisplayMode,
+        showTopicUnreadDot = showTopicUnreadDot,
+        topicUnreadDotPosition = topicUnreadDotPosition,
+        blockedUsernames = blockedUsernameSet,
+        onRefresh = viewModel::refreshLatest,
+        onLoadMore = viewModel::loadMoreLatest,
+        onOpenTopic = { topic ->
+            viewModel.recordTopicListOpen(topic.id, topic.postsCount)
+            stack.push(Route.TopicDetail(topic.id, topic.title))
+        },
+        onOpenUser = { username, primaryAvatarUrl, staticAvatarUrl, displayName ->
+            viewModel.openUserCard(username, primaryAvatarUrl, staticAvatarUrl, displayName)
+        },
+        onPrefetchExcerpt = viewModel::prefetchTopicExcerpt,
+        onScrollBusyChanged = viewModel::setTopicListScrollBusy,
+        active = active && listForeground,
+        scrollToTopRequest = scrollToTopRequest,
+        homeLeading = { PersonalDrawerAvatar(state.username, drawerAccount, onOpenPersonalDrawer) },
+        homeFilter = homeFilter,
+        homeCategories = categories.items,
+        homeCategoriesLoading = categories.loading,
+        homeCategoryOrder = categories.order,
+        homePinnedCategoryIds = categories.pinnedIds,
+        homeTags = tagsState.tags,
+        homeTagsLoading = tagsState.loading,
+        homeSearchedTags = tagsState.searchedTags,
+        homePinnedTags = tagsState.pinnedTags,
+        homeTagOrder = tagsState.order,
+        homeTagSearchQuery = tagSearchQuery,
+        onSelectHomeCategory = viewModel::selectHomeCategory,
+        onSelectHomeLevel = viewModel::selectHomeLevel,
+        onSelectHomeTag = viewModel::selectHomeTag,
+        onClearHomeFilters = viewModel::clearHomeFilters,
+        onTogglePinCategory = viewModel::togglePinCategory,
+        onMoveCategoryOrder = viewModel::moveCategoryOrder,
+        onResetCategoryOrder = viewModel::resetCategoryOrder,
+        onTogglePinTag = viewModel::togglePinTag,
+        onMoveTagOrder = viewModel::moveTagOrder,
+        onResetTagOrder = viewModel::resetTagOrder,
+        onEnsureHomeCategories = { if (!categories.loaded && !categories.loading) viewModel.loadCategories() },
+        onEnsureHomeTags = { if (!tagsState.loaded && !tagsState.loading) viewModel.loadTags() },
+        onHomeTagSearchQueryChange = viewModel::updateTagSearchQuery,
+        showHeaderActions = true,
+        currentFeed = state.homeFeed,
+        miniAppHomePullEnabled = miniAppHomePullEnabled && !isKeyboardOpen,
+        onOpenMiniApps = {
+            if (browsing && listForeground && !isKeyboardOpen &&
+                selected == MainTab.Latest && stack.current == Route.TopicList) {
+                onOpenBrowserUrl(org.linuxdo.android.ui.screen.LINUXDO_APPS_PLAZA_URL)
+            }
+        },
+        feedStates = feedStates,
+        onFeedSelect = viewModel::switchHomeFeed,
+        onPreloadFeed = viewModel::preloadHomeFeed,
+        hasUnread = state.unreadCount > 0,
+        onApplyIncoming = { viewModel.applyIncomingTopics(state.homeFeed) },
+        onSetNotificationLevel = { topic, level ->
+            viewModel.setTopicNotificationLevel(topic.id, level)
+        },
+        onCreateTopic = if (state.username != null) onOpenDrafts else null,
+        onBookmarkTopic = { topic, onResult ->
+            viewModel.bookmarkTopicFromList(topic.id, onResult)
+        },
+        onFlagTopic = { topic, reasonId, message, onSuccess, onError ->
+            viewModel.submitTopicFlagFromList(topic.id, reasonId, message, onSuccess, onError)
+        },
+        onSaveTopic = if (savedTopicsUserId > 0L) viewModel::saveTopicFromList else null,
+        sortOrder = homeSort.order,
+        sortAscending = homeSort.ascending,
+        onSortChange = { viewModel.setTopicSort(it) },
+        floatingBallEnabled = floatingBallEnabled,
+        floatingBallActions = floatingBallActions,
+        floatingBallXRatio = floatingBallXRatio,
+        floatingBallYRatio = floatingBallYRatio,
+        floatingBallOnRight = floatingBallOnRight,
+        onFloatingBallPositionChange = viewModel::updateFloatingBallPosition,
+        onNavigateToDrafts = { stack.push(Route.Drafts) },
+        onNavigateToSearch = {
+            val scope = org.linuxdo.android.data.HomeFilterResolver.toSearchScope(homeFilter, categories.items)
+            onOpenScopedSearch(scope)
+        },
+        onNavigateToCategories = onOpenCategories,
+        onNavigateToHistory = { stack.push(Route.BrowsingHistory) },
+        onNavigateToConnect = onOpenConnect,
+        onNavigateToChat = onOpenChat,
+        onNavigateToLdcStore = { onOpenBrowserUrl(org.linuxdo.android.ui.screen.ProfileWebApp.Store.url) },
+        onNavigateToLdcMail = { onOpenBrowserUrl(org.linuxdo.android.ui.screen.ProfileWebApp.Mail.url) },
+        onNavigateToBookmarks = {
+            val username = state.username
+            if (!username.isNullOrBlank()) {
+                stack.push(Route.UserTopics(username, "我的收藏", isBookmark = true))
+            }
+        },
+        onNavigateToFollowing = {
+            val username = state.username
+            if (!username.isNullOrBlank()) {
+                stack.push(Route.FollowList(username))
+            }
+        },
+        onNavigateToLikes = {
+            val username = state.username
+            if (!username.isNullOrBlank()) {
+                stack.push(Route.UserReplies(username, "我的点赞", filter = "1"))
+            }
+        },
+        onNavigateToReplies = {
+            val username = state.username
+            if (!username.isNullOrBlank()) {
+                stack.push(Route.UserReplies(username, "我的回复", filter = "5"))
+            }
+        },
+    )
 }

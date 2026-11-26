@@ -145,6 +145,45 @@ data class TopicSearchScope(
     }
 }
 
+/** 对类别分组应用「置顶优先 + 自定义顺序」：置顶项排在最前，各自内部遵循自定义顺序。 */
+fun arrangeCategoryGroups(
+    categories: List<Category>,
+    pinnedIds: List<Long>,
+    customOrder: List<Long>,
+): List<Pair<Category, List<Category>>> {
+    val base = orderedCategoryGroups(categories, customOrder)
+    if (pinnedIds.isEmpty()) return base
+    val pinnedRank = pinnedIds.distinct().withIndex().associate { it.value to it.index }
+    val pinned = base.filter { it.first.id.toLong() in pinnedRank }
+        .sortedBy { pinnedRank[it.first.id.toLong()] ?: Int.MAX_VALUE }
+    val unpinned = base.filterNot { it.first.id.toLong() in pinnedRank }
+    return pinned + unpinned
+}
+
+/** 对标签列表应用「置顶优先 + 自定义顺序」：置顶项排在最前，其余按自定义顺序再接原热门顺序。 */
+fun arrangeTags(
+    tags: List<DiscourseTag>,
+    pinnedTags: List<String>,
+    customOrder: List<String>,
+): List<DiscourseTag> {
+    if (pinnedTags.isEmpty() && customOrder.isEmpty()) return tags
+    val byKey = tags.associateBy { it.displayName.lowercase() }
+    val pinnedRank = pinnedTags.map { it.trim().lowercase() }.filter { it.isNotEmpty() }
+        .distinct().withIndex().associate { it.value to it.index }
+    val orderRank = customOrder.map { it.trim().lowercase() }.filter { it.isNotEmpty() }
+        .distinct().withIndex().associate { it.value to it.index }
+
+    val pinned = pinnedTags.mapNotNull { name ->
+        val k = name.trim().lowercase()
+        byKey[k] ?: name.trim().takeIf { it.isNotEmpty() }?.let { DiscourseTag(id = it, name = it, text = it) }
+    }.distinctBy { it.displayName.lowercase() }
+        .sortedBy { pinnedRank[it.displayName.lowercase()] ?: Int.MAX_VALUE }
+
+    val unpinned = tags.filterNot { it.displayName.lowercase() in pinnedRank }
+        .sortedBy { orderRank[it.displayName.lowercase()] ?: Int.MAX_VALUE }
+    return pinned + unpinned
+}
+
 /** 合并独立 LV 等级聚合拉取的多页话题列表，去重并按当前排序规则排序。 */
 fun mergeAggregatedTopicPages(pages: List<TopicPage>, sort: TopicListSort): List<TopicListItem> {
     val deduped = pages.flatMap { it.items }.distinctBy { it.topic.id }

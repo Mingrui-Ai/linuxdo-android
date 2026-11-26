@@ -442,6 +442,7 @@ data class CategoriesUiState(
     val loading: Boolean = false,
     val error: String? = null,
     val order: List<Long> = emptyList(),
+    val pinnedIds: List<Long> = emptyList(),
 )
 
 data class TagsUiState(
@@ -450,6 +451,8 @@ data class TagsUiState(
     val loaded: Boolean = false,
     val loading: Boolean = false,
     val error: String? = null,
+    val pinnedTags: List<String> = emptyList(),
+    val order: List<String> = emptyList(),
 )
 
 /** 编辑器要做的事。三种目标共用一个输入框,区别只在提交时调哪个接口。 */
@@ -984,7 +987,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     private var excerptPrefetchJob: Job? = null
     private var previewListVisible = false
     private val knownPostsCountOnOpen = mutableMapOf<Long, Int>()
-    private val _categories = MutableStateFlow(CategoriesUiState(order = store.loadCategoryOrder()))
+    private val _categories = MutableStateFlow(CategoriesUiState(order = store.loadCategoryOrder(), pinnedIds = store.loadPinnedCategoryIds()))
     val categories = _categories.asStateFlow()
     private val _customSection = MutableStateFlow(store.loadCustomSection())
     val customSection = _customSection.asStateFlow()
@@ -992,7 +995,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     val categoryTopics = _categoryTopics.asStateFlow()
     private val _categorySubTab = MutableStateFlow(CategorySectionTab.CATEGORIES)
     val categorySubTab = _categorySubTab.asStateFlow()
-    private val _tags = MutableStateFlow(TagsUiState())
+    private val _tags = MutableStateFlow(TagsUiState(pinnedTags = store.loadPinnedTags(), order = store.loadTagOrder()))
     val tags = _tags.asStateFlow()
     private val _tagSearchQuery = MutableStateFlow("")
     val tagSearchQuery = _tagSearchQuery.asStateFlow()
@@ -5997,7 +6000,12 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             if (rawJson.isNotBlank()) {
                 container.preferences.edit { putString("cached_categories_json", rawJson) }
             }
-            _categories.value = CategoriesUiState(items = freshList, loaded = true, order = store.loadCategoryOrder())
+            _categories.value = CategoriesUiState(
+                items = freshList,
+                loaded = true,
+                order = store.loadCategoryOrder(),
+                pinnedIds = store.loadPinnedCategoryIds(),
+            )
             val currentCatId = _topicCreator.value.categoryId
             if (_topicCreator.value.open && currentCatId != null) {
                 val validatedId = resolveCreatableCategoryId(currentCatId)
@@ -7090,6 +7098,92 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         _categories.update { it.copy(order = emptyList()) }
     }
 
+    fun togglePinCategory(categoryId: Long) {
+        val current = store.loadPinnedCategoryIds().toMutableList()
+        if (categoryId in current) {
+            current.remove(categoryId)
+        } else {
+            current.add(0, categoryId)
+        }
+        store.savePinnedCategoryIds(current)
+        _categories.update { it.copy(pinnedIds = store.loadPinnedCategoryIds()) }
+    }
+
+    fun moveCategoryOrder(categoryId: Long, delta: Int) {
+        val arranged = org.linuxdo.android.data.arrangeCategoryGroups(
+            _categories.value.items,
+            _categories.value.pinnedIds,
+            _categories.value.order,
+        )
+        val pinnedSet = _categories.value.pinnedIds.toSet()
+        if (categoryId in pinnedSet) {
+            val list = _categories.value.pinnedIds.filter { id -> arranged.any { it.first.id.toLong() == id } }.toMutableList()
+            val idx = list.indexOf(categoryId)
+            val target = (idx + delta).coerceIn(0, list.lastIndex)
+            if (idx >= 0 && target != idx) {
+                list.add(target, list.removeAt(idx))
+                store.savePinnedCategoryIds(list)
+                _categories.update { it.copy(pinnedIds = store.loadPinnedCategoryIds()) }
+            }
+        } else {
+            val ids = arranged.map { it.first.id.toLong() }.filterNot { it in pinnedSet }.toMutableList()
+            val idx = ids.indexOf(categoryId)
+            val target = (idx + delta).coerceIn(0, ids.lastIndex)
+            if (idx >= 0 && target != idx) {
+                ids.add(target, ids.removeAt(idx))
+                val fullOrder = _categories.value.pinnedIds + ids
+                store.saveCategoryOrder(fullOrder)
+                _categories.update { it.copy(order = store.loadCategoryOrder()) }
+            }
+        }
+    }
+
+    fun togglePinTag(tagName: String) {
+        val clean = tagName.trim()
+        if (clean.isEmpty()) return
+        val current = store.loadPinnedTags().toMutableList()
+        val existingIdx = current.indexOfFirst { it.equals(clean, ignoreCase = true) }
+        if (existingIdx >= 0) {
+            current.removeAt(existingIdx)
+        } else {
+            current.add(0, clean)
+        }
+        store.savePinnedTags(current)
+        _tags.update { it.copy(pinnedTags = store.loadPinnedTags()) }
+    }
+
+    fun moveTagOrder(tagName: String, delta: Int) {
+        val clean = tagName.trim()
+        if (clean.isEmpty()) return
+        val state = _tags.value
+        val pinnedLower = state.pinnedTags.map { it.lowercase() }.toSet()
+        if (clean.lowercase() in pinnedLower) {
+            val list = state.pinnedTags.toMutableList()
+            val idx = list.indexOfFirst { it.equals(clean, ignoreCase = true) }
+            val target = (idx + delta).coerceIn(0, list.lastIndex)
+            if (idx >= 0 && target != idx) {
+                list.add(target, list.removeAt(idx))
+                store.savePinnedTags(list)
+                _tags.update { it.copy(pinnedTags = store.loadPinnedTags()) }
+            }
+        } else {
+            val arranged = org.linuxdo.android.data.arrangeTags(state.tags, state.pinnedTags, state.order)
+            val names = arranged.map { it.displayName }.filterNot { it.lowercase() in pinnedLower }.toMutableList()
+            val idx = names.indexOfFirst { it.equals(clean, ignoreCase = true) }
+            val target = (idx + delta).coerceIn(0, names.lastIndex)
+            if (idx >= 0 && target != idx) {
+                names.add(target, names.removeAt(idx))
+                store.saveTagOrder(names)
+                _tags.update { it.copy(order = store.loadTagOrder()) }
+            }
+        }
+    }
+
+    fun resetTagOrder() {
+        store.resetTagOrder()
+        _tags.update { it.copy(order = emptyList()) }
+    }
+
     fun saveCustomSection(section: CustomSection) {
         val oldSection = _customSection.value
         val oldServerLinkIds = oldSection?.links?.mapNotNull { it.serverId }.orEmpty()
@@ -7168,8 +7262,12 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         pageJobs["categories"] = viewModelScope.launch {
             _categories.value = current.copy(loading = true, error = null)
             try {
-                _categories.value = CategoriesUiState(items = repository.fetchCategories(), loaded = true,
-                    order = store.loadCategoryOrder())
+                _categories.value = CategoriesUiState(
+                    items = repository.fetchCategories(),
+                    loaded = true,
+                    order = store.loadCategoryOrder(),
+                    pinnedIds = store.loadPinnedCategoryIds(),
+                )
             } catch (error: CancellationException) {
                 throw error
             } catch (error: Exception) {
@@ -8267,7 +8365,12 @@ fun openTopicSearch(topicId: Long, title: String) {
             container.preferences.getString("cached_categories_json", null)?.let { rawJson ->
                 repository.seedCategoriesFromJson(rawJson)
                 repository.cachedCategoryList()?.let { list ->
-                    _categories.value = CategoriesUiState(items = list, loaded = true, order = store.loadCategoryOrder())
+                    _categories.value = CategoriesUiState(
+                        items = list,
+                        loaded = true,
+                        order = store.loadCategoryOrder(),
+                        pinnedIds = store.loadPinnedCategoryIds(),
+                    )
                     backfillCategories(repository.cachedCategoryMap())
                 }
             }
@@ -8276,7 +8379,12 @@ fun openTopicSearch(topicId: Long, title: String) {
             container.preferences.getString("cached_tags_json", null)?.let { rawJson ->
                 repository.seedTagsFromJson(rawJson)
                 repository.cachedTagList()?.let { list ->
-                    _tags.value = TagsUiState(tags = list, loaded = true)
+                    _tags.value = TagsUiState(
+                        tags = list,
+                        loaded = true,
+                        pinnedTags = store.loadPinnedTags(),
+                        order = store.loadTagOrder(),
+                    )
                 }
             }
         }
@@ -8493,7 +8601,12 @@ fun openTopicSearch(topicId: Long, title: String) {
                 if (updated != null) {
                     val (freshList, rawJson) = updated
                     container.preferences.edit { putString("cached_categories_json", rawJson) }
-                    _categories.value = CategoriesUiState(items = freshList, loaded = true, order = store.loadCategoryOrder())
+                    _categories.value = CategoriesUiState(
+                items = freshList,
+                loaded = true,
+                order = store.loadCategoryOrder(),
+                pinnedIds = store.loadPinnedCategoryIds(),
+            )
                     diagnostics.log("分类表已从服务端同步更新(${known.size} 项)")
                 }
                 backfillCategories(known)
@@ -9427,7 +9540,7 @@ fun openTopicSearch(topicId: Long, title: String) {
         scrollBusySignal.clear()
         knownPostsCountOnOpen.clear()
         _details.value = emptyMap()
-        _categories.value = CategoriesUiState()
+        _categories.value = CategoriesUiState(order = store.loadCategoryOrder(), pinnedIds = store.loadPinnedCategoryIds())
         _categoryTopics.value = emptyMap()
         _userTopicStates.value = emptyMap()
         _userRepliesStates.value = emptyMap()
