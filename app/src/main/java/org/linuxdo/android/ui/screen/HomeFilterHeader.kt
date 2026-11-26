@@ -221,20 +221,22 @@ internal fun HomeTopFilterHeader(
                         verticalAlignment = Alignment.CenterVertically,
                         horizontalArrangement = Arrangement.spacedBy(7.dp),
                     ) {
-                        // 1. 类别胶囊 + 锚定下拉栏（选中时复用帖子内类别标签原色）
+                        // 1. 类别胶囊 + 锚定下拉栏（选中时复用高对比度类别原色）
                         Box {
+                            val isDark = IosTheme.colors.isDark
                             val catActive = filter.categoryId != null
-                            val catColor = selectedCategory?.let { parseCategoryColor(it.color) } ?: IosTheme.colors.accent
+                            val rawCatColor = selectedCategory?.let { parseCategoryColor(it.color) } ?: IosTheme.colors.accent
+                            val catFgColor = remember(rawCatColor, isDark) { readableCategoryForeground(rawCatColor, isDark) }
                             HomeFilterPill(
                                 text = filter.categoryName ?: selectedCategory?.let { HomeFilterResolver.baseCategoryName(it.name) } ?: "全部类别",
                                 active = catActive,
-                                accentColor = if (catActive) catColor else null,
+                                accentColor = if (catActive) catFgColor else null,
                                 leading = if (catActive) {
                                     {
                                         ForumCategoryIcon(
                                             category = selectedCategory,
                                             size = 13.dp,
-                                            color = catColor,
+                                            color = catFgColor,
                                             name = filter.categoryName,
                                             id = filter.categoryId,
                                         )
@@ -269,13 +271,13 @@ internal fun HomeTopFilterHeader(
                             )
                         }
 
-                        // 2. 独立 LV 等级胶囊 + 锚定下拉栏
+                        // 2. 独立 LV 等级胶囊 + 锚定下拉栏（外框/背景/文字同步对应等级卡片配色）
                         Box {
                             val lvActive = filter.level != null
                             HomeFilterPill(
                                 text = filter.level?.let { "Lv.$it" } ?: "等级",
                                 active = lvActive,
-                                isLv3 = filter.level == 3,
+                                selectedLevel = filter.level,
                                 onClick = {
                                     onEnsureCategories()
                                     showLevelMenu = true
@@ -421,7 +423,7 @@ private fun LinuxDoBrandWordmark() {
 private fun HomeFilterPill(
     text: String,
     active: Boolean,
-    isLv3: Boolean = false,
+    selectedLevel: Int? = null,
     accentColor: Color? = null,
     leading: (@Composable () -> Unit)? = null,
     onClick: () -> Unit,
@@ -430,22 +432,32 @@ private fun HomeFilterPill(
     val isDark = IosTheme.colors.isDark
     val shape = RoundedCornerShape(16.dp)
     val resolvedAccent = accentColor ?: IosTheme.colors.accent
+    val levelStyle = if (active && selectedLevel != null) levelPillColors(selectedLevel, isDark) else null
+    val isLv3 = active && selectedLevel == 3
+
     val bgBrush = when {
-        active && isLv3 -> Brush.linearGradient(listOf(Color(0xFF272219), Color(0xFF3B3019)))
+        isLv3 -> Brush.horizontalGradient(listOf(Color(0xFF3E2B08), Color(0xFF6B4A12), Color(0xFF4A3410)))
+        else -> null
+    }
+    val borderBrush = when {
+        isLv3 -> Brush.horizontalGradient(listOf(Color(0xFFFFE9A8), Color(0xFFD4AF37), Color(0xFFFFD76A)))
         else -> null
     }
     val bgColor = when {
-        active && isLv3 -> Color.Transparent
+        isLv3 -> Color.Transparent
+        levelStyle != null -> levelStyle.first
         active -> resolvedAccent.copy(alpha = if (isDark) 0.18f else 0.11f)
         else -> if (isDark) Color.White.copy(alpha = 0.08f) else Color(0xFF767680).copy(alpha = 0.11f)
     }
     val borderColor = when {
-        active && isLv3 -> Color(0xFFFFD873).copy(alpha = 0.55f)
+        isLv3 -> Color.Transparent
+        levelStyle != null -> levelStyle.second
         active -> resolvedAccent.copy(alpha = if (isDark) 0.42f else 0.30f)
         else -> Color.Transparent
     }
     val textColor = when {
-        active && isLv3 -> Color(0xFFFFD873)
+        isLv3 -> Color(0xFFFFD873)
+        levelStyle != null -> levelStyle.third
         active -> resolvedAccent
         else -> IosTheme.colors.label
     }
@@ -455,7 +467,13 @@ private fun HomeFilterPill(
             .height(32.dp)
             .clip(shape)
             .then(if (bgBrush != null) Modifier.background(bgBrush) else Modifier.background(bgColor))
-            .then(if (borderColor != Color.Transparent) Modifier.border(0.9.dp, borderColor, shape) else Modifier)
+            .then(
+                when {
+                    borderBrush != null -> Modifier.border(1.dp, borderBrush, shape)
+                    borderColor != Color.Transparent -> Modifier.border(0.9.dp, borderColor, shape)
+                    else -> Modifier
+                },
+            )
             .clickable(role = Role.Button, onClick = onClick)
             .padding(start = 10.dp, end = if (onClear != null) 6.dp else 9.dp),
         verticalAlignment = Alignment.CenterVertically,
@@ -477,10 +495,7 @@ private fun HomeFilterPill(
                 modifier = Modifier
                     .size(17.dp)
                     .clip(CircleShape)
-                    .background(
-                        if (isLv3) Color(0xFFFFD873).copy(alpha = 0.22f)
-                        else resolvedAccent.copy(alpha = 0.18f),
-                    )
+                    .background(textColor.copy(alpha = 0.18f))
                     .clickable(role = Role.Button, onClickLabel = "清除$text", onClick = onClear),
                 contentAlignment = Alignment.Center,
             ) {
@@ -596,19 +611,20 @@ internal fun TopicSortDynamicGlyph(
                     drawLine(tint, Offset(12f, 12f), Offset(15.5f, 14.0f), strokeWidth = 2.0f, cap = StrokeCap.Round)
                 }
                 TopicSortOrder.Hot -> {
-                    // 火焰图标
-                    val flame = Path().apply {
-                        moveTo(12.2f, 3.0f)
-                        cubicTo(13.2f, 6.2f, 10.8f, 8.2f, 9.2f, 9.8f)
-                        cubicTo(7.5f, 11.5f, 6.8f, 13.0f, 6.8f, 14.8f)
-                        cubicTo(6.8f, 18.1f, 9.2f, 20.5f, 12.2f, 20.5f)
-                        cubicTo(15.3f, 20.5f, 17.6f, 18.0f, 17.6f, 14.7f)
-                        cubicTo(17.6f, 11.7f, 15.8f, 9.5f, 14.2f, 8.0f)
-                        cubicTo(14.0f, 9.6f, 13.3f, 10.6f, 12.3f, 11.2f)
-                        cubicTo(13.1f, 9.0f, 13.4f, 6.2f, 12.2f, 3.0f)
-                        close()
+                    // 热度上升趋势折线箭头（简洁利落、辨识度高，替代旧火苗）
+                    val trend = Path().apply {
+                        moveTo(3.2f, 17.2f)
+                        lineTo(9.2f, 11.2f)
+                        lineTo(13.2f, 14.8f)
+                        lineTo(20.6f, 6.8f)
                     }
-                    drawPath(flame, tint, style = stroke)
+                    drawPath(trend, tint, style = stroke)
+                    val head = Path().apply {
+                        moveTo(15.2f, 6.8f)
+                        lineTo(20.6f, 6.8f)
+                        lineTo(20.6f, 12.2f)
+                    }
+                    drawPath(head, tint, style = stroke)
                 }
                 TopicSortOrder.Likes -> {
                     // 爱心图标
@@ -654,7 +670,7 @@ internal fun TopicSortDropdownMenu(
         onDismissRequest = onDismiss,
         containerColor = IosTheme.colors.card,
         shape = RoundedCornerShape(16.dp),
-        modifier = Modifier.widthIn(min = 224.dp, max = 260.dp),
+        modifier = Modifier.width(196.dp),
     ) {
         TopicSortOrder.entries.forEachIndexed { idx, order ->
             val selected = order == currentOrder
@@ -745,7 +761,7 @@ private fun HomeLevelDropdownMenu(
         offset = DpOffset(0.dp, 4.dp),
         containerColor = IosTheme.colors.card,
         shape = RoundedCornerShape(14.dp),
-        modifier = Modifier.width(142.dp),
+        modifier = Modifier.width(118.dp),
     ) {
         val allSelected = filter.level == null
         Row(
@@ -775,12 +791,17 @@ private fun HomeLevelDropdownMenu(
         (0..3).forEach { lv ->
             val supported = filter.categoryId == null || categories.isEmpty() || lv in allowedLevels
             val selected = filter.level == lv
+            val (lvBg, lvBorder, lvText) = levelPillColors(lv, IosTheme.colors.isDark)
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
                     .padding(horizontal = 6.dp, vertical = 2.dp)
                     .clip(RoundedCornerShape(9.dp))
-                    .background(if (selected) IosTheme.colors.accent.copy(alpha = 0.12f) else Color.Transparent)
+                    .background(if (selected) lvBg.copy(alpha = if (lv == 3) 0.22f else 0.75f) else Color.Transparent)
+                    .then(
+                        if (selected) Modifier.border(0.8.dp, lvBorder, RoundedCornerShape(9.dp))
+                        else Modifier,
+                    )
                     .clickable(enabled = supported) { onSelectLevel(lv) }
                     .padding(horizontal = 9.dp, vertical = 7.dp)
                     .alpha(if (supported) 1f else 0.38f),
@@ -792,12 +813,11 @@ private fun HomeLevelDropdownMenu(
                     horizontalArrangement = Arrangement.spacedBy(5.dp),
                 ) {
                     if (lv == 0) {
-                        val (bg, border, fg) = levelPillColors(0, IosTheme.colors.isDark)
                         Box(
                             modifier = Modifier
                                 .clip(RoundedCornerShape(6.dp))
-                                .background(bg)
-                                .border(0.8.dp, border, RoundedCornerShape(6.dp))
+                                .background(lvBg)
+                                .border(0.8.dp, lvBorder, RoundedCornerShape(6.dp))
                                 .padding(horizontal = 5.dp, vertical = 1.dp),
                         ) {
                             Text(
@@ -805,7 +825,7 @@ private fun HomeLevelDropdownMenu(
                                 fontSize = 10.sp,
                                 lineHeight = 12.sp,
                                 fontWeight = FontWeight.SemiBold,
-                                color = fg,
+                                color = lvText,
                             )
                         }
                     } else {
@@ -814,11 +834,11 @@ private fun HomeLevelDropdownMenu(
                     Text(
                         text = "可见",
                         style = IosTheme.type.caption.copy(fontSize = 11.5.sp),
-                        color = if (selected) IosTheme.colors.accent else IosTheme.colors.secondaryLabel,
+                        color = if (selected) lvText else IosTheme.colors.secondaryLabel,
                     )
                 }
                 if (selected) {
-                    Text("✓", color = IosTheme.colors.accent, fontWeight = FontWeight.Bold, fontSize = 12.sp)
+                    Text("✓", color = lvText, fontWeight = FontWeight.Bold, fontSize = 12.sp)
                 }
             }
         }
@@ -867,22 +887,22 @@ private fun HomeCategoryDropdownMenu(
         offset = DpOffset(0.dp, 4.dp),
         containerColor = IosTheme.colors.card,
         shape = RoundedCornerShape(16.dp),
-        modifier = Modifier.width(206.dp),
+        modifier = Modifier.width(174.dp),
     ) {
         Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(horizontal = 7.dp, vertical = 4.dp),
+                .padding(horizontal = 6.dp, vertical = 4.dp),
             verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(5.dp),
+            horizontalArrangement = Arrangement.spacedBy(4.dp),
         ) {
             Box(
                 modifier = Modifier
                     .weight(1f)
-                    .height(29.dp)
+                    .height(28.dp)
                     .clip(RoundedCornerShape(8.dp))
                     .background(IosTheme.colors.groupedBackground)
-                    .padding(horizontal = 8.dp),
+                    .padding(horizontal = 7.dp),
                 contentAlignment = Alignment.CenterStart,
             ) {
                 BasicTextField(
@@ -894,7 +914,7 @@ private fun HomeCategoryDropdownMenu(
                     modifier = Modifier.fillMaxWidth(),
                     decorationBox = { inner ->
                         if (query.isEmpty()) {
-                            Text("搜索类别…", style = IosTheme.type.footnote.copy(fontSize = 12.sp), color = IosTheme.colors.tertiaryLabel)
+                            Text("搜索…", style = IosTheme.type.footnote.copy(fontSize = 12.sp), color = IosTheme.colors.tertiaryLabel)
                         }
                         inner()
                     },
@@ -903,14 +923,14 @@ private fun HomeCategoryDropdownMenu(
             val isAll = selectedCategoryId == null
             Box(
                 modifier = Modifier
-                    .height(29.dp)
+                    .height(28.dp)
                     .clip(RoundedCornerShape(8.dp))
                     .background(if (isAll) IosTheme.colors.accent.copy(alpha = 0.14f) else IosTheme.colors.groupedBackground)
                     .clickable {
                         query = ""
                         onSelectCategory(null)
                     }
-                    .padding(horizontal = 8.dp),
+                    .padding(horizontal = 7.dp),
                 contentAlignment = Alignment.Center,
             ) {
                 Text(
@@ -927,7 +947,7 @@ private fun HomeCategoryDropdownMenu(
                 .fillMaxWidth()
                 .heightIn(max = 300.dp)
                 .verticalScroll(rememberScrollState())
-                .padding(horizontal = 6.dp, vertical = 4.dp),
+                .padding(horizontal = 5.dp, vertical = 4.dp),
             verticalArrangement = Arrangement.spacedBy(3.dp),
         ) {
             if (loading && filtered.isEmpty()) {
@@ -943,17 +963,19 @@ private fun HomeCategoryDropdownMenu(
                     val idLong = parent.id.toLong()
                     val isPinned = idLong in pinnedSet
                     val selected = selectedCategoryId == parent.id
-                    val catColor = parseCategoryColor(parent.color) ?: IosTheme.colors.accent
+                    val rawCatColor = parseCategoryColor(parent.color) ?: IosTheme.colors.accent
+                    val fgColor = remember(rawCatColor, isDark) { readableCategoryForeground(rawCatColor, isDark) }
                     val lvNums = levels.mapNotNull { HomeFilterResolver.extractLevel(it) }.distinct().sorted()
 
+                    // 浅色模式用低饱和柔和底 + 高对比压暗同色系前景/图标，清晰护眼
                     val itemBg = when {
-                        selected -> catColor.copy(alpha = if (isDark) 0.24f else 0.16f)
-                        else -> catColor.copy(alpha = if (isDark) 0.12f else 0.07f)
+                        selected -> rawCatColor.copy(alpha = if (isDark) 0.25f else 0.18f)
+                        else -> rawCatColor.copy(alpha = if (isDark) 0.12f else 0.09f)
                     }
                     val itemBorder = when {
-                        selected -> catColor.copy(alpha = if (isDark) 0.65f else 0.50f)
-                        isPinned -> catColor.copy(alpha = if (isDark) 0.44f else 0.34f)
-                        else -> catColor.copy(alpha = if (isDark) 0.24f else 0.16f)
+                        selected -> fgColor.copy(alpha = if (isDark) 0.70f else 0.58f)
+                        isPinned -> fgColor.copy(alpha = if (isDark) 0.44f else 0.36f)
+                        else -> fgColor.copy(alpha = if (isDark) 0.24f else 0.22f)
                     }
 
                     Row(
@@ -972,35 +994,35 @@ private fun HomeCategoryDropdownMenu(
                                     onTogglePin(idLong)
                                 },
                             )
-                            .padding(horizontal = 8.dp, vertical = 6.5.dp),
+                            .padding(horizontal = 7.dp, vertical = 6.dp),
                         verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(6.dp),
+                        horizontalArrangement = Arrangement.spacedBy(5.dp),
                     ) {
-                        ForumCategoryIcon(category = parent, size = 14.dp, color = catColor, directory = true)
+                        ForumCategoryIcon(category = parent, size = 13.5.dp, color = fgColor, directory = true)
                         Text(
                             text = HomeFilterResolver.baseCategoryName(parent.name),
                             style = IosTheme.type.footnote.copy(
-                                fontSize = 13.sp,
+                                fontSize = 12.5.sp,
                                 fontWeight = if (selected || isPinned) FontWeight.SemiBold else FontWeight.Medium,
                             ),
-                            color = catColor,
+                            color = fgColor,
                             maxLines = 1,
                             overflow = TextOverflow.Ellipsis,
                             modifier = Modifier.weight(1f),
                         )
                         if (isPinned) {
-                            PinGlyph(color = catColor.copy(alpha = 0.85f), size = 10.dp)
+                            PinGlyph(color = fgColor.copy(alpha = 0.90f), size = 9.5.dp)
                         }
                         if (lvNums.isNotEmpty()) {
                             val lvLabel = if (lvNums.size == 1) "Lv${lvNums.first()}" else "Lv${lvNums.first()}-${lvNums.last()}"
                             Text(
                                 text = lvLabel,
-                                style = IosTheme.type.caption.copy(fontSize = 9.5.sp, fontWeight = FontWeight.Medium),
-                                color = catColor.copy(alpha = 0.72f),
+                                style = IosTheme.type.caption.copy(fontSize = 9.sp, fontWeight = FontWeight.Medium),
+                                color = fgColor.copy(alpha = if (isDark) 0.78f else 0.82f),
                             )
                         }
                         if (selected) {
-                            Text("✓", color = catColor, fontWeight = FontWeight.Bold, fontSize = 12.sp)
+                            Text("✓", color = fgColor, fontWeight = FontWeight.Bold, fontSize = 11.5.sp)
                         }
                     }
                 }
@@ -1092,7 +1114,7 @@ private fun HomeTagDropdownMenu(
         offset = DpOffset(0.dp, 4.dp),
         containerColor = IosTheme.colors.card,
         shape = RoundedCornerShape(16.dp),
-        modifier = Modifier.width(252.dp),
+        modifier = Modifier.width(214.dp),
     ) {
         Row(
             modifier = Modifier

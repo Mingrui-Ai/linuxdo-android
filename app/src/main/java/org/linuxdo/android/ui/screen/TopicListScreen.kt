@@ -32,6 +32,7 @@ import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.animate
 import kotlinx.coroutines.Job
 import androidx.compose.animation.core.FastOutSlowInEasing
+import androidx.compose.animation.core.animateDpAsState
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.snap
 import androidx.compose.animation.core.tween
@@ -718,6 +719,9 @@ fun TopicListScreen(
             }
         },
     ) {
+        var visibleHeaderHeight by remember(useHomeFilterHeader, onBack) {
+            mutableStateOf(if (useHomeFilterHeader) 94.dp else if (onBack == null) 54.dp else IosMetrics.navBarHeight)
+        }
         IosLargeTitleScaffold(
             title = title,
             listState = listState,
@@ -726,6 +730,7 @@ fun TopicListScreen(
             showLargeTitle = showLargeTitle,
             scrollToTopRequest = scrollToTopRequest,
             trailingWidth = if (showHeaderActions) 88.dp else 0.dp,
+            onVisibleHeaderHeightChanged = { visibleHeaderHeight = it },
             trailing = {
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     trailing()
@@ -868,23 +873,42 @@ fun TopicListScreen(
             },
             floatingOverlay = {
                 var lastApplyIncomingClickTime by remember { mutableLongStateOf(0L) }
+                val incomingTopPadding by animateDpAsState(
+                    targetValue = visibleHeaderHeight + 8.dp,
+                    animationSpec = tween(durationMillis = 200, easing = FastOutSlowInEasing),
+                    label = "incomingBannerTopPadding",
+                )
+                val incomingAvatars = remember(effectiveState.pendingPage, effectiveState.incomingTopicIds) {
+                    val pending = effectiveState.pendingPage?.items.orEmpty()
+                    val incomingSet = effectiveState.incomingTopicIds
+                    val prioritized = pending.filter { it.topic.id in incomingSet }.ifEmpty { pending }
+                    prioritized
+                        .mapNotNull { item ->
+                            val primary = item.avatarUrl?.takeIf { it.isNotBlank() }
+                            val fallback = item.staticAvatarUrl?.takeIf { it.isNotBlank() }
+                            if (primary == null && fallback == null) null
+                            else Triple(item.authorUsername, primary, fallback)
+                        }
+                        .distinctBy { it.first?.lowercase() ?: it.second ?: it.third }
+                        .take(3)
+                }
 
                 AnimatedVisibility(
                     visible = effectiveState.incomingTopicIds.isNotEmpty() &&
                         pullState.distanceFraction == 0f && !effectiveState.refreshing,
-                    enter = fadeIn(tween(200)) + slideInVertically(tween(250)) { -it },
+                    enter = fadeIn(tween(200)) + slideInVertically(tween(240)) { -it },
                     exit = fadeOut(tween(150)) + slideOutVertically(tween(200)) { -it },
                     modifier = Modifier
                         .align(Alignment.TopCenter)
-                        .padding(top = if (useHomeFilterHeader) 98.dp else if (onBack == null) 58.dp else IosMetrics.navBarHeight + 8.dp),
+                        .padding(top = incomingTopPadding),
                 ) {
                     var bannerAlphaTarget by remember { mutableFloatStateOf(1f) }
                     LaunchedEffect(listState) {
                         snapshotFlow { listState.isScrollInProgress }.collectLatest { scrolling ->
                             bannerAlphaTarget = 1f
                             if (!scrolling) {
-                                delay(2000L)
-                                bannerAlphaTarget = FLOATING_BALL_IDLE_ALPHA
+                                delay(2200L)
+                                bannerAlphaTarget = 0.88f
                             }
                         }
                     }
@@ -895,6 +919,7 @@ fun TopicListScreen(
                     )
                     IncomingTopicsBanner(
                         count = effectiveState.incomingTopicIds.size,
+                        avatars = incomingAvatars,
                         onClick = {
                             val now = android.os.SystemClock.elapsedRealtime()
                             if (now - lastApplyIncomingClickTime > 400L) {
@@ -3055,13 +3080,79 @@ internal fun formatCount(value: Int): String {
     return if (decimal == 0) "${tenths / 10}k" else "${tenths / 10}.${decimal}k"
 }
 
+/**
+ * 计算类别在当前浅/深色背景上的高可读前景色：
+ * - 浅色模式下，像亮黄(#e0d900)、浅青(#32c3c3)、淡蓝(#a8c6fe)等原色在白底上对比度过低，
+ *   保留色相并适度压暗至相对亮度 <= 0.155（确保白底对比度 >= 4.8:1），护眼且保留色系辨识度。
+ * - 深色模式下，极暗色（如深绿 #38571A）适当提亮，避免在深灰卡片上发黑难辨。
+ */
+internal fun readableCategoryForeground(raw: Color, isDark: Boolean): Color {
+    val lum = 0.2126f * linearChannel(raw.red) +
+        0.7152f * linearChannel(raw.green) +
+        0.0722f * linearChannel(raw.blue)
+    if (!isDark) {
+        if (lum <= 0.155f) return raw
+        var lo = 0f
+        var hi = 1f
+        var best = raw
+        repeat(10) {
+            val mid = (lo + hi) * 0.5f
+            // 与深中性色混合而非纯黑，保留色相饱和度同时稳定压暗亮度
+            val candidate = Color(
+                red = raw.red * mid,
+                green = raw.green * mid,
+                blue = raw.blue * mid,
+                alpha = 1f,
+            )
+            val cLum = 0.2126f * linearChannel(candidate.red) +
+                0.7152f * linearChannel(candidate.green) +
+                0.0722f * linearChannel(candidate.blue)
+            if (cLum <= 0.155f) {
+                best = candidate
+                lo = mid
+            } else {
+                hi = mid
+            }
+        }
+        return best
+    } else {
+        if (lum >= 0.24f) return raw
+        var lo = 0f
+        var hi = 1f
+        var best = raw
+        repeat(10) {
+            val mid = (lo + hi) * 0.5f
+            val candidate = Color(
+                red = raw.red + (1f - raw.red) * mid,
+                green = raw.green + (1f - raw.green) * mid,
+                blue = raw.blue + (1f - raw.blue) * mid,
+                alpha = 1f,
+            )
+            val cLum = 0.2126f * linearChannel(candidate.red) +
+                0.7152f * linearChannel(candidate.green) +
+                0.0722f * linearChannel(candidate.blue)
+            if (cLum >= 0.24f) {
+                best = candidate
+                hi = mid
+            } else {
+                lo = mid
+            }
+        }
+        return best
+    }
+}
+
+private fun linearChannel(c: Float): Float =
+    if (c <= 0.03928f) c / 12.92f else Math.pow(((c + 0.055f) / 1.055f).toDouble(), 2.4).toFloat()
+
 @Composable
 internal fun CategoryTag(category: Category, prominent: Boolean = false, onClick: (() -> Unit)? = null) {
-    val catColor = parseCategoryColor(category.color) ?: IosTheme.colors.accent
+    val rawColor = parseCategoryColor(category.color) ?: IosTheme.colors.accent
     val isDark = IosTheme.colors.isDark
+    val fgColor = remember(rawColor, isDark) { readableCategoryForeground(rawColor, isDark) }
     val chipShape = RoundedCornerShape(8.dp)
-    val borderColor = catColor.copy(alpha = if (isDark) 0.35f else 0.22f)
-    val pillBg = catColor.copy(alpha = if (isDark) 0.16f else 0.08f)
+    val borderColor = fgColor.copy(alpha = if (isDark) 0.38f else 0.26f)
+    val pillBg = rawColor.copy(alpha = if (isDark) 0.16f else 0.11f)
     Row(
         verticalAlignment = Alignment.CenterVertically,
         modifier = Modifier
@@ -3073,12 +3164,12 @@ internal fun CategoryTag(category: Category, prominent: Boolean = false, onClick
             .background(pillBg)
             .padding(horizontal = 7.dp, vertical = 2.5.dp),
     ) {
-        ForumCategoryIcon(category, if (prominent) 15.dp else 12.dp, catColor, directory = prominent)
+        ForumCategoryIcon(category, if (prominent) 15.dp else 12.dp, fgColor, directory = prominent)
         Spacer(Modifier.width(4.5.dp))
         Text(
             text = category.name,
             style = if (prominent) IosTheme.type.body.copy(fontSize = 12.5.sp, fontWeight = FontWeight.Medium) else IosTheme.type.footnote.copy(fontSize = 11.5.sp, fontWeight = FontWeight.Medium),
-            color = catColor,
+            color = fgColor,
             maxLines = 1,
         )
     }
@@ -3332,42 +3423,98 @@ private fun DropdownChevronGlyph(
     }
 }
 
+/**
+ * X（Twitter）风格的新发布悬浮胶囊：左侧向上箭头 + 右侧叠放大尺寸发帖者头像（无冗余文字），
+ * 位置紧贴当前可见顶栏（或二级筛选栏）正下方，随顶栏收起平滑上移。
+ */
 @Composable
 fun IncomingTopicsBanner(
     count: Int,
+    avatars: List<Triple<String?, String?, String?>> = emptyList(),
     onClick: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
+    val pillBg = IosTheme.colors.accent
+    val pillContent = Color.White
+    val avatarSize = 28.dp
+    val avatarStep = 18.dp
+
     Box(
         modifier = modifier
-            .padding(horizontal = 20.dp, vertical = 4.dp)
             .shadow(
                 elevation = 8.dp,
-                shape = RoundedCornerShape(22.dp),
-                spotColor = Color(0x33007AFF),
-                ambientColor = Color(0x22007AFF),
+                shape = CircleShape,
+                spotColor = pillBg.copy(alpha = 0.42f),
+                ambientColor = pillBg.copy(alpha = 0.25f),
             )
-            .clip(RoundedCornerShape(22.dp))
-            .background(IosTheme.colors.card)
-            .border(1.dp, IosTheme.colors.accent.copy(alpha = 0.35f), RoundedCornerShape(22.dp))
-            .clickable(onClick = onClick)
-            .padding(horizontal = 16.dp, vertical = 9.dp),
+            .clip(CircleShape)
+            .background(pillBg)
+            .clickable(role = Role.Button, onClickLabel = "查看 $count 条新发布", onClick = onClick)
+            .padding(
+                start = 11.dp,
+                end = if (avatars.isNotEmpty()) 6.dp else 12.dp,
+                top = 5.dp,
+                bottom = 5.dp,
+            ),
         contentAlignment = Alignment.Center,
     ) {
         Row(
             verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.Center,
+            horizontalArrangement = Arrangement.spacedBy(6.dp),
         ) {
-            Canvas(modifier = Modifier.size(7.dp)) {
-                drawCircle(color = Color(0xFF007AFF))
+            // 左侧向上箭头
+            Canvas(Modifier.size(16.dp)) {
+                scale(size.width / 24f, size.height / 24f, pivot = Offset.Zero) {
+                    val stroke = Stroke(width = 2.6f, cap = StrokeCap.Round, join = StrokeJoin.Round)
+                    drawLine(pillContent, Offset(12f, 19.5f), Offset(12f, 4.8f), strokeWidth = 2.6f, cap = StrokeCap.Round)
+                    val head = Path().apply {
+                        moveTo(5.8f, 11.0f)
+                        lineTo(12f, 4.8f)
+                        lineTo(18.2f, 11.0f)
+                    }
+                    drawPath(head, pillContent, style = stroke)
+                }
             }
-            Spacer(Modifier.width(8.dp))
-            Text(
-                text = "有 $count 条新话题动态，点击查看 ↑",
-                style = IosTheme.type.footnote,
-                color = IosTheme.colors.accent,
-                fontWeight = FontWeight.SemiBold,
-            )
+
+            if (avatars.isNotEmpty()) {
+                // 右侧叠放至多 3 位新帖发帖者大头像（带与胶囊同色的描边分隔，纯 X 样式无文字）
+                val stackWidth = avatarSize + avatarStep * (avatars.size - 1)
+                Box(
+                    modifier = Modifier
+                        .width(stackWidth)
+                        .height(avatarSize),
+                ) {
+                    avatars.forEachIndexed { idx, (username, primaryUrl, fallbackUrl) ->
+                        Box(
+                            modifier = Modifier
+                                .offset(x = avatarStep * idx)
+                                .size(avatarSize)
+                                .clip(CircleShape)
+                                .background(pillBg)
+                                .padding(1.6.dp)
+                                .clip(CircleShape),
+                        ) {
+                            UserAvatar(
+                                avatarUrl = primaryUrl,
+                                fallbackUrl = fallbackUrl,
+                                username = username,
+                                modifier = Modifier.fillMaxSize(),
+                                cornerRadius = avatarSize / 2,
+                            )
+                        }
+                    }
+                }
+            } else {
+                Text(
+                    text = "+$count",
+                    style = IosTheme.type.footnote.copy(
+                        fontSize = 13.sp,
+                        fontWeight = FontWeight.Bold,
+                    ),
+                    color = pillContent,
+                    maxLines = 1,
+                )
+            }
         }
     }
 }
