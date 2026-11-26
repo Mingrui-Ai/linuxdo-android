@@ -325,7 +325,7 @@ internal fun PersonalDrawerContent(
     }
 }
 
-/** 侧栏固定显示五项资料，不读取主页显示偏好。 */
+/** 侧栏固定显示资料与简介，不读取主页显示偏好。 */
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
 private fun DrawerProfileDetails(
@@ -335,6 +335,7 @@ private fun DrawerProfileDetails(
     onAction: (PersonalDrawerAction) -> Unit,
 ) {
     val colors = IosTheme.colors
+    var showBio by remember(card?.username) { mutableStateOf(false) }
     var now by remember { mutableStateOf(java.time.Instant.now()) }
     LaunchedEffect(active) {
         while (active) {
@@ -352,6 +353,11 @@ private fun DrawerProfileDetails(
                 ProfileBadgePreview(badges.items, badges.loading) { onAction(PersonalDrawerAction.Badges) }
             }
         }
+        UserBioText(card?.bioExcerpt, if (card == null) "正在加载资料…" else "还没有填写个人简介",
+            IosTheme.type.body.copy(fontSize = 13.sp), colors.label, maxLines = 2,
+            emptyColor = colors.secondaryLabel, loadImages = active,
+            modifier = Modifier.fillMaxWidth().then(if (!card?.bioExcerpt.isNullOrBlank())
+                Modifier.clickable(onClickLabel = "查看完整简介") { showBio = true } else Modifier))
         FlowRow(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(12.dp),
             verticalArrangement = Arrangement.spacedBy(3.dp)) {
             ProfileFollowCounts(card, onOpenNetwork = { onAction(PersonalDrawerAction.Network(it)) },
@@ -361,6 +367,10 @@ private fun DrawerProfileDetails(
                 modifier = Modifier.align(Alignment.CenterVertically))
         }
     }
+    if (showBio) AlertDialog(onDismissRequest = { showBio = false }, title = { Text("个人简介") },
+        text = { UserBioText(card?.bioExcerpt, "还没有填写个人简介", IosTheme.type.body, colors.label,
+            maxLines = Int.MAX_VALUE, modifier = Modifier.heightIn(max = 360.dp).verticalScroll(rememberScrollState())) },
+        confirmButton = { TextButton(onClick = { showBio = false }) { Text("完成") } }, containerColor = colors.card)
 }
 
 @Composable
