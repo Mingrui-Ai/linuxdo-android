@@ -10,12 +10,11 @@ import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.detectDragGesturesAfterLongPress
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.ExperimentalLayoutApi
-import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -37,12 +36,16 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableFloatStateOf
+import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Brush
@@ -53,6 +56,12 @@ import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.StrokeJoin
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.drawscope.scale
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.hapticfeedback.HapticFeedbackType
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.layout.onGloballyPositioned
+import androidx.compose.ui.layout.positionInParent
+import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
@@ -62,6 +71,7 @@ import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.DpOffset
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.zIndex
 import org.linuxdo.android.data.Category
 import org.linuxdo.android.data.DiscourseTag
 import org.linuxdo.android.data.HomeFilterResolver
@@ -102,10 +112,10 @@ internal fun HomeTopFilterHeader(
     onSelectTag: (String?) -> Unit,
     onClearFilters: () -> Unit,
     onTogglePinCategory: (Long) -> Unit,
-    onMoveCategoryOrder: (Long, Int) -> Unit,
+    onSaveCategoryOrder: (List<Long>) -> Unit,
     onResetCategoryOrder: () -> Unit,
     onTogglePinTag: (String) -> Unit,
-    onMoveTagOrder: (String, Int) -> Unit,
+    onSaveTagOrder: (List<String>) -> Unit,
     onResetTagOrder: () -> Unit,
     onEnsureCategories: () -> Unit,
     onEnsureTags: () -> Unit,
@@ -255,7 +265,7 @@ internal fun HomeTopFilterHeader(
                                     onSelectCategory(cat)
                                 },
                                 onTogglePin = onTogglePinCategory,
-                                onMoveOrder = onMoveCategoryOrder,
+                                onSaveOrder = onSaveCategoryOrder,
                                 onResetOrder = onResetCategoryOrder,
                                 onClearAll = {
                                     showCategoryMenu = false
@@ -317,7 +327,7 @@ internal fun HomeTopFilterHeader(
                                 activeFilterCount = filter.activeCount,
                                 onQueryChange = onTagSearchQueryChange,
                                 onTogglePin = onTogglePinTag,
-                                onMoveOrder = onMoveTagOrder,
+                                onSaveOrder = onSaveTagOrder,
                                 onResetOrder = onResetTagOrder,
                                 onDismiss = {
                                     showTagMenu = false
@@ -717,7 +727,7 @@ internal fun TopicSortDropdownMenu(
     }
 }
 
-/** 独立 LV 等级下拉菜单：既支持与当前类别联动，也支持不选类别时独立筛选全站对应等级。 */
+/** 极简独立 LV 等级下拉栏：去掉冗余介绍，直接复用帖子用户名旁的 LevelBadge 样式。 */
 @Composable
 private fun HomeLevelDropdownMenu(
     expanded: Boolean,
@@ -733,134 +743,84 @@ private fun HomeLevelDropdownMenu(
             listOf(0, 1, 2, 3)
         }
     }
-    val levelCatCounts = remember(categories) {
-        (0..3).associateWith { lv -> HomeFilterResolver.categoriesForLevel(categories, lv).size }
-    }
 
     DropdownMenu(
         expanded = expanded,
         onDismissRequest = onDismiss,
         offset = DpOffset(0.dp, 4.dp),
         containerColor = IosTheme.colors.card,
-        shape = RoundedCornerShape(16.dp),
-        modifier = Modifier.widthIn(min = 204.dp, max = 236.dp),
+        shape = RoundedCornerShape(14.dp),
+        modifier = Modifier.width(128.dp),
     ) {
-        // 全部等级
         val allSelected = filter.level == null
         Row(
             modifier = Modifier
                 .fillMaxWidth()
                 .padding(horizontal = 6.dp, vertical = 2.dp)
-                .clip(RoundedCornerShape(10.dp))
-                .background(if (allSelected) IosTheme.colors.accent.copy(alpha = 0.10f) else Color.Transparent)
+                .clip(RoundedCornerShape(9.dp))
+                .background(if (allSelected) IosTheme.colors.accent.copy(alpha = 0.12f) else Color.Transparent)
                 .clickable { onSelectLevel(null) }
-                .padding(horizontal = 10.dp, vertical = 9.dp),
+                .padding(horizontal = 9.dp, vertical = 7.dp),
             verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(10.dp),
+            horizontalArrangement = Arrangement.SpaceBetween,
         ) {
-            Box(
-                modifier = Modifier
-                    .size(28.dp)
-                    .clip(RoundedCornerShape(8.dp))
-                    .background(if (allSelected) IosTheme.colors.accent.copy(alpha = 0.14f) else IosTheme.colors.groupedBackground),
-                contentAlignment = Alignment.Center,
-            ) {
-                Text(
-                    text = "ALL",
-                    fontSize = 10.sp,
-                    fontWeight = FontWeight.Bold,
-                    color = if (allSelected) IosTheme.colors.accent else IosTheme.colors.secondaryLabel,
-                )
-            }
-            Column(Modifier.weight(1f)) {
-                Text(
-                    text = "全部等级",
-                    style = IosTheme.type.subheadline.copy(
-                        fontSize = 14.sp,
-                        fontWeight = if (allSelected) FontWeight.SemiBold else FontWeight.Normal,
-                    ),
-                    color = if (allSelected) IosTheme.colors.accent else IosTheme.colors.label,
-                )
-                Text(
-                    text = if (filter.categoryName != null) "「${filter.categoryName}」不限等级" else "全站所有等级",
-                    style = IosTheme.type.caption.copy(fontSize = 11.sp),
-                    color = IosTheme.colors.tertiaryLabel,
-                )
-            }
+            Text(
+                text = "全部",
+                style = IosTheme.type.footnote.copy(
+                    fontSize = 13.sp,
+                    fontWeight = if (allSelected) FontWeight.SemiBold else FontWeight.Medium,
+                ),
+                color = if (allSelected) IosTheme.colors.accent else IosTheme.colors.label,
+            )
             if (allSelected) {
-                Text("✓", color = IosTheme.colors.accent, fontWeight = FontWeight.Bold, fontSize = 13.sp)
+                Text("✓", color = IosTheme.colors.accent, fontWeight = FontWeight.Bold, fontSize = 12.sp)
             }
         }
 
-        val isDark = IosTheme.colors.isDark
         (0..3).forEach { lv ->
             val supported = filter.categoryId == null || categories.isEmpty() || lv in allowedLevels
             val selected = filter.level == lv
-            val (pillBg, pillBorder, pillText) = levelPillColors(lv, isDark)
-            val count = levelCatCounts[lv] ?: 0
-            val subtitle = when {
-                filter.categoryName != null && supported -> "${filter.categoryName} · Lv.$lv"
-                filter.categoryName != null -> "「${filter.categoryName}」无此等级"
-                count > 0 -> "聚合全站 $count 个 Lv.$lv 子版块"
-                else -> "筛选全站 Lv.$lv 子版块"
-            }
-
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
                     .padding(horizontal = 6.dp, vertical = 2.dp)
-                    .clip(RoundedCornerShape(10.dp))
-                    .background(if (selected) IosTheme.colors.accent.copy(alpha = 0.10f) else Color.Transparent)
+                    .clip(RoundedCornerShape(9.dp))
+                    .background(if (selected) IosTheme.colors.accent.copy(alpha = 0.12f) else Color.Transparent)
                     .clickable(enabled = supported) { onSelectLevel(lv) }
-                    .padding(horizontal = 10.dp, vertical = 9.dp),
+                    .padding(horizontal = 9.dp, vertical = 7.dp)
+                    .alpha(if (supported) 1f else 0.38f),
                 verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(10.dp),
+                horizontalArrangement = Arrangement.SpaceBetween,
             ) {
-                Box(
-                    modifier = Modifier
-                        .size(28.dp)
-                        .clip(RoundedCornerShape(8.dp))
-                        .background(pillBg.copy(alpha = if (supported) 1f else 0.4f))
-                        .border(0.7.dp, pillBorder.copy(alpha = if (supported) 1f else 0.4f), RoundedCornerShape(8.dp)),
-                    contentAlignment = Alignment.Center,
-                ) {
-                    Text(
-                        text = "Lv$lv",
-                        fontSize = 10.sp,
-                        fontWeight = FontWeight.Bold,
-                        color = pillText.copy(alpha = if (supported) 1f else 0.45f),
-                    )
-                }
-                Column(Modifier.weight(1f)) {
-                    Text(
-                        text = "Lv.$lv",
-                        style = IosTheme.type.subheadline.copy(
-                            fontSize = 14.sp,
-                            fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Normal,
-                        ),
-                        color = when {
-                            !supported -> IosTheme.colors.tertiaryLabel.copy(alpha = 0.55f)
-                            selected -> IosTheme.colors.accent
-                            else -> IosTheme.colors.label
-                        },
-                    )
-                    Text(
-                        text = subtitle,
-                        style = IosTheme.type.caption.copy(fontSize = 11.sp),
-                        color = IosTheme.colors.tertiaryLabel.copy(alpha = if (supported) 1f else 0.55f),
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
-                    )
+                if (lv == 0) {
+                    val (bg, border, fg) = levelPillColors(0, IosTheme.colors.isDark)
+                    Box(
+                        modifier = Modifier
+                            .clip(RoundedCornerShape(6.dp))
+                            .background(bg)
+                            .border(0.8.dp, border, RoundedCornerShape(6.dp))
+                            .padding(horizontal = 5.dp, vertical = 1.dp),
+                    ) {
+                        Text(
+                            text = "Lv0",
+                            fontSize = 10.sp,
+                            lineHeight = 12.sp,
+                            fontWeight = FontWeight.SemiBold,
+                            color = fg,
+                        )
+                    }
+                } else {
+                    LevelBadge(level = lv)
                 }
                 if (selected) {
-                    Text("✓", color = IosTheme.colors.accent, fontWeight = FontWeight.Bold, fontSize = 13.sp)
+                    Text("✓", color = IosTheme.colors.accent, fontWeight = FontWeight.Bold, fontSize = 12.sp)
                 }
             }
         }
     }
 }
 
-/** 首页类别锚定下拉栏：紧凑窄宽（224dp），复用帖子内类别标签原色，支持置顶、上移/下移排序与搜索。 */
+/** 首页类别锚定下拉栏：窄宽原色胶囊，支持直接长按拖动排序（松手自动固定保存）、点图钉快速置顶与搜索。 */
 @Composable
 private fun HomeCategoryDropdownMenu(
     expanded: Boolean,
@@ -873,38 +833,52 @@ private fun HomeCategoryDropdownMenu(
     onDismiss: () -> Unit,
     onSelectCategory: (Category?) -> Unit,
     onTogglePin: (Long) -> Unit,
-    onMoveOrder: (Long, Int) -> Unit,
+    onSaveOrder: (List<Long>) -> Unit,
     onResetOrder: () -> Unit,
     onClearAll: () -> Unit,
 ) {
     var query by remember { mutableStateOf("") }
-    var manageMode by remember { mutableStateOf(false) }
     val pinnedSet = remember(pinnedCategoryIds) { pinnedCategoryIds.toSet() }
-    val groups = remember(categories, pinnedCategoryIds, categoryOrder) {
+    val baseGroups = remember(categories, pinnedCategoryIds, categoryOrder) {
         arrangeCategoryGroups(categories, pinnedCategoryIds, categoryOrder)
     }
-    val filtered = remember(groups, query) {
-        val q = query.trim()
-        if (q.isEmpty()) groups
-        else groups.filter { (parent, _) ->
+    val workingGroups = remember { mutableStateListOf<Pair<Category, List<Category>>>() }
+    var draggedId by remember { mutableStateOf<Int?>(null) }
+    var dragDeltaY by remember { mutableFloatStateOf(0f) }
+    val itemBounds = remember { mutableMapOf<Int, Pair<Float, Float>>() }
+    val haptic = LocalHapticFeedback.current
+
+    LaunchedEffect(baseGroups, draggedId) {
+        if (draggedId == null) {
+            workingGroups.clear()
+            workingGroups.addAll(baseGroups)
+        }
+    }
+
+    val q = query.trim()
+    val filtered = remember(workingGroups.toList(), q) {
+        if (q.isEmpty()) workingGroups.toList()
+        else workingGroups.filter { (parent, _) ->
             parent.name.contains(q, ignoreCase = true) || parent.slug.contains(q, ignoreCase = true)
         }
     }
     val isDark = IosTheme.colors.isDark
+    val canDrag = q.isEmpty() && filtered.size > 1
 
     DropdownMenu(
         expanded = expanded,
         onDismissRequest = {
             query = ""
-            manageMode = false
+            draggedId = null
+            dragDeltaY = 0f
             onDismiss()
         },
         offset = DpOffset(0.dp, 4.dp),
         containerColor = IosTheme.colors.card,
         shape = RoundedCornerShape(16.dp),
-        modifier = Modifier.width(if (manageMode) 246.dp else 222.dp),
+        modifier = Modifier.width(220.dp),
     ) {
-        // 顶部紧凑搜索 + 全部 + 整理开关
+        // 顶部紧凑搜索 + 全部
         Row(
             modifier = Modifier
                 .fillMaxWidth()
@@ -944,7 +918,6 @@ private fun HomeCategoryDropdownMenu(
                     .background(if (isAll) IosTheme.colors.accent.copy(alpha = 0.14f) else IosTheme.colors.groupedBackground)
                     .clickable {
                         query = ""
-                        manageMode = false
                         onSelectCategory(null)
                     }
                     .padding(horizontal = 8.dp),
@@ -956,29 +929,15 @@ private fun HomeCategoryDropdownMenu(
                     color = if (isAll) IosTheme.colors.accent else IosTheme.colors.label,
                 )
             }
-            Box(
-                modifier = Modifier
-                    .height(29.dp)
-                    .clip(RoundedCornerShape(8.dp))
-                    .background(if (manageMode) IosTheme.colors.accent.copy(alpha = 0.16f) else IosTheme.colors.groupedBackground)
-                    .clickable { manageMode = !manageMode }
-                    .padding(horizontal = 8.dp),
-                contentAlignment = Alignment.Center,
-            ) {
-                Text(
-                    text = if (manageMode) "完成" else "排序",
-                    style = IosTheme.type.caption.copy(fontSize = 11.5.sp, fontWeight = FontWeight.SemiBold),
-                    color = if (manageMode) IosTheme.colors.accent else IosTheme.colors.secondaryLabel,
-                )
-            }
         }
         IosFullDivider()
 
+        val scrollState = rememberScrollState()
         Column(
             modifier = Modifier
                 .fillMaxWidth()
                 .heightIn(max = 300.dp)
-                .verticalScroll(rememberScrollState())
+                .verticalScroll(scrollState, enabled = draggedId == null)
                 .padding(horizontal = 6.dp, vertical = 4.dp),
             verticalArrangement = Arrangement.spacedBy(3.dp),
         ) {
@@ -991,31 +950,82 @@ private fun HomeCategoryDropdownMenu(
                     Text("没有匹配的类别", style = IosTheme.type.footnote, color = IosTheme.colors.tertiaryLabel)
                 }
             } else {
-                val pinnedCount = filtered.count { it.first.id.toLong() in pinnedSet }
-                filtered.forEachIndexed { idx, (parent, levels) ->
+                filtered.forEach { (parent, levels) ->
                     val idLong = parent.id.toLong()
                     val isPinned = idLong in pinnedSet
                     val selected = selectedCategoryId == parent.id
+                    val dragging = draggedId == parent.id
                     val catColor = parseCategoryColor(parent.color) ?: IosTheme.colors.accent
                     val lvNums = levels.mapNotNull { HomeFilterResolver.extractLevel(it) }.distinct().sorted()
 
-                    // 复用帖子内 CategoryTag 同款柔和底色 + 细边框 + 类别原色
                     val itemBg = when {
-                        selected -> catColor.copy(alpha = if (isDark) 0.24f else 0.16f)
+                        dragging || selected -> catColor.copy(alpha = if (isDark) 0.26f else 0.18f)
                         else -> catColor.copy(alpha = if (isDark) 0.12f else 0.07f)
                     }
                     val itemBorder = when {
-                        selected -> catColor.copy(alpha = if (isDark) 0.65f else 0.50f)
+                        dragging || selected -> catColor.copy(alpha = if (isDark) 0.70f else 0.55f)
                         else -> catColor.copy(alpha = if (isDark) 0.26f else 0.18f)
                     }
 
                     Row(
                         modifier = Modifier
                             .fillMaxWidth()
+                            .zIndex(if (dragging) 2f else 0f)
+                            .onGloballyPositioned { coords ->
+                                val y = coords.positionInParent().y
+                                itemBounds[parent.id] = y to coords.size.height.toFloat()
+                            }
+                            .graphicsLayer {
+                                translationY = if (dragging) dragDeltaY else 0f
+                                scaleX = if (dragging) 1.03f else 1f
+                                scaleY = if (dragging) 1.03f else 1f
+                                shadowElevation = if (dragging) 8.dp.toPx() else 0f
+                            }
                             .clip(RoundedCornerShape(9.dp))
                             .background(itemBg)
                             .border(0.75.dp, itemBorder, RoundedCornerShape(9.dp))
-                            .clickable(enabled = !manageMode) {
+                            .pointerInput(parent.id, canDrag) {
+                                if (!canDrag) return@pointerInput
+                                detectDragGesturesAfterLongPress(
+                                    onDragStart = {
+                                        draggedId = parent.id
+                                        dragDeltaY = 0f
+                                        haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                                    },
+                                    onDrag = { change, amount ->
+                                        if (draggedId != parent.id) return@detectDragGesturesAfterLongPress
+                                        change.consume()
+                                        dragDeltaY += amount.y
+                                        val fromIdx = workingGroups.indexOfFirst { it.first.id == parent.id }
+                                        if (fromIdx < 0) return@detectDragGesturesAfterLongPress
+                                        val step = (itemBounds[parent.id]?.second ?: 36f) + 3.dp.toPx()
+                                        if (dragDeltaY > step * 0.55f && fromIdx < workingGroups.lastIndex) {
+                                            workingGroups.add(fromIdx + 1, workingGroups.removeAt(fromIdx))
+                                            dragDeltaY -= step
+                                            haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                                        } else if (dragDeltaY < -step * 0.55f && fromIdx > 0) {
+                                            workingGroups.add(fromIdx - 1, workingGroups.removeAt(fromIdx))
+                                            dragDeltaY += step
+                                            haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                                        }
+                                    },
+                                    onDragEnd = {
+                                        if (draggedId == parent.id) {
+                                            val newIds = workingGroups.map { it.first.id.toLong() }
+                                            draggedId = null
+                                            dragDeltaY = 0f
+                                            onSaveOrder(newIds)
+                                        }
+                                    },
+                                    onDragCancel = {
+                                        draggedId = null
+                                        dragDeltaY = 0f
+                                        workingGroups.clear()
+                                        workingGroups.addAll(baseGroups)
+                                    },
+                                )
+                            }
+                            .clickable(enabled = draggedId == null) {
                                 query = ""
                                 onSelectCategory(parent)
                             }
@@ -1035,82 +1045,73 @@ private fun HomeCategoryDropdownMenu(
                             overflow = TextOverflow.Ellipsis,
                             modifier = Modifier.weight(1f),
                         )
-
-                        if (manageMode) {
-                            val groupStart = if (isPinned) 0 else pinnedCount
-                            val groupEnd = if (isPinned) (pinnedCount - 1).coerceAtLeast(0) else filtered.lastIndex
-                            PinOrderControls(
-                                pinned = isPinned,
-                                canMoveUp = idx > groupStart,
-                                canMoveDown = idx < groupEnd,
-                                onTogglePin = { onTogglePin(idLong) },
-                                onMoveUp = { onMoveOrder(idLong, -1) },
-                                onMoveDown = { onMoveOrder(idLong, +1) },
+                        if (lvNums.isNotEmpty() && !dragging) {
+                            val lvLabel = if (lvNums.size == 1) "Lv${lvNums.first()}" else "Lv${lvNums.first()}-${lvNums.last()}"
+                            Text(
+                                text = lvLabel,
+                                style = IosTheme.type.caption.copy(fontSize = 9.5.sp, fontWeight = FontWeight.Medium),
+                                color = catColor.copy(alpha = 0.72f),
                             )
-                        } else {
-                            if (isPinned) {
-                                PinGlyph(color = catColor.copy(alpha = 0.85f), size = 11.dp)
-                            }
-                            if (lvNums.isNotEmpty()) {
-                                val lvLabel = if (lvNums.size == 1) "Lv${lvNums.first()}" else "Lv${lvNums.first()}-${lvNums.last()}"
-                                Text(
-                                    text = lvLabel,
-                                    style = IosTheme.type.caption.copy(fontSize = 9.5.sp, fontWeight = FontWeight.Medium),
-                                    color = catColor.copy(alpha = 0.72f),
-                                )
-                            }
-                            if (selected) {
-                                Text("✓", color = catColor, fontWeight = FontWeight.Bold, fontSize = 12.sp)
-                            }
+                        }
+                        if (selected) {
+                            Text("✓", color = catColor, fontWeight = FontWeight.Bold, fontSize = 12.sp)
+                        }
+                        Box(
+                            modifier = Modifier
+                                .size(22.dp)
+                                .clip(RoundedCornerShape(6.dp))
+                                .clickable(role = Role.Button, onClickLabel = if (isPinned) "取消置顶" else "置顶") {
+                                    onTogglePin(idLong)
+                                },
+                            contentAlignment = Alignment.Center,
+                        ) {
+                            PinGlyph(
+                                color = if (isPinned) catColor else catColor.copy(alpha = 0.30f),
+                                size = 11.dp,
+                            )
                         }
                     }
                 }
             }
         }
 
-        if (manageMode || activeFilterCount > 0) {
-            IosFullDivider()
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(horizontal = 9.dp, vertical = 5.dp),
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.SpaceBetween,
-            ) {
-                if (manageMode) {
+        IosFullDivider()
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 9.dp, vertical = 5.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.SpaceBetween,
+        ) {
+            Text(
+                text = "长按拖动排序，松手固定",
+                style = IosTheme.type.caption.copy(fontSize = 10.sp),
+                color = IosTheme.colors.tertiaryLabel,
+            )
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
+                if (categoryOrder.isNotEmpty()) {
                     Text(
-                        text = "点图钉置顶，↑↓调序",
-                        style = IosTheme.type.caption.copy(fontSize = 10.5.sp),
-                        color = IosTheme.colors.tertiaryLabel,
+                        text = "重置排序",
+                        style = IosTheme.type.caption.copy(fontSize = 10.5.sp, fontWeight = FontWeight.SemiBold),
+                        color = IosTheme.colors.accent,
+                        modifier = Modifier
+                            .clip(RoundedCornerShape(5.dp))
+                            .clickable { onResetOrder() }
+                            .padding(horizontal = 3.dp, vertical = 1.dp),
                     )
-                    if (categoryOrder.isNotEmpty()) {
-                        Text(
-                            text = "恢复默认",
-                            style = IosTheme.type.caption.copy(fontSize = 11.sp, fontWeight = FontWeight.SemiBold),
-                            color = IosTheme.colors.accent,
-                            modifier = Modifier
-                                .clip(RoundedCornerShape(6.dp))
-                                .clickable { onResetOrder() }
-                                .padding(horizontal = 4.dp, vertical = 2.dp),
-                        )
-                    }
-                } else {
+                }
+                if (activeFilterCount > 0) {
                     Text(
-                        text = "已选 $activeFilterCount 项",
-                        style = IosTheme.type.caption.copy(fontSize = 11.sp),
-                        color = IosTheme.colors.secondaryLabel,
-                    )
-                    Text(
-                        text = "清空筛选",
-                        style = IosTheme.type.caption.copy(fontSize = 11.5.sp, fontWeight = FontWeight.SemiBold),
+                        text = "清空",
+                        style = IosTheme.type.caption.copy(fontSize = 10.5.sp, fontWeight = FontWeight.SemiBold),
                         color = IosTheme.colors.destructive,
                         modifier = Modifier
-                            .clip(RoundedCornerShape(6.dp))
+                            .clip(RoundedCornerShape(5.dp))
                             .clickable {
                                 query = ""
                                 onClearAll()
                             }
-                            .padding(horizontal = 5.dp, vertical = 2.dp),
+                            .padding(horizontal = 3.dp, vertical = 1.dp),
                     )
                 }
             }
@@ -1118,8 +1119,7 @@ private fun HomeCategoryDropdownMenu(
     }
 }
 
-/** 首页标签锚定下拉栏：紧凑宽度（248dp），支持置顶、自定义排序与本地+远程联想搜索。 */
-@OptIn(ExperimentalLayoutApi::class)
+/** 首页标签锚定下拉栏：支持直接长按拖动排序（松手自动固定保存）、点图钉置顶与本地+远程联想搜索。 */
 @Composable
 private fun HomeTagDropdownMenu(
     expanded: Boolean,
@@ -1134,48 +1134,54 @@ private fun HomeTagDropdownMenu(
     activeFilterCount: Int,
     onQueryChange: (String) -> Unit,
     onTogglePin: (String) -> Unit,
-    onMoveOrder: (String, Int) -> Unit,
+    onSaveOrder: (List<String>) -> Unit,
     onResetOrder: () -> Unit,
     onDismiss: () -> Unit,
     onSelectTag: (String?) -> Unit,
     onClearAll: () -> Unit,
 ) {
-    var manageMode by remember { mutableStateOf(false) }
     val trimmed = query.trim()
     val pinnedLowerSet = remember(pinnedTags) { pinnedTags.map { it.lowercase() }.toSet() }
     val arrangedTags = remember(tags, pinnedTags, tagOrder) {
-        arrangeTags(tags, pinnedTags, tagOrder)
+        arrangeTags(tags, pinnedTags, tagOrder).take(60)
     }
-    val displayTags = remember(arrangedTags, searchedTags, trimmed) {
+    val workingTags = remember { mutableStateListOf<DiscourseTag>() }
+    var draggedTagKey by remember { mutableStateOf<String?>(null) }
+    var dragDeltaY by remember { mutableFloatStateOf(0f) }
+    val itemHeights = remember { mutableMapOf<String, Float>() }
+    val haptic = LocalHapticFeedback.current
+
+    LaunchedEffect(arrangedTags, draggedTagKey) {
+        if (draggedTagKey == null) {
+            workingTags.clear()
+            workingTags.addAll(arrangedTags)
+        }
+    }
+
+    val displayTags = remember(workingTags.toList(), searchedTags, trimmed) {
         if (trimmed.isEmpty()) {
-            arrangedTags.take(60)
+            workingTags.toList()
         } else {
-            val local = arrangedTags.filter {
+            val local = workingTags.filter {
                 it.displayName.contains(trimmed, ignoreCase = true) ||
                     it.name.contains(trimmed, ignoreCase = true)
             }
             (searchedTags + local).distinctBy { it.displayName.lowercase() }.take(60)
         }
     }
-    val categorySuggested = remember(selectedCategory, tags) {
-        val allowed = selectedCategory?.allowedTags.orEmpty().filter { it.isNotBlank() }
-        if (allowed.isEmpty()) emptyList()
-        else {
-            val byName = tags.associateBy { it.displayName.lowercase() }
-            allowed.map { name -> byName[name.lowercase()] ?: DiscourseTag(id = name, name = name, text = name) }
-        }
-    }
+    val canDrag = trimmed.isEmpty() && displayTags.size > 1
 
     DropdownMenu(
         expanded = expanded,
         onDismissRequest = {
-            manageMode = false
+            draggedTagKey = null
+            dragDeltaY = 0f
             onDismiss()
         },
         offset = DpOffset(0.dp, 4.dp),
         containerColor = IosTheme.colors.card,
         shape = RoundedCornerShape(16.dp),
-        modifier = Modifier.width(if (manageMode) 256.dp else 248.dp),
+        modifier = Modifier.width(232.dp),
     ) {
         Row(
             modifier = Modifier
@@ -1214,10 +1220,7 @@ private fun HomeTagDropdownMenu(
                     .height(29.dp)
                     .clip(RoundedCornerShape(8.dp))
                     .background(if (isAll) IosTheme.colors.accent.copy(alpha = 0.14f) else IosTheme.colors.groupedBackground)
-                    .clickable {
-                        manageMode = false
-                        onSelectTag(null)
-                    }
+                    .clickable { onSelectTag(null) }
                     .padding(horizontal = 8.dp),
                 contentAlignment = Alignment.Center,
             ) {
@@ -1227,260 +1230,186 @@ private fun HomeTagDropdownMenu(
                     color = if (isAll) IosTheme.colors.accent else IosTheme.colors.label,
                 )
             }
-            Box(
-                modifier = Modifier
-                    .height(29.dp)
-                    .clip(RoundedCornerShape(8.dp))
-                    .background(if (manageMode) IosTheme.colors.accent.copy(alpha = 0.16f) else IosTheme.colors.groupedBackground)
-                    .clickable { manageMode = !manageMode }
-                    .padding(horizontal = 8.dp),
-                contentAlignment = Alignment.Center,
-            ) {
-                Text(
-                    text = if (manageMode) "完成" else "排序",
-                    style = IosTheme.type.caption.copy(fontSize = 11.5.sp, fontWeight = FontWeight.SemiBold),
-                    color = if (manageMode) IosTheme.colors.accent else IosTheme.colors.secondaryLabel,
-                )
-            }
         }
         IosFullDivider()
 
+        val scrollState = rememberScrollState()
         Column(
             modifier = Modifier
                 .fillMaxWidth()
                 .heightIn(max = 300.dp)
-                .verticalScroll(rememberScrollState())
-                .padding(horizontal = 8.dp, vertical = 6.dp),
-            verticalArrangement = Arrangement.spacedBy(6.dp),
+                .verticalScroll(scrollState, enabled = draggedTagKey == null)
+                .padding(horizontal = 6.dp, vertical = 4.dp),
+            verticalArrangement = Arrangement.spacedBy(3.dp),
         ) {
             if (loading && displayTags.isEmpty()) {
                 Box(Modifier.fillMaxWidth().padding(vertical = 22.dp), contentAlignment = Alignment.Center) {
                     IosActivityIndicator(diameter = 20.dp)
                 }
-            } else if (manageMode) {
-                if (displayTags.isEmpty()) {
-                    Box(Modifier.fillMaxWidth().padding(vertical = 18.dp), contentAlignment = Alignment.Center) {
-                        Text("没有匹配的标签", style = IosTheme.type.footnote, color = IosTheme.colors.tertiaryLabel)
-                    }
-                } else {
-                    val pinnedCount = displayTags.count { it.displayName.lowercase() in pinnedLowerSet }
-                    displayTags.forEachIndexed { idx, tag ->
-                        val isPinned = tag.displayName.lowercase() in pinnedLowerSet
-                        val groupStart = if (isPinned) 0 else pinnedCount
-                        val groupEnd = if (isPinned) (pinnedCount - 1).coerceAtLeast(0) else displayTags.lastIndex
-                        Row(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .clip(RoundedCornerShape(8.dp))
-                                .background(
-                                    if (isPinned) IosTheme.colors.accent.copy(alpha = 0.08f)
-                                    else IosTheme.colors.groupedBackground.copy(alpha = 0.65f),
-                                )
-                                .padding(horizontal = 8.dp, vertical = 6.dp),
-                            verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.spacedBy(6.dp),
-                        ) {
-                            ForumTagIcon(tag = tag.displayName, size = 13.dp, fallbackHash = true)
-                            Text(
-                                text = tag.displayName,
-                                style = IosTheme.type.footnote.copy(
-                                    fontSize = 12.5.sp,
-                                    fontWeight = if (isPinned) FontWeight.SemiBold else FontWeight.Normal,
-                                ),
-                                color = if (isPinned) IosTheme.colors.accent else IosTheme.colors.label,
-                                maxLines = 1,
-                                overflow = TextOverflow.Ellipsis,
-                                modifier = Modifier.weight(1f),
-                            )
-                            PinOrderControls(
-                                pinned = isPinned,
-                                canMoveUp = idx > groupStart,
-                                canMoveDown = idx < groupEnd,
-                                onTogglePin = { onTogglePin(tag.displayName) },
-                                onMoveUp = { onMoveOrder(tag.displayName, -1) },
-                                onMoveDown = { onMoveOrder(tag.displayName, +1) },
-                            )
-                        }
-                    }
+            } else if (displayTags.isEmpty()) {
+                Box(Modifier.fillMaxWidth().padding(vertical = 18.dp), contentAlignment = Alignment.Center) {
+                    Text("没有匹配的标签", style = IosTheme.type.footnote, color = IosTheme.colors.tertiaryLabel)
                 }
             } else {
-                val pinnedList = displayTags.filter { it.displayName.lowercase() in pinnedLowerSet }
-                val regularList = displayTags.filterNot { it.displayName.lowercase() in pinnedLowerSet }
+                displayTags.forEach { tag ->
+                    val key = tag.displayName.lowercase()
+                    val isPinned = key in pinnedLowerSet
+                    val selected = selectedTag.equals(tag.displayName, ignoreCase = true)
+                    val dragging = draggedTagKey == key
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .zIndex(if (dragging) 2f else 0f)
+                            .onGloballyPositioned { coords ->
+                                itemHeights[key] = coords.size.height.toFloat()
+                            }
+                            .graphicsLayer {
+                                translationY = if (dragging) dragDeltaY else 0f
+                                scaleX = if (dragging) 1.03f else 1f
+                                scaleY = if (dragging) 1.03f else 1f
+                                shadowElevation = if (dragging) 8.dp.toPx() else 0f
+                            }
+                            .clip(RoundedCornerShape(9.dp))
+                            .background(
+                                when {
+                                    dragging || selected -> IosTheme.colors.accent.copy(alpha = 0.14f)
+                                    isPinned -> IosTheme.colors.accent.copy(alpha = 0.06f)
+                                    else -> IosTheme.colors.groupedBackground.copy(alpha = 0.55f)
+                                },
+                            )
+                            .border(
+                                0.7.dp,
+                                when {
+                                    dragging || selected -> IosTheme.colors.accent.copy(alpha = 0.45f)
+                                    isPinned -> IosTheme.colors.accent.copy(alpha = 0.22f)
+                                    else -> Color.Transparent
+                                },
+                                RoundedCornerShape(9.dp),
+                            )
+                            .pointerInput(key, canDrag) {
+                                if (!canDrag) return@pointerInput
+                                detectDragGesturesAfterLongPress(
+                                    onDragStart = {
+                                        draggedTagKey = key
+                                        dragDeltaY = 0f
+                                        haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                                    },
+                                    onDrag = { change, amount ->
+                                        if (draggedTagKey != key) return@detectDragGesturesAfterLongPress
+                                        change.consume()
+                                        dragDeltaY += amount.y
+                                        val fromIdx = workingTags.indexOfFirst { it.displayName.equals(tag.displayName, ignoreCase = true) }
+                                        if (fromIdx < 0) return@detectDragGesturesAfterLongPress
+                                        val step = (itemHeights[key] ?: 34f) + 3.dp.toPx()
+                                        if (dragDeltaY > step * 0.55f && fromIdx < workingTags.lastIndex) {
+                                            workingTags.add(fromIdx + 1, workingTags.removeAt(fromIdx))
+                                            dragDeltaY -= step
+                                            haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                                        } else if (dragDeltaY < -step * 0.55f && fromIdx > 0) {
+                                            workingTags.add(fromIdx - 1, workingTags.removeAt(fromIdx))
+                                            dragDeltaY += step
+                                            haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                                        }
+                                    },
+                                    onDragEnd = {
+                                        if (draggedTagKey == key) {
+                                            val newOrder = workingTags.map { it.displayName }
+                                            draggedTagKey = null
+                                            dragDeltaY = 0f
+                                            onSaveOrder(newOrder)
+                                        }
+                                    },
+                                    onDragCancel = {
+                                        draggedTagKey = null
+                                        dragDeltaY = 0f
+                                        workingTags.clear()
+                                        workingTags.addAll(arrangedTags)
+                                    },
+                                )
+                            }
+                            .clickable(enabled = draggedTagKey == null) { onSelectTag(tag.displayName) }
+                            .padding(horizontal = 8.dp, vertical = 6.5.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(6.dp),
+                    ) {
+                        ForumTagIcon(tag = tag.displayName, size = 13.dp, fallbackHash = true)
+                        Text(
+                            text = tag.displayName,
+                            style = IosTheme.type.footnote.copy(
+                                fontSize = 12.5.sp,
+                                fontWeight = if (selected || isPinned) FontWeight.SemiBold else FontWeight.Normal,
+                            ),
+                            color = if (selected) IosTheme.colors.accent else IosTheme.colors.label,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                            modifier = Modifier.weight(1f),
+                        )
+                        if (tag.effectiveCount > 0 && !dragging) {
+                            Text(
+                                text = formatHomeFilterTagCount(tag.effectiveCount),
+                                style = IosTheme.type.caption.copy(fontSize = 10.sp),
+                                color = IosTheme.colors.tertiaryLabel,
+                            )
+                        }
+                        if (selected) {
+                            Text("✓", color = IosTheme.colors.accent, fontWeight = FontWeight.Bold, fontSize = 12.sp)
+                        }
+                        Box(
+                            modifier = Modifier
+                                .size(22.dp)
+                                .clip(RoundedCornerShape(6.dp))
+                                .clickable(role = Role.Button, onClickLabel = if (isPinned) "取消置顶" else "置顶") {
+                                    onTogglePin(tag.displayName)
+                                },
+                            contentAlignment = Alignment.Center,
+                        ) {
+                            PinGlyph(
+                                color = if (isPinned) IosTheme.colors.accent else IosTheme.colors.tertiaryLabel.copy(alpha = 0.35f),
+                                size = 11.dp,
+                            )
+                        }
+                    }
+                }
+            }
+        }
 
-                if (pinnedList.isNotEmpty()) {
+        IosFullDivider()
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 9.dp, vertical = 5.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.SpaceBetween,
+        ) {
+            Text(
+                text = "长按拖动排序，松手固定",
+                style = IosTheme.type.caption.copy(fontSize = 10.sp),
+                color = IosTheme.colors.tertiaryLabel,
+            )
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
+                if (tagOrder.isNotEmpty()) {
                     Text(
-                        text = "已置顶",
+                        text = "重置排序",
                         style = IosTheme.type.caption.copy(fontSize = 10.5.sp, fontWeight = FontWeight.SemiBold),
                         color = IosTheme.colors.accent,
+                        modifier = Modifier
+                            .clip(RoundedCornerShape(5.dp))
+                            .clickable { onResetOrder() }
+                            .padding(horizontal = 3.dp, vertical = 1.dp),
                     )
-                    FlowRow(
-                        horizontalArrangement = Arrangement.spacedBy(5.dp),
-                        verticalArrangement = Arrangement.spacedBy(5.dp),
-                    ) {
-                        pinnedList.forEach { tag ->
-                            HomeTagOptionChip(
-                                tag = tag,
-                                selected = selectedTag.equals(tag.displayName, ignoreCase = true),
-                                pinned = true,
-                                onClick = { onSelectTag(tag.displayName) },
-                            )
-                        }
-                    }
                 }
-
-                if (trimmed.isEmpty() && categorySuggested.isNotEmpty() && selectedCategory != null) {
+                if (activeFilterCount > 0) {
                     Text(
-                        text = "「${HomeFilterResolver.baseCategoryName(selectedCategory.name)}」常用",
+                        text = "清空",
                         style = IosTheme.type.caption.copy(fontSize = 10.5.sp, fontWeight = FontWeight.SemiBold),
-                        color = IosTheme.colors.secondaryLabel,
-                    )
-                    FlowRow(
-                        horizontalArrangement = Arrangement.spacedBy(5.dp),
-                        verticalArrangement = Arrangement.spacedBy(5.dp),
-                    ) {
-                        categorySuggested.forEach { tag ->
-                            HomeTagOptionChip(
-                                tag = tag,
-                                selected = selectedTag.equals(tag.displayName, ignoreCase = true),
-                                pinned = tag.displayName.lowercase() in pinnedLowerSet,
-                                onClick = { onSelectTag(tag.displayName) },
-                            )
-                        }
-                    }
-                }
-
-                Text(
-                    text = if (trimmed.isEmpty()) "热门标签" else "匹配标签",
-                    style = IosTheme.type.caption.copy(fontSize = 10.5.sp, fontWeight = FontWeight.SemiBold),
-                    color = IosTheme.colors.secondaryLabel,
-                )
-
-                if (regularList.isEmpty() && pinnedList.isEmpty()) {
-                    Box(Modifier.fillMaxWidth().padding(vertical = 18.dp), contentAlignment = Alignment.Center) {
-                        Text("没有匹配的标签", style = IosTheme.type.footnote, color = IosTheme.colors.tertiaryLabel)
-                    }
-                } else {
-                    FlowRow(
-                        horizontalArrangement = Arrangement.spacedBy(5.dp),
-                        verticalArrangement = Arrangement.spacedBy(5.dp),
-                    ) {
-                        regularList.forEach { tag ->
-                            HomeTagOptionChip(
-                                tag = tag,
-                                selected = selectedTag.equals(tag.displayName, ignoreCase = true),
-                                pinned = false,
-                                onClick = { onSelectTag(tag.displayName) },
-                            )
-                        }
-                    }
-                }
-            }
-        }
-
-        if (manageMode || activeFilterCount > 0) {
-            IosFullDivider()
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(horizontal = 9.dp, vertical = 5.dp),
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.SpaceBetween,
-            ) {
-                if (manageMode) {
-                    Text(
-                        text = "点图钉置顶，↑↓调序",
-                        style = IosTheme.type.caption.copy(fontSize = 10.5.sp),
-                        color = IosTheme.colors.tertiaryLabel,
-                    )
-                    if (tagOrder.isNotEmpty()) {
-                        Text(
-                            text = "恢复默认",
-                            style = IosTheme.type.caption.copy(fontSize = 11.sp, fontWeight = FontWeight.SemiBold),
-                            color = IosTheme.colors.accent,
-                            modifier = Modifier
-                                .clip(RoundedCornerShape(6.dp))
-                                .clickable { onResetOrder() }
-                                .padding(horizontal = 4.dp, vertical = 2.dp),
-                        )
-                    }
-                } else {
-                    Text(
-                        text = "已选 $activeFilterCount 项",
-                        style = IosTheme.type.caption.copy(fontSize = 11.sp),
-                        color = IosTheme.colors.secondaryLabel,
-                    )
-                    Text(
-                        text = "清空筛选",
-                        style = IosTheme.type.caption.copy(fontSize = 11.5.sp, fontWeight = FontWeight.SemiBold),
                         color = IosTheme.colors.destructive,
                         modifier = Modifier
-                            .clip(RoundedCornerShape(6.dp))
-                            .clickable {
-                                manageMode = false
-                                onClearAll()
-                            }
-                            .padding(horizontal = 5.dp, vertical = 2.dp),
+                            .clip(RoundedCornerShape(5.dp))
+                            .clickable(onClick = onClearAll)
+                            .padding(horizontal = 3.dp, vertical = 1.dp),
                     )
                 }
             }
-        }
-    }
-}
-
-/** 下拉栏内整理操作组：置顶图钉 + 上移 + 下移。 */
-@Composable
-private fun PinOrderControls(
-    pinned: Boolean,
-    canMoveUp: Boolean,
-    canMoveDown: Boolean,
-    onTogglePin: () -> Unit,
-    onMoveUp: () -> Unit,
-    onMoveDown: () -> Unit,
-) {
-    Row(
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(2.dp),
-    ) {
-        Box(
-            modifier = Modifier
-                .size(24.dp)
-                .clip(RoundedCornerShape(6.dp))
-                .background(if (pinned) IosTheme.colors.accent.copy(alpha = 0.16f) else Color.Transparent)
-                .clickable(role = Role.Button, onClickLabel = if (pinned) "取消置顶" else "置顶", onClick = onTogglePin),
-            contentAlignment = Alignment.Center,
-        ) {
-            PinGlyph(
-                color = if (pinned) IosTheme.colors.accent else IosTheme.colors.tertiaryLabel,
-                size = 12.dp,
-            )
-        }
-        Box(
-            modifier = Modifier
-                .size(22.dp)
-                .clip(RoundedCornerShape(6.dp))
-                .clickable(enabled = canMoveUp, role = Role.Button, onClickLabel = "上移", onClick = onMoveUp),
-            contentAlignment = Alignment.Center,
-        ) {
-            Text(
-                text = "↑",
-                fontSize = 12.sp,
-                fontWeight = FontWeight.Bold,
-                color = if (canMoveUp) IosTheme.colors.label else IosTheme.colors.tertiaryLabel.copy(alpha = 0.3f),
-            )
-        }
-        Box(
-            modifier = Modifier
-                .size(22.dp)
-                .clip(RoundedCornerShape(6.dp))
-                .clickable(enabled = canMoveDown, role = Role.Button, onClickLabel = "下移", onClick = onMoveDown),
-            contentAlignment = Alignment.Center,
-        ) {
-            Text(
-                text = "↓",
-                fontSize = 12.sp,
-                fontWeight = FontWeight.Bold,
-                color = if (canMoveDown) IosTheme.colors.label else IosTheme.colors.tertiaryLabel.copy(alpha = 0.3f),
-            )
         }
     }
 }
@@ -1507,58 +1436,6 @@ private fun PinGlyph(color: Color, size: Dp = 12.dp) {
             }
             drawPath(head, color, style = stroke)
             drawLine(color, Offset(7.2f, 16.8f), Offset(3.5f, 20.5f), strokeWidth = 2.1f, cap = StrokeCap.Round)
-        }
-    }
-}
-
-@Composable
-private fun HomeTagOptionChip(
-    tag: DiscourseTag,
-    selected: Boolean,
-    pinned: Boolean = false,
-    onClick: () -> Unit,
-) {
-    val shape = RoundedCornerShape(8.dp)
-    Row(
-        modifier = Modifier
-            .clip(shape)
-            .background(
-                when {
-                    selected -> IosTheme.colors.accent.copy(alpha = 0.14f)
-                    pinned -> IosTheme.colors.accent.copy(alpha = 0.06f)
-                    else -> IosTheme.colors.groupedBackground
-                },
-            )
-            .border(
-                0.7.dp,
-                when {
-                    selected -> IosTheme.colors.accent.copy(alpha = 0.45f)
-                    pinned -> IosTheme.colors.accent.copy(alpha = 0.25f)
-                    else -> IosTheme.colors.separator.copy(alpha = 0.35f)
-                },
-                shape,
-            )
-            .clickable(role = Role.Button, onClick = onClick)
-            .padding(horizontal = 8.dp, vertical = 5.dp),
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(4.dp),
-    ) {
-        ForumTagIcon(tag = tag.displayName, size = 12.dp, fallbackHash = true)
-        Text(
-            text = tag.displayName,
-            style = IosTheme.type.caption.copy(
-                fontSize = 12.sp,
-                fontWeight = if (selected || pinned) FontWeight.SemiBold else FontWeight.Normal,
-            ),
-            color = if (selected) IosTheme.colors.accent else IosTheme.colors.label,
-            maxLines = 1,
-        )
-        if (tag.effectiveCount > 0) {
-            Text(
-                text = formatHomeFilterTagCount(tag.effectiveCount),
-                style = IosTheme.type.caption.copy(fontSize = 10.sp),
-                color = IosTheme.colors.tertiaryLabel,
-            )
         }
     }
 }

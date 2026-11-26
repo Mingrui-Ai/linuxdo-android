@@ -7087,9 +7087,18 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun saveCategoryOrder(ids: List<Long>) {
+        // 拖动排序后同步更新已置顶项之间的相对顺序，确保松手即按新顺序固定。
+        val pinnedSet = store.loadPinnedCategoryIds().toSet()
+        if (pinnedSet.isNotEmpty()) {
+            val reorderedPins = ids.filter { it in pinnedSet }
+            if (reorderedPins.isNotEmpty()) store.savePinnedCategoryIds(reorderedPins)
+        }
         store.saveCategoryOrder(ids)
         _categories.update { current ->
-            current.copy(order = store.loadCategoryOrder())
+            current.copy(
+                order = store.loadCategoryOrder(),
+                pinnedIds = store.loadPinnedCategoryIds(),
+            )
         }
     }
 
@@ -7176,6 +7185,21 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 store.saveTagOrder(names)
                 _tags.update { it.copy(order = store.loadTagOrder()) }
             }
+        }
+    }
+
+    fun saveTagOrder(tags: List<String>) {
+        val pinnedLower = store.loadPinnedTags().map { it.lowercase() }.toSet()
+        if (pinnedLower.isNotEmpty()) {
+            val reorderedPins = tags.filter { it.lowercase() in pinnedLower }
+            if (reorderedPins.isNotEmpty()) store.savePinnedTags(reorderedPins)
+        }
+        store.saveTagOrder(tags)
+        _tags.update {
+            it.copy(
+                order = store.loadTagOrder(),
+                pinnedTags = store.loadPinnedTags(),
+            )
         }
     }
 
