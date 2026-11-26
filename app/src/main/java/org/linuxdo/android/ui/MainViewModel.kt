@@ -143,22 +143,14 @@ import org.linuxdo.android.ui.screen.TopicListUiState
 import org.linuxdo.android.data.TopicSearchHit
 import org.linuxdo.android.data.TopicMetadata
 import org.linuxdo.android.data.TopicEditRules
+import org.linuxdo.android.data.EnhancedUpdates
 import org.linuxdo.android.data.TopicMetadataPatch
 import org.linuxdo.android.data.topicMetadataPatch
 import org.linuxdo.android.data.validateTopicMetadata
 
 enum class Screen { Boot, Login, Verify, List }
 
-data class UpdateInfo(
-    val latestVersion: String,
-    val title: String,
-    val changelog: String,
-    val downloadUrl: String,
-    val releasePageUrl: String,
-    val mandatory: Boolean,
-    /** 发布清单里的可选校验和；为空表示不校验，只有 version.json 路径会带上它。 */
-    val apkSha256: String? = null,
-)
+typealias UpdateInfo = org.linuxdo.android.data.EnhancedUpdate
 
 /** 应用内下载安装的阶段。 */
 enum class ApkUpdateStage { Idle, Downloading, Verifying, AwaitingPermission, Installing, Failed }
@@ -2146,9 +2138,21 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             return null
         }
         val prefs = container.preferences
+        if (prefs.getString("cached_update_source", null) != "enhanced:${BuildConfig.APPLICATION_ID}") {
+            clearCachedUpdateInfo()
+            prefs.edit { remove("ignored_update_version") }
+            return null
+        }
         val latestVersion = prefs.getString("cached_update_version", null)?.takeIf { it.isNotBlank() } ?: return null
         val currentVersion = BuildConfig.VERSION_NAME.substringBefore("-")
-        if (compareVersions(latestVersion, currentVersion) <= 0) {
+        val code = prefs.getInt("cached_update_code", 0)
+        val url = prefs.getString("cached_update_download_url", "").orEmpty()
+        val sha256 = prefs.getString("cached_update_apk_sha256", null)
+        if (!EnhancedUpdates.trustedDownload(latestVersion, url, sha256, BuildConfig.APPLICATION_ID) ||
+            prefs.getString("cached_update_release_url", "") != EnhancedUpdates.releaseUrl(latestVersion) ||
+            (code > 0 && code <= BuildConfig.VERSION_CODE) ||
+            EnhancedUpdates.compareVersions(latestVersion, currentVersion) < 0 ||
+            (code == 0 && EnhancedUpdates.compareVersions(latestVersion, currentVersion) == 0)) {
             clearCachedUpdateInfo()
             return null
         }
@@ -2159,12 +2163,15 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             downloadUrl = prefs.getString("cached_update_download_url", "").orEmpty(),
             releasePageUrl = prefs.getString("cached_update_release_url", "").orEmpty(),
             mandatory = prefs.getBoolean("cached_update_mandatory", false),
-            apkSha256 = prefs.getString("cached_update_apk_sha256", null),
+            apkSha256 = sha256,
+            versionCode = code,
         )
     }
 
     private fun saveCachedUpdateInfo(info: UpdateInfo) {
         container.preferences.edit {
+            putString("cached_update_source", "enhanced:${BuildConfig.APPLICATION_ID}")
+            putInt("cached_update_code", info.versionCode)
             putString("cached_update_version", info.latestVersion)
             putString("cached_update_title", info.title)
             putString("cached_update_changelog", info.changelog)
@@ -2178,6 +2185,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     private fun clearCachedUpdateInfo() {
         container.preferences.edit {
+            remove("cached_update_source")
+            remove("cached_update_code")
             remove("cached_update_version")
             remove("cached_update_title")
             remove("cached_update_changelog")
@@ -2209,6 +2218,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     )
     val updateState: StateFlow<UpdateUiState> = _updateState.asStateFlow()
 
+    private var lastAutomaticUpdateCheckAt: Long? = null
+    private var lastPromptedUpdateVersion: String? = null
     private var apkUpdateJob: Job? = null
     private var pendingApkFile: File? = null
 
@@ -2455,335 +2466,71 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
-    /**
-     * 检查最新版本，优先读取公开仓库根目录的 `version.json` 静态版本清单，
-     * 若 `version.json` 不可达则回退至 GitHub Releases 接口。
-     *
-     * 必升级触发规则（满足任一即为必升级）：
-     * 1. `version.json` 中 `forceUpdate: true`
-     * 2. `version.json` 中 `minVersionCode` 大于当前 `versionCode`（或 `minVersionName` 高于当前版本）
-     * 3. 回退 Release 正文包含 `[force]`、`[mandatory]`、`[必升]`、`[min_version: X.Y.Z]` 或 `[min_code: N]`
-     */
+    /** 只读取已发布 Release 的清单；失败时回退同仓库 Release API。 */
     fun checkForUpdates(manual: Boolean = false) {
-        if (!Config.APP_UPDATES_ENABLED) return
-        if (_updateState.value.checking) {
-            if (manual) {
-                viewModelScope.launch(Dispatchers.Main) {
-                    Toast.makeText(getApplication(), "正在检查更新中，请稍候...", Toast.LENGTH_SHORT).show()
-                }
-            }
-            return
+        if (!Config.APP_UPDATES_ENABLED || _updateState.value.checking || apkUpdateJob?.isActive == true) return
+        val now = SystemClock.elapsedRealtime()
+        if (!manual && (lastAutomaticUpdateCheckAt?.let { now - it < 6 * 60 * 60_000L } == true ||
+                _updateState.value.showDialog)) return
+        lastAutomaticUpdateCheckAt = now
+        _updateState.update {
+            it.copy(checking = true, manualChecking = manual,
+                statusMessage = if (manual) "正在检查增强版更新..." else it.statusMessage)
         }
         viewModelScope.launch {
-            _updateState.update {
-                it.copy(
-                    checking = true,
-                    manualChecking = manual,
-                    statusMessage = if (manual) "正在检查新版本..." else it.statusMessage,
-                )
-            }
             try {
                 val currentVersion = _updateState.value.currentVersion
                 val currentCode = _updateState.value.currentVersionCode
                 val info = withContext(Dispatchers.IO) {
-                    for (manifestUrl in Config.UPDATE_VERSION_JSON_URLS) {
-                        val manifestJson = runCatching {
-                            val req = Request.Builder()
-                                .url(manifestUrl)
-                                .header("Accept", "application/vnd.github.raw+json, application/json;q=0.9")
-                                .header("Cache-Control", "no-cache")
-                                .header("User-Agent", container.userAgent)
-                                .get()
-                                .build()
-                            container.httpClient.newCall(req).execute().use { resp ->
-                                if (!resp.isSuccessful) {
-                                    throw HttpStatusException(resp.code, "Manifest HTTP ${resp.code}")
-                                }
-                                resp.body?.string().orEmpty()
-                            }
-                        }.getOrNull()
-                        if (!manifestJson.isNullOrBlank()) {
-                            val (parsed, manifestInfo) = parseVersionManifest(manifestJson, currentVersion, currentCode)
-                            if (parsed) {
-                                return@withContext manifestInfo
-                            }
+                    val client = ApkUpdateInstaller.updateClient(getApplication<Application>())
+                    fun fetch(url: String): String {
+                        val req = Request.Builder().url(url)
+                            .header("Accept", "application/json")
+                            .header("Cache-Control", "no-cache")
+                            .header("User-Agent", "LinuxDo-Enhanced/${BuildConfig.VERSION_NAME}").get().build()
+                        return client.newCall(req).execute().use { response ->
+                            if (!response.isSuccessful) throw HttpStatusException(response.code, "Update HTTP ${response.code}")
+                            response.body?.string().orEmpty()
                         }
                     }
-
-                    val (_, localManifestInfo) = parseVersionManifest(
-                        Config.FALLBACK_VERSION_MANIFEST_JSON,
-                        currentVersion,
-                        currentCode,
-                    )
-                    if (localManifestInfo != null) {
-                        return@withContext localManifestInfo
+                    for (url in Config.UPDATE_VERSION_JSON_URLS) {
+                        try {
+                            return@withContext EnhancedUpdates.manifest(fetch(url), BuildConfig.APPLICATION_ID, currentVersion, currentCode)
+                        } catch (error: CancellationException) { throw error }
+                        catch (_: Exception) { /* 发布清单不可用时，检查相同仓库的已发布资产。 */ }
                     }
-
-                    val apiJson = runCatching {
-                        val req = Request.Builder()
-                            .url(Config.UPDATE_RELEASES_API_URL)
-                            .header("Accept", "application/vnd.github+json")
-                            .header("User-Agent", container.userAgent)
-                            .get()
-                            .build()
-                        container.httpClient.newCall(req).execute().use { resp ->
-                            if (!resp.isSuccessful) {
-                                throw HttpStatusException(resp.code, "GitHub API HTTP ${resp.code}")
-                            }
-                            resp.body?.string().orEmpty()
-                        }
-                    }.getOrNull()
-
-                    if (!apiJson.isNullOrBlank()) {
-                        parseReleaseUpdateInfo(apiJson, currentVersion, currentCode)
-                    } else {
-                        // 兜底：若 api.github.com 触发匿名限流或连接受阻，直接请求 GitHub Releases 页面利用 302 重定向提取最新 tag。
-                        val req = Request.Builder()
-                            .url(Config.UPDATE_RELEASES_PAGE_URL)
-                            .header("Accept", "text/html,application/xhtml+xml")
-                            .header("User-Agent", container.userAgent)
-                            .get()
-                            .build()
-                        container.httpClient.newCall(req).execute().use { resp ->
-                            if (!resp.isSuccessful) {
-                                throw HttpStatusException(resp.code, "GitHub Releases HTTP ${resp.code}")
-                            }
-                            val finalUrl = resp.request.url.toString()
-                            val html = resp.body?.string().orEmpty()
-                            parseReleaseHtmlFallback(finalUrl, html, currentVersion, currentCode)
-                        }
-                    }
+                    EnhancedUpdates.release(fetch(Config.UPDATE_RELEASES_API_URL), BuildConfig.APPLICATION_ID, currentVersion)
                 }
                 if (info != null) {
                     saveCachedUpdateInfo(info)
-                    val ignoredVersion = container.preferences.getString("ignored_update_version", null)
-                    val shouldPopup = info.mandatory || manual || ignoredVersion != info.latestVersion
-                    diagnostics.log("检测到新版本: v${info.latestVersion} (必升=${info.mandatory})")
+                    val ignored = container.preferences.getString("ignored_update_version", null)
+                    val shouldPopup = manual || info.mandatory ||
+                        (ignored != info.latestVersion && lastPromptedUpdateVersion != info.latestVersion)
+                    if (shouldPopup) lastPromptedUpdateVersion = info.latestVersion
+                    diagnostics.log("检测到增强版更新: v${info.latestVersion}")
                     _updateState.update {
-                        it.copy(
-                            checking = false,
-                            manualChecking = false,
-                            updateInfo = info,
-                            showDialog = shouldPopup,
-                            statusMessage = "发现新版本 v${info.latestVersion}",
-                        )
+                        it.copy(checking = false, manualChecking = false, updateInfo = info,
+                            showDialog = shouldPopup || it.showDialog, statusMessage = "发现增强版 v${info.latestVersion}")
                     }
                 } else {
                     clearCachedUpdateInfo()
-                    diagnostics.log("版本检查完成: 当前已是最新 (v$currentVersion)")
                     _updateState.update {
-                        it.copy(
-                            checking = false,
-                            manualChecking = false,
-                            updateInfo = null,
-                            showDialog = false,
-                            statusMessage = if (manual) "当前已是最新版本 (v$currentVersion)" else null,
-                        )
+                        it.copy(checking = false, manualChecking = false, updateInfo = null,
+                            showDialog = false, statusMessage = "当前已是最新版本 (v$currentVersion)")
                     }
-                    if (manual) {
-                        withContext(Dispatchers.Main) {
-                            Toast.makeText(getApplication(), "当前已是最新版本 (v$currentVersion)", Toast.LENGTH_SHORT).show()
-                        }
-                    }
+                    if (manual) Toast.makeText(getApplication(), "当前已是最新版本 (v$currentVersion)", Toast.LENGTH_SHORT).show()
                 }
             } catch (error: CancellationException) {
+                _updateState.update { it.copy(checking = false, manualChecking = false) }
                 throw error
             } catch (error: Exception) {
-                diagnostics.log("检查更新失败: ${error.message}")
+                diagnostics.log("检查增强版更新失败: ${error.javaClass.simpleName}")
                 _updateState.update {
-                    it.copy(
-                        checking = false,
-                        manualChecking = false,
-                        statusMessage = if (manual) "检查更新失败，请稍后重试" else it.statusMessage,
-                    )
+                    it.copy(checking = false, manualChecking = false, statusMessage = "检查更新失败，请稍后重试")
                 }
-                if (manual) {
-                    withContext(Dispatchers.Main) {
-                        Toast.makeText(getApplication(), "检查更新失败，请检查网络", Toast.LENGTH_SHORT).show()
-                    }
-                }
+                if (manual) Toast.makeText(getApplication(), "检查更新失败，请检查网络或打开增强版发布页", Toast.LENGTH_SHORT).show()
             }
         }
-    }
-
-    private fun parseVersionManifest(
-        rawJson: String,
-        currentVersion: String,
-        currentCode: Int,
-    ): Pair<Boolean, UpdateInfo?> {
-        val outer = runCatching { Json.parseToJsonElement(rawJson).jsonObject }.getOrNull() ?: return false to null
-        val root = if (outer["versionName"] == null && outer["encoding"]?.jsonPrimitive?.contentOrNull == "base64") {
-            val encoded = outer["content"]?.jsonPrimitive?.contentOrNull.orEmpty()
-            val decoded = runCatching {
-                String(android.util.Base64.decode(encoded, android.util.Base64.DEFAULT), Charsets.UTF_8)
-            }.getOrNull().orEmpty()
-            runCatching { Json.parseToJsonElement(decoded).jsonObject }.getOrNull() ?: return false to null
-        } else {
-            outer
-        }
-
-        val latestVersion = root["versionName"]?.jsonPrimitive?.contentOrNull
-            ?.removePrefix("v")?.removePrefix("V")?.substringBefore("-")?.trim().orEmpty()
-        if (latestVersion.isEmpty()) return false to null
-
-        val latestCode = root["versionCode"]?.jsonPrimitive?.contentOrNull?.toIntOrNull() ?: 0
-        val isNewer = if (latestCode > 0 && currentCode > 0) {
-            latestCode > currentCode || compareVersions(latestVersion, currentVersion) > 0
-        } else {
-            compareVersions(latestVersion, currentVersion) > 0
-        }
-        if (!isNewer) return true to null
-
-        val title = root["title"]?.jsonPrimitive?.contentOrNull?.takeIf { it.isNotBlank() }
-            ?: "v$latestVersion 版本更新"
-        val changelogElement = root["changelog"]
-        val changelog = when {
-            changelogElement == null -> ""
-            runCatching { changelogElement.jsonArray }.isSuccess -> {
-                changelogElement.jsonArray
-                    .mapNotNull { runCatching { it.jsonPrimitive.contentOrNull?.trim() }.getOrNull() }
-                    .filter { it.isNotEmpty() }
-                    .joinToString("\n")
-            }
-            else -> runCatching { changelogElement.jsonPrimitive.contentOrNull?.trim().orEmpty() }.getOrDefault("")
-        }.ifBlank { "优化使用体验并修复已知问题。" }
-
-        val forceUpdate = root["forceUpdate"]?.jsonPrimitive?.contentOrNull?.toBooleanStrictOrNull() ?: false
-        val minVersionCode = root["minVersionCode"]?.jsonPrimitive?.contentOrNull?.toIntOrNull()
-        val minVersionName = root["minVersionName"]?.jsonPrimitive?.contentOrNull
-            ?.removePrefix("v")?.removePrefix("V")?.trim()
-        val mandatory = forceUpdate ||
-            (minVersionCode != null && currentCode < minVersionCode) ||
-            (!minVersionName.isNullOrBlank() && compareVersions(currentVersion, minVersionName) < 0)
-
-        val apkUrl = root["apkUrl"]?.jsonPrimitive?.contentOrNull?.takeIf { it.isNotBlank() }
-            ?: Config.UPDATE_RELEASES_PAGE_URL
-        val releasePageUrl = root["releasePageUrl"]?.jsonPrimitive?.contentOrNull?.takeIf { it.isNotBlank() }
-            ?: Config.UPDATE_RELEASES_PAGE_URL
-        // 可选校验和：留空或缺省即跳过校验，不阻塞发版。
-        val apkSha256 = root["apkSha256"]?.jsonPrimitive?.contentOrNull?.trim()?.takeIf { it.isNotEmpty() }
-
-        return true to UpdateInfo(
-            latestVersion = latestVersion,
-            title = title,
-            changelog = changelog,
-            downloadUrl = apkUrl,
-            releasePageUrl = releasePageUrl,
-            mandatory = mandatory,
-            apkSha256 = apkSha256,
-        )
-    }
-
-    private fun parseReleaseUpdateInfo(
-        rawJson: String,
-        currentVersion: String,
-        currentCode: Int,
-    ): UpdateInfo? {
-        val root = runCatching { Json.parseToJsonElement(rawJson).jsonObject }.getOrNull() ?: return null
-        val tagName = root["tag_name"]?.jsonPrimitive?.contentOrNull?.trim().orEmpty()
-        val latestVersion = tagName.removePrefix("v").removePrefix("V").trim()
-        if (latestVersion.isEmpty() || compareVersions(latestVersion, currentVersion) <= 0) {
-            return null
-        }
-        val releaseName = root["name"]?.jsonPrimitive?.contentOrNull?.takeIf { it.isNotBlank() }
-            ?: "v$latestVersion 版本更新"
-        val htmlUrl = root["html_url"]?.jsonPrimitive?.contentOrNull?.takeIf { it.isNotBlank() }
-            ?: Config.UPDATE_RELEASES_PAGE_URL
-        val assets = root["assets"]?.jsonArray.orEmpty()
-        val apkUrl = assets.firstNotNullOfOrNull { element ->
-            val obj = element.jsonObject
-            val name = obj["name"]?.jsonPrimitive?.contentOrNull.orEmpty()
-            val url = obj["browser_download_url"]?.jsonPrimitive?.contentOrNull.orEmpty()
-            if (name.endsWith(".apk", ignoreCase = true) && url.isNotBlank()) url else null
-        } ?: htmlUrl
-
-        val rawBody = root["body"]?.jsonPrimitive?.contentOrNull.orEmpty()
-        return buildUpdateInfo(latestVersion, releaseName, rawBody, apkUrl, htmlUrl, currentVersion, currentCode)
-    }
-
-    private fun parseReleaseHtmlFallback(
-        finalUrl: String,
-        html: String,
-        currentVersion: String,
-        currentCode: Int,
-    ): UpdateInfo? {
-        val tagName = finalUrl.substringAfter("/releases/tag/", "").substringBefore("?").substringBefore("#").trim()
-            .ifBlank {
-                Regex("""/releases/tag/(v?[0-9][^"'/\s<>]*)""").find(html)?.groupValues?.getOrNull(1).orEmpty()
-            }
-        val latestVersion = tagName.removePrefix("v").removePrefix("V").substringBefore("-").trim()
-        if (latestVersion.isEmpty() || compareVersions(latestVersion, currentVersion) <= 0) {
-            return null
-        }
-        val repoBase = Config.UPDATE_RELEASES_PAGE_URL.substringBefore("/releases")
-        val apkUrl = "$repoBase/releases/download/$tagName/linuxdo-$latestVersion-release.apk"
-        val bodyText = runCatching {
-            org.jsoup.Jsoup.parse(html).select(".markdown-body").firstOrNull()?.wholeText()?.trim().orEmpty()
-        }.getOrDefault("")
-        return buildUpdateInfo(
-            latestVersion = latestVersion,
-            releaseName = "v$latestVersion 版本更新",
-            rawBody = bodyText,
-            apkUrl = apkUrl,
-            htmlUrl = finalUrl.ifBlank { Config.UPDATE_RELEASES_PAGE_URL },
-            currentVersion = currentVersion,
-            currentCode = currentCode,
-        )
-    }
-
-    private fun buildUpdateInfo(
-        latestVersion: String,
-        releaseName: String,
-        rawBody: String,
-        apkUrl: String,
-        htmlUrl: String,
-        currentVersion: String,
-        currentCode: Int,
-    ): UpdateInfo {
-        val hasForceFlag = Regex("""\[(force|mandatory|必升)]|force_update\s*:\s*true""", RegexOption.IGNORE_CASE)
-            .containsMatchIn(rawBody)
-        val minVersionMatch = Regex("""\[min_version\s*:\s*v?([0-9.]+)]""", RegexOption.IGNORE_CASE)
-            .find(rawBody)?.groupValues?.getOrNull(1)
-        val minCodeMatch = Regex("""\[min_code\s*:\s*(\d+)]""", RegexOption.IGNORE_CASE)
-            .find(rawBody)?.groupValues?.getOrNull(1)?.toIntOrNull()
-        val belowMinVersion = minVersionMatch != null && compareVersions(currentVersion, minVersionMatch) < 0
-        val belowMinCode = minCodeMatch != null && currentCode < minCodeMatch
-        val mandatory = hasForceFlag || belowMinVersion || belowMinCode
-
-        val cleanChangelog = rawBody
-            .replace(Regex("""\[(force|mandatory|必升)]""", RegexOption.IGNORE_CASE), "")
-            .replace(Regex("""\[min_version\s*:\s*v?[0-9.]+]""", RegexOption.IGNORE_CASE), "")
-            .replace(Regex("""\[min_code\s*:\s*\d+]""", RegexOption.IGNORE_CASE), "")
-            .trim()
-            .ifBlank { "优化使用体验并修复已知问题。" }
-
-        return UpdateInfo(
-            latestVersion = latestVersion,
-            title = releaseName,
-            changelog = cleanChangelog,
-            downloadUrl = apkUrl,
-            releasePageUrl = htmlUrl,
-            mandatory = mandatory,
-        )
-    }
-
-    private fun compareVersions(v1: String, v2: String): Int {
-        val s1 = v1.removePrefix("v").removePrefix("V").trim()
-        val s2 = v2.removePrefix("v").removePrefix("V").trim()
-        val parts1 = s1.substringBefore("-").split(".").map { it.filter(Char::isDigit).toIntOrNull() ?: 0 }
-        val parts2 = s2.substringBefore("-").split(".").map { it.filter(Char::isDigit).toIntOrNull() ?: 0 }
-        val maxLen = maxOf(parts1.size, parts2.size)
-        for (i in 0 until maxLen) {
-            val a = parts1.getOrElse(i) { 0 }
-            val b = parts2.getOrElse(i) { 0 }
-            if (a != b) return a.compareTo(b)
-        }
-        // 当数字一致时（如 1.3.0 与 1.3.0-beta），正式版高于预发尝鲜版 (SemVer 规范)
-        val isPre1 = s1.contains("beta", ignoreCase = true) || s1.contains("alpha", ignoreCase = true) || s1.contains("preview", ignoreCase = true)
-        val isPre2 = s2.contains("beta", ignoreCase = true) || s2.contains("alpha", ignoreCase = true) || s2.contains("preview", ignoreCase = true)
-        if (!isPre1 && isPre2) return 1
-        if (isPre1 && !isPre2) return -1
-        return 0
     }
 
     private var loginJob: Job? = null
@@ -3596,6 +3343,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         accountSyncJob = viewModelScope.launch {
             delay(1_000L)
             while (isActive) {
+                checkForUpdates(manual = false)
                 if (store.currentUserId() > 0 && !store.sessionChanging && !_accounts.value.switching &&
                     !repository.isRateLimitCoolingDown()) {
                     drainReadOutbox()

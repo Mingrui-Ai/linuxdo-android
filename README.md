@@ -1,12 +1,21 @@
-# LinuxDo 增强版 1.0
+# LinuxDo 增强版 1.1
 
 面向 [LINUX DO](https://linux.do/) 社区的 Android 原生客户端，基于 [xuemk/linuxdo-android](https://github.com/xuemk/linuxdo-android) 继续开发，由 [Mingrui-Ai](https://github.com/Mingrui-Ai) 独立维护，主要优化刷帖、消息聊天和个人主页的使用体验。
 
-> **1.0 首发 · 非官方衍生版本 · 免费且无广告**
+> **1.1 版本 · 非官方衍生版本 · 免费且无广告**
 >
-> [下载增强版 1.0](https://github.com/Mingrui-Ai/linuxdo-android/releases/tag/enhanced-v1.0)。正式源码位于 [`master`](https://github.com/Mingrui-Ai/linuxdo-android/tree/master)，`independent/main` 保持同步。后续仍会持续完善交互体验。
+> [下载增强版 1.1](https://github.com/Mingrui-Ai/linuxdo-android/releases/tag/enhanced-v1.1)。正式源码位于 [`master`](https://github.com/Mingrui-Ai/linuxdo-android/tree/master)，`independent/main` 保持同步。后续仍会持续完善交互体验。
 
 原作者已于 **2026 年 11 月 23 日** [明确同意修改、公开维护源码及免费分发衍生 APK](https://github.com/xuemk/linuxdo-android/issues/15#issuecomment-7101351472)。本项目遵循原项目的非商业、无广告授权条款，保留原作者署名、原仓库链接及 [LICENSE](./LICENSE)。
+
+## 1.1 更新
+
+- 启用本仓库增强版更新提示与应用内下载，正式版和测试版按原包名、签名分别升级；仅在 Release 发布后提供更新。
+
+- 草稿在打开、关闭编辑器时同步，输入期间只保存本机；回复整帖、不同楼层和编辑已有楼层分别保存，减少反复冲突提示及串稿。
+- 输入框默认紧凑，回车或自动换行时增高，保留手动展开；精简内置工具，统一系统返回和空白处关闭。
+- 帖子顶部栏与底色统一，回复排序支持时间正序、倒序及点赞数；首页、分类与标签独立保存排序，搜索保留当前范围。
+- 侧栏固定三排资料，主页和资料弹窗支持显示设置；小程序使用外部浏览器或应用打开，等级与积分支持下拉刷新。
 
 ## 当前开发进展
 
@@ -57,11 +66,11 @@
 
 ## 获取与构建
 
-从 [本仓库 Releases](https://github.com/Mingrui-Ai/linuxdo-android/releases/tag/enhanced-v1.0) 下载 `linuxdo-enhanced-1.0-arm64-v8a.apk`，支持 Android 8.0 及以上的 ARM64 设备。发布页同时提供 SHA-256 校验值、签名证书指纹和源码标签。
+从 [本仓库 Releases](https://github.com/Mingrui-Ai/linuxdo-android/releases/tag/enhanced-v1.1) 下载 `linuxdo-enhanced-1.1-arm64-v8a.apk`，支持 Android 8.0 及以上的 ARM64 设备。发布页同时提供 SHA-256 校验值、签名证书指纹和源码标签。
 
-正式版名称为“LinuxDo 增强版”，版本 `1.0`（versionCode 100），独立包名 `org.linuxdo.android.enhanced`，使用独立签名与蓝绿色 L+ 图标。应用内自动/手动更新检测及 APK 更新下载均已关闭，不接收上游更新；旧测试版缓存的上游更新提示也会清除。后续版本请从“设置 → 增强版发布页”手动获取。
+正式版名称为“LinuxDo 增强版”，版本 `1.1`（versionCode 110），独立包名 `org.linuxdo.android.enhanced`，使用独立签名与蓝绿色 L+ 图标。从 1.1 起启用增强版更新检查：启动及前台使用时检查已发布版本，同一次运行内自动检查间隔至少 6 小时，也可点击设置中的版本行手动检查。更新仅来自本仓库已公开的稳定 Release，不读取上游或未发布分支；正式版与测试版分别下载相同包名的安装包，校验 SHA-256、包名、递增版本号和原签名后交给系统确认安装。旧上游更新缓存会清除；检查失败会显示失败状态，保留“增强版发布页”作为手动下载入口。1.0 因已关闭检查，需要先手动升级到 1.1。
 
-正式版可与原版、测试版并存，首次安装需要重新登录；登录后读取同一账号的网页资料、历史和草稿。本机设置、未同步内容不会自动从测试版迁移，请保留测试版直到确认需要的内容已同步。测试包仍使用 `org.linuxdo.android.debug` 与原调试签名，覆盖安装保留原有测试数据。
+正式版 1.1 沿用 1.0 的包名与签名，可直接覆盖升级并保留数据。正式版可与原版、测试版并存，首次安装需要重新登录；登录后读取同一账号的网页资料、历史和草稿。本机设置、未同步内容不会自动从测试版迁移，请保留测试版直到确认需要的内容已同步。测试包仍使用 `org.linuxdo.android.debug` 与原调试签名，覆盖安装保留原有测试数据。
 
 ### 准备环境
 
@@ -92,6 +101,10 @@ cd linuxdo-android
 只有一台已授权设备时可省略 `-DeviceSerial`。如需代理，通过脚本参数 `-ProxyUrl` 传入本机 HTTP 代理地址，不写入共享配置。安装使用覆盖方式，保留应用数据；手机上的 USB 调试授权与安装确认需手动允许。
 
 macOS / Linux 可使用 `sh ./gradlew :app:assembleDebug` 编译，生成路径相同。
+
+### 发布更新
+
+每次发布递增 `versionCode` / `versionName`，创建 `enhanced-v版本号` 标签；使用原正式签名构建正式包，使用原调试签名构建测试包。稳定 Release 同时附带 `linuxdo-enhanced-版本号-arm64-v8a.apk`、`linuxdo-enhanced-版本号-debug-arm64-v8a.apk` 和 `version.json`。清单中的 `packages` 按包名列出对应 APK 地址与 SHA-256，顶层保留正式包信息；附件全部上传并核验后再公开发布并设为 Latest。应用优先读取最新公开 Release 的清单，失败时读取同仓库 Releases API 的精确文件名与摘要，草稿 Release 不会触发更新。
 
 ### 正式版签名构建
 

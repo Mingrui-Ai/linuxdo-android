@@ -4,6 +4,7 @@ import android.app.PendingIntent
 import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
+import android.content.pm.PackageInfo
 import android.content.pm.PackageInstaller
 import android.content.pm.PackageManager
 import android.net.Uri
@@ -86,8 +87,7 @@ object ApkUpdateInstaller {
     /**
      * 流式下载安装包到 `cacheDir/apk/`,边下边算 SHA-256。
      *
-     * [expectedSha256] 为空时跳过校验(发布清单没填就不阻塞升级);
-     * 填了但不匹配则删除临时文件并返回失败,绝不把来源不明的包交给安装器。
+     * 增强版发布必须提供 SHA-256，校验成功后继续检查包名、版本及已安装签名。
      */
     suspend fun download(
         context: Context,
@@ -95,6 +95,9 @@ object ApkUpdateInstaller {
         expectedSha256: String?,
         onProgress: (downloaded: Long, total: Long) -> Unit,
     ): Result = withContext(Dispatchers.IO) {
+        if (expectedSha256 == null || !Regex("[0-9a-fA-F]{64}").matches(expectedSha256)) {
+            return@withContext Result.Failure("缺少安装包校验信息，请稍后重新检查更新。")
+        }
         val appContext = context.applicationContext
         val diagnostics = (appContext as? App)?.container?.diagnostics
         val target = runCatching { prepareTargetFile(appContext, url) }.getOrElse { error ->
@@ -107,9 +110,7 @@ object ApkUpdateInstaller {
                 .header("User-Agent", resolveDownloadUserAgent(appContext))
                 .get()
                 .build()
-            val networkMode = (appContext as? App)?.container?.networkMode?.value
-                ?: org.linuxdo.android.data.SessionStore(appContext).getNetworkMode()
-            val response = downloadClients.getValue(networkMode)
+            val response = updateClient(appContext)
                 .newCall(request)
                 .execute()
 
@@ -157,8 +158,7 @@ object ApkUpdateInstaller {
                     return@withContext Result.Failure("下载失败：未取到任何数据")
                 }
 
-                // 即使发布通道未提供 SHA-256（如 Releases API 回退路径），若服务端返回了明确大小，
-                // 也必须拦截截断下载，避免把半成品 APK 交给系统安装器报「软件包似乎无效」。
+                // 先拦截截断下载，再校验摘要及安装身份。
                 if (total != TOTAL_UNKNOWN && downloaded != total) {
                     target.delete()
                     diagnostics?.log("[应用内更新] 下载被截断 已接收=${downloaded}B 期望=${total}B url=$url")
@@ -178,6 +178,11 @@ object ApkUpdateInstaller {
                 diagnostics?.log(
                     "[应用内更新] 下载完成 ${downloaded}B 校验=${if (expected != null) "通过" else "未提供"} 文件=${target.name}",
                 )
+                val invalid = validateUpgrade(appContext, target)
+                if (invalid != null) {
+                    target.delete()
+                    return@withContext Result.Failure(invalid)
+                }
                 Result.Success(target)
             }
         } catch (error: Throwable) {
@@ -241,6 +246,40 @@ object ApkUpdateInstaller {
         }
     }
 
+    /** 更新元数据与 APK 使用相同网络选择，不携带论坛 Cookie。 */
+    fun updateClient(context: Context): OkHttpClient {
+        val app = context.applicationContext
+        val mode = (app as? App)?.container?.networkMode?.value
+            ?: org.linuxdo.android.data.SessionStore(app).getNetworkMode()
+        return downloadClients.getValue(mode)
+    }
+
+    @Suppress("DEPRECATION")
+    private fun validateUpgrade(context: Context, file: File): String? = try {
+        val pm = context.packageManager
+        val flags = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) PackageManager.GET_SIGNING_CERTIFICATES
+            else PackageManager.GET_SIGNATURES
+        val apk = pm.getPackageArchiveInfo(file.absolutePath, flags)
+        val installed = pm.getPackageInfo(context.packageName, flags)
+        fun code(info: PackageInfo): Long = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) info.longVersionCode
+            else info.versionCode.toLong()
+        fun signatures(info: PackageInfo): Set<String> {
+            val signers = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) info.signingInfo?.apkContentsSigners
+                else info.signatures
+            return signers.orEmpty().map { signer ->
+                MessageDigest.getInstance("SHA-256").digest(signer.toByteArray())
+                    .joinToString("") { byte -> "%02x".format(byte) }
+            }.toSet()
+        }
+        when {
+            apk == null -> "安装包无法解析，请重新下载。"
+            apk.packageName != context.packageName -> "安装包与当前版本不匹配，已停止安装。"
+            code(apk) <= code(installed) -> "该版本已安装或版本更旧，请重新检查更新。"
+            signatures(apk).isEmpty() || signatures(apk) != signatures(installed) -> "安装包签名与当前应用不一致，已停止安装。"
+            else -> null
+        }
+    } catch (_: Exception) { "无法确认安装包信息，请重新下载。" }
+
     /** Android 8.0 起安装来源是单独的特殊权限,与 Manifest 声明无关。 */
     fun canInstall(context: Context): Boolean {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) return true
@@ -262,6 +301,7 @@ object ApkUpdateInstaller {
     suspend fun install(context: Context, file: File): InstallStartResult = withContext(Dispatchers.IO) {
         if (!file.exists() || file.length() <= 0L) return@withContext InstallStartResult.FailedToStart
         val appContext = context.applicationContext
+        if (validateUpgrade(appContext, file) != null) return@withContext InstallStartResult.FailedToStart
         try {
             val sessionId = installViaPackageInstallerSession(appContext, file)
             InstallStartResult.SessionCommitted(sessionId)

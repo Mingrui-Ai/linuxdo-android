@@ -1,17 +1,32 @@
 {
   "applicationId": "org.linuxdo.android.enhanced",
-  "versionCode": 100,
-  "versionName": "1.0",
-  "updatesEnabled": false,
+  "versionCode": 110,
+  "versionName": "1.1",
+  "updatesEnabled": true,
   "forceUpdate": false,
   "minVersionCode": 1,
-  "title": "LinuxDo 增强版 1.0",
+  "title": "LinuxDo 增强版 1.1",
   "changelog": [
-    "增强版首发：个人侧栏、原生资料编辑、历史与草稿同步、聊天与阅读交互优化。",
-    "使用独立包名和签名，关闭应用内更新，不接收上游更新。"
+    "启用增强版仓库更新提示与下载，正式版和测试版分别覆盖升级，只接收已发布版本。",
+    "草稿仅在编辑器打开与关闭时同步，回复草稿按目标隔离，输入框紧凑并随内容增高。",
+    "优化帖子排序、侧栏资料与主页显示设置，增加独立列表排序和范围搜索，小程序外部打开。"
   ],
-  "apkUrl": "https://github.com/Mingrui-Ai/linuxdo-android/releases/download/enhanced-v1.0/linuxdo-enhanced-1.0-arm64-v8a.apk",
-  "releasePageUrl": "https://github.com/Mingrui-Ai/linuxdo-android/releases/tag/enhanced-v1.0",
-  "apkSha256": "e2da5a2c2fe408817a3019edd8202dd5e0a0ab93a3c58aab0193f07362370208",
-  "signingCertificateSha256": "fe48f28149708e3ef57ff969e06188bd893bcbf0ae981896c1a3252ca2728c62"
+  "apkUrl": "https://github.com/Mingrui-Ai/linuxdo-android/releases/download/enhanced-v1.1/linuxdo-enhanced-1.1-arm64-v8a.apk",
+  "releasePageUrl": "https://github.com/Mingrui-Ai/linuxdo-android/releases/tag/enhanced-v1.1",
+  "apkSha256": "3a62feb14f6cadd3d2c48cf47fb84d39e9fc626e191df72df7ea736629384d6a",
+  "signingCertificateSha256": "fe48f28149708e3ef57ff969e06188bd893bcbf0ae981896c1a3252ca2728c62",
+  "packages": {
+    "org.linuxdo.android.enhanced": {
+      "applicationId": "org.linuxdo.android.enhanced",
+      "apkUrl": "https://github.com/Mingrui-Ai/linuxdo-android/releases/download/enhanced-v1.1/linuxdo-enhanced-1.1-arm64-v8a.apk",
+      "apkSha256": "3a62feb14f6cadd3d2c48cf47fb84d39e9fc626e191df72df7ea736629384d6a",
+      "signingCertificateSha256": "fe48f28149708e3ef57ff969e06188bd893bcbf0ae981896c1a3252ca2728c62"
+    },
+    "org.linuxdo.android.debug": {
+      "applicationId": "org.linuxdo.android.debug",
+      "apkUrl": "https://github.com/Mingrui-Ai/linuxdo-android/releases/download/enhanced-v1.1/linuxdo-enhanced-1.1-debug-arm64-v8a.apk",
+      "apkSha256": "677868decbc309597ac520f30e9f701b3406025c65994d9ad32c38b813cb9097",
+      "signingCertificateSha256": "f82a8b2cf310286f66613e2cafb9067089cebcbdd611904e84c3a58caca6ec91"
+    }
+  }
 }

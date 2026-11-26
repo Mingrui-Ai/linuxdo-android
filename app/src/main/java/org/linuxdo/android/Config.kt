@@ -81,31 +81,12 @@ object Config {
     const val SESSION_COOKIE = "_t"
     const val CF_CLEARANCE_COOKIE = "cf_clearance"
 
-    /** 增强版 1.0 关闭应用内更新，安装包仅通过自有仓库发布页分发。 */
-    const val APP_UPDATES_ENABLED = false
+    /** 仅接收本仓库已公开发布的增强版；正式包和测试包分别覆盖升级。 */
+    const val APP_UPDATES_ENABLED = true
+    const val UPDATE_REPOSITORY_URL = "https://github.com/Mingrui-Ai/linuxdo-android"
     val UPDATE_VERSION_JSON_URLS = listOf(
-        "https://api.github.com/repos/Mingrui-Ai/linuxdo-android/contents/version.json",
-        "https://raw.githubusercontent.com/Mingrui-Ai/linuxdo-android/master/version.json",
+        "$UPDATE_REPOSITORY_URL/releases/latest/download/version.json",
     )
     const val UPDATE_RELEASES_API_URL = "https://api.github.com/repos/Mingrui-Ai/linuxdo-android/releases/latest"
-    const val UPDATE_RELEASES_PAGE_URL = "https://github.com/Mingrui-Ai/linuxdo-android/releases/latest"
-
-    // 兼容保留的更新解析代码；当前所有检查与下载入口均已禁用。
-    const val FALLBACK_VERSION_MANIFEST_JSON = """
-        {
-          "applicationId": "org.linuxdo.android.enhanced",
-          "versionCode": 100,
-          "versionName": "1.0",
-          "updatesEnabled": false,
-          "forceUpdate": false,
-          "minVersionCode": 1,
-          "title": "LinuxDo 增强版 1.0",
-          "changelog": [
-            "增强版首发：个人侧栏、原生资料编辑、历史与草稿同步、聊天与阅读交互优化。",
-            "使用独立包名和签名，关闭应用内更新，不接收上游更新。"
-          ],
-          "apkUrl": "https://github.com/Mingrui-Ai/linuxdo-android/releases/download/enhanced-v1.0/linuxdo-enhanced-1.0-arm64-v8a.apk",
-          "releasePageUrl": "https://github.com/Mingrui-Ai/linuxdo-android/releases/tag/enhanced-v1.0"
-        }
-    """
+    const val UPDATE_RELEASES_PAGE_URL = "$UPDATE_REPOSITORY_URL/releases/latest"
 }

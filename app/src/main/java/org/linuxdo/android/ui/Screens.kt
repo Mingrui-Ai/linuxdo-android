@@ -2832,7 +2832,13 @@ fun SettingsScreen(
                             )
                         } else {
                             Text(
-                                if (!Config.APP_UPDATES_ENABLED) "独立版" else if (updateState.updateInfo != null) "可更新" else "已是最新",
+                                when {
+                                    !Config.APP_UPDATES_ENABLED -> "独立版"
+                                    updateState.updateInfo != null -> "可更新"
+                                    updateState.statusMessage?.startsWith("当前已是最新") == true -> "已是最新"
+                                    updateState.statusMessage?.startsWith("检查更新失败") == true -> "检查失败"
+                                    else -> "检查更新"
+                                },
                                 style = IosTheme.type.subheadline.copy(fontSize = 13.5.sp),
                                 color = if (updateState.updateInfo != null) Color(0xFFFF3B30) else IosTheme.colors.secondaryLabel,
                             )
