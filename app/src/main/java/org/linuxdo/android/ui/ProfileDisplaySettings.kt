@@ -28,7 +28,7 @@ internal fun ProfileDisplaySettings() {
     val store = (LocalContext.current.applicationContext as App).container.profileDisplayStore
     val settings by store.settings.collectAsState()
     Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-        Text("选择本机显示的资料字段，适用于自己和他人的详细主页、首页侧栏与头像弹窗。更改立即生效并自动保存，不改变网页资料的公开范围。",
+        Text("选择本机显示的资料字段，适用于自己和他人的详细主页与头像弹窗。更改立即生效并自动保存，不改变网页资料的公开范围。首页侧栏固定显示最后活跃、关注、粉丝、勋章和点数，不受这些开关影响。",
             style = IosTheme.type.footnote, color = IosTheme.colors.secondaryLabel,
             modifier = Modifier.padding(horizontal = 20.dp))
         Text("头像、昵称和 @用户名始终显示。各位置仅显示原本支持且已公开的字段。",

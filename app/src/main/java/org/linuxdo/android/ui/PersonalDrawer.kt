@@ -34,6 +34,7 @@ import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.semantics.stateDescription
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import kotlinx.coroutines.CancellationException
@@ -47,11 +48,11 @@ import org.linuxdo.android.data.UserCardData
 import org.linuxdo.android.data.UserBadgeItem
 import org.linuxdo.android.data.avatarUrlOf
 import org.linuxdo.android.data.orderedCategoryGroups
+import org.linuxdo.android.data.visibleFollowCount
 import org.linuxdo.android.ui.design.*
+import org.linuxdo.android.ui.format.RelativeTime
 import org.linuxdo.android.ui.screen.LINUXDO_APPS_PLAZA_URL
 import org.linuxdo.android.ui.screen.ProfileWebApp
-import org.linuxdo.android.ui.screen.ProfileDetails
-import org.linuxdo.android.ui.screen.ProfileIdentity
 
 internal sealed interface PersonalDrawerAction {
     data object Profile : PersonalDrawerAction
@@ -66,6 +67,7 @@ internal sealed interface PersonalDrawerAction {
     data object Blacklist : PersonalDrawerAction
     data object Settings : PersonalDrawerAction
     data object Share : PersonalDrawerAction
+    data class Network(val followers: Boolean) : PersonalDrawerAction
     data class CategoryTopics(val category: Category) : PersonalDrawerAction
     data class TagTopics(val tag: String) : PersonalDrawerAction
     data class Web(val url: String) : PersonalDrawerAction
@@ -168,7 +170,6 @@ internal fun PersonalDrawerContent(
     username: String?,
     account: AccountSession?,
     card: UserCardData?,
-    communityScore: CdkScoreUiState,
     badges: DrawerBadges,
     visible: Boolean,
     categories: CategoriesUiState,
@@ -176,13 +177,12 @@ internal fun PersonalDrawerContent(
     onLoadCategories: () -> Unit,
     onLoadTags: () -> Unit,
     onAction: (PersonalDrawerAction) -> Unit,
-    onOpenUser: (String) -> Unit,
     onAccounts: () -> Unit,
-    onCommunityScore: () -> Unit,
     onToggleTheme: () -> Unit,
     onLogin: () -> Unit,
 ) {
     val colors = IosTheme.colors
+    val accountSwitchColor = if (colors.isDark) Color.White else Color.Black
     val loggedIn = !username.isNullOrBlank()
     val scroll = rememberScrollState()
     Column(Modifier.fillMaxSize().background(colors.groupedBackground)
@@ -190,27 +190,30 @@ internal fun PersonalDrawerContent(
         Column(Modifier.weight(1f).verticalScroll(scroll)) {
             Column(Modifier.fillMaxWidth().padding(start = 16.dp, end = 16.dp, top = 12.dp)) {
                 if (loggedIn) {
-                    ProfileIdentity(
-                        username = username!!,
-                        displayName = card?.cleanDisplayName ?: account?.name?.takeIf { it.isNotBlank() } ?: username,
-                        level = card?.trustLevel ?: account?.trustLevel,
-                        avatarUrl = avatarUrlOf(card?.avatarTemplate ?: account?.avatarTemplate,
-                            card?.animatedAvatar ?: account?.animatedAvatar, 160, username),
-                        staticAvatarUrl = avatarUrlOf(card?.avatarTemplate ?: account?.avatarTemplate, size = 160),
-                        status = card?.status, title = card?.title,
-                        onOpenProfile = { onAction(PersonalDrawerAction.Profile) },
-                        onOpenLevel = { onAction(PersonalDrawerAction.Level) },
-                        trailing = {
-                            IconButton(onClick = onAccounts, modifier = Modifier.size(44.dp)
-                                .semantics { contentDescription = "切换账号" }) { AccountSwitchIcon(colors.accent) }
-                        },
-                    )
-                    ProfileDetails(card, badges.items, badges.loading,
-                        onOpenBadges = { onAction(PersonalDrawerAction.Badges) },
-                        communityScore = communityScore.score, communityScoreLoading = communityScore.loading,
-                        needsAuthorization = communityScore.needsAuthorization, onOpenCommunityScore = onCommunityScore,
-                        loading = card == null, active = visible, modifier = Modifier.padding(top = 12.dp),
-                        onOpenUser = onOpenUser)
+                    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                        Row(Modifier.weight(1f).clickable(role = Role.Button,
+                            onClickLabel = "查看我的主页") { onAction(PersonalDrawerAction.Profile) },
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                            UserAvatar(
+                                avatarUrlOf(card?.avatarTemplate ?: account?.avatarTemplate,
+                                    card?.animatedAvatar ?: account?.animatedAvatar, 160, username),
+                                avatarUrlOf(card?.avatarTemplate ?: account?.avatarTemplate, size = 160),
+                                username!!, Modifier.size(56.dp), cornerRadius = 28.dp,
+                            )
+                            Column(Modifier.weight(1f)) {
+                                Text(card?.cleanDisplayName ?: account?.name?.takeIf { it.isNotBlank() } ?: username,
+                                    style = IosTheme.type.largeTitle, color = colors.label,
+                                    maxLines = 1, overflow = TextOverflow.Ellipsis)
+                                Text("@$username", style = IosTheme.type.caption, color = colors.secondaryLabel,
+                                    maxLines = 1, overflow = TextOverflow.Ellipsis)
+                            }
+                        }
+                        IconButton(onClick = onAccounts, modifier = Modifier.size(44.dp)
+                            .semantics { contentDescription = "切换账号" }) { AccountSwitchIcon(accountSwitchColor) }
+                    }
+                    DrawerProfileDetails(card, badges, visible, onAction)
                 } else {
                     Row(verticalAlignment = Alignment.CenterVertically,
                         horizontalArrangement = Arrangement.spacedBy(12.dp)) {
@@ -222,7 +225,7 @@ internal fun PersonalDrawerContent(
                             Text("登录后使用个人功能", style = IosTheme.type.caption, color = colors.secondaryLabel)
                         }
                         IconButton(onClick = onAccounts, modifier = Modifier.size(44.dp)
-                            .semantics { contentDescription = "切换账号" }) { AccountSwitchIcon(colors.accent) }
+                            .semantics { contentDescription = "切换账号" }) { AccountSwitchIcon(accountSwitchColor) }
                     }
                     TextButton(onClick = onLogin, modifier = Modifier.fillMaxWidth().padding(top = 8.dp)) {
                         Text("登录或添加账号", color = colors.accent)
@@ -317,6 +320,52 @@ internal fun PersonalDrawerContent(
             IconButton(onClick = onToggleTheme, modifier = Modifier.size(44.dp).semantics {
                 contentDescription = if (colors.isDark) "切换为浅色" else "切换为深色"
             }) { AppearanceIcon(colors.isDark, colors.secondaryLabel) }
+        }
+    }
+}
+
+/** 侧栏固定显示五项资料，不读取主页显示偏好。 */
+@OptIn(ExperimentalLayoutApi::class)
+@Composable
+private fun DrawerProfileDetails(
+    card: UserCardData?,
+    badges: DrawerBadges,
+    active: Boolean,
+    onAction: (PersonalDrawerAction) -> Unit,
+) {
+    val colors = IosTheme.colors
+    var now by remember { mutableStateOf(java.time.Instant.now()) }
+    LaunchedEffect(active) {
+        while (active) {
+            now = java.time.Instant.now()
+            kotlinx.coroutines.delay(60_000L)
+        }
+    }
+    val following = visibleFollowCount(card?.totalFollowing, card?.canSeeFollowing)
+    val followers = visibleFollowCount(card?.totalFollowers, card?.canSeeFollowers)
+    val badgeCount = remember(badges.items) { badges.items?.count { it.isEarned } }
+    Column(Modifier.fillMaxWidth().padding(top = 12.dp), verticalArrangement = Arrangement.spacedBy(3.dp)) {
+        Text("最后活跃 ${if (card?.lastSeenAt.isNullOrBlank()) if (card == null) "…" else "未公开" else RelativeTime.format(card?.lastSeenAt, now)}",
+            style = IosTheme.type.caption, color = colors.secondaryLabel)
+        FlowRow(horizontalArrangement = Arrangement.spacedBy(12.dp), verticalArrangement = Arrangement.spacedBy(3.dp)) {
+            listOf(false to following, true to followers).forEach { (isFollowers, count) ->
+                val label = if (isFollowers) "粉丝" else "关注"
+                val hidden = if (isFollowers) card?.canSeeFollowers == false else card?.canSeeFollowing == false
+                Text("$label ${count?.toString() ?: if (hidden) "未公开" else if (card == null) "…" else "—"}",
+                    style = IosTheme.type.caption, color = colors.secondaryLabel,
+                    modifier = Modifier.heightIn(min = 32.dp).clickable(enabled = count != null,
+                        role = Role.Button, onClickLabel = "查看$label") {
+                        onAction(PersonalDrawerAction.Network(isFollowers))
+                    }.wrapContentHeight())
+            }
+            Text("勋章 ${badgeCount?.toString() ?: if (badges.loading) "…" else "—"}",
+                style = IosTheme.type.caption, color = colors.secondaryLabel,
+                modifier = Modifier.heightIn(min = 32.dp).clickable(role = Role.Button, onClickLabel = "查看勋章") {
+                    onAction(PersonalDrawerAction.Badges)
+                }.wrapContentHeight())
+            Text("点数 ${card?.gamificationScore?.toString() ?: if (card == null) "…" else "—"}",
+                style = IosTheme.type.caption, color = colors.secondaryLabel,
+                modifier = Modifier.heightIn(min = 32.dp).wrapContentHeight())
         }
     }
 }

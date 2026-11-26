@@ -955,7 +955,6 @@ private fun MainNavigation(state: UiState, viewModel: MainViewModel, lifecycle: 
     fun openPersonalDrawer() {
         if (!browsing || contentObscured) return
         viewModel.refreshAccounts()
-        viewModel.loadCdkScore(userInitiated = true)
         drawerScope.launch { drawerState.open() }
     }
     fun drawerNavigate(action: () -> Unit) {
@@ -992,6 +991,7 @@ private fun MainNavigation(state: UiState, viewModel: MainViewModel, lifecycle: 
                 PersonalDrawerAction.Drafts -> stack.push(Route.Drafts)
                 PersonalDrawerAction.Following -> if (username != null) stack.push(Route.FollowList(username))
                 PersonalDrawerAction.Badges -> if (username != null) stack.push(Route.UserBadges(username))
+                is PersonalDrawerAction.Network -> if (username != null) stack.push(Route.ProfileNetwork(username, action.followers))
                 PersonalDrawerAction.Level -> showConnectSheet = true
                 PersonalDrawerAction.Categories -> { viewModel.setCategorySubTab(CategorySectionTab.CATEGORIES); openCategories() }
                 PersonalDrawerAction.Tags -> { viewModel.setCategorySubTab(CategorySectionTab.TAGS); openCategories() }
@@ -1028,15 +1028,10 @@ private fun MainNavigation(state: UiState, viewModel: MainViewModel, lifecycle: 
         gesturesEnabled = drawerVisible && !showDrawerAccounts && !showDrawerScore && browsing && !accountState.switching,
         drawerContent = {
             key(accountState.activeUserId, state.username) {
-                PersonalDrawerContent(state.username, drawerAccount, drawerProfile, drawerScore, drawerBadges, drawerVisible, categories, tagsState,
+                PersonalDrawerContent(state.username, drawerAccount, drawerProfile, drawerBadges, drawerVisible, categories, tagsState,
                     onLoadCategories = { viewModel.loadCategories() }, onLoadTags = { viewModel.loadTags() },
                     onAction = onDrawerAction,
-                    onOpenUser = { name ->
-                        stack.push(Route.UserProfile(name))
-                        drawerScope.launch { drawerState.close() }
-                    },
                     onAccounts = { viewModel.refreshAccounts(); showDrawerAccounts = true },
-                    onCommunityScore = { viewModel.loadCdkScore(userInitiated = true); showDrawerScore = true },
                     onToggleTheme = { viewModel.setThemeMode(if (drawerDark) ThemeMode.Light else ThemeMode.Dark) },
                     onLogin = { drawerScope.launch { drawerState.close(); viewModel.addAccount() } })
             }
