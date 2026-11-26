@@ -1,26 +1,26 @@
 {
   "applicationId": "org.linuxdo.android.enhanced",
-  "versionCode": 111,
-  "versionName": "1.1.1",
+  "versionCode": 120,
+  "versionName": "1.2.0",
   "updatesEnabled": true,
   "forceUpdate": false,
   "minVersionCode": 1,
-  "title": "LinuxDo 增强版 1.1.1",
+  "title": "LinuxDo 增强版 1.2.0",
   "changelog": [
-    "默认使用原汁果味主题、关闭辅助悬浮球，小程序默认内置打开；保留手动选择。",
-    "应用广场先显示本地最近使用和我的小程序，支持搜索、收藏及内置/外部打开选择。",
-    "恢复侧栏等级和头像状态，合并图片请求队列与网络加载优化。",
-    "公开发布仅提供正式版 APK，沿用原签名并支持应用内更新。"
+    "重设计「曜石黑底 · 跃升 L+」应用图标与浅/深色自适应登录页，首页标题升级为经典琥珀黄配色。",
+    "重构首页两层筛选栏（类别 / 等级 / 标签自由组合、独立等级筛选、长按置顶与本地加速缓存），升级 5 项动态语义排序与范围搜索，新增 X 风格新帖叠放头像胶囊。",
+    "帖子顶栏精简为「帖内搜索 / 权限编辑 / 四态跟踪铃铛」三按钮，移除暂存、复制原文与分享卡片；进帖自动跟踪、主页主题色新回复徽标、左滑快速关注/免打扰，统一详情回复排序与筛选下拉栏。",
+    "所有二级页面与弹层统一隐藏底栏，同步站点类别与标签图标，新增首页深拉应用广场开关。"
   ],
-  "apkUrl": "https://github.com/Mingrui-Ai/linuxdo-android/releases/download/enhanced-v1.1.1/linuxdo-enhanced-1.1.1-arm64-v8a.apk",
-  "releasePageUrl": "https://github.com/Mingrui-Ai/linuxdo-android/releases/tag/enhanced-v1.1.1",
-  "apkSha256": "a8fa0ae958ff898cbfa98b411bda386816a897f59a2454fd988df2ad3c04eb06",
+  "apkUrl": "https://github.com/Mingrui-Ai/linuxdo-android/releases/download/enhanced-v1.2.0/linuxdo-enhanced-1.2.0-arm64-v8a.apk",
+  "releasePageUrl": "https://github.com/Mingrui-Ai/linuxdo-android/releases/tag/enhanced-v1.2.0",
+  "apkSha256": "d85262c13dd35febaeb05ff6f3c2c38684175893d5441eb2b2bcdc7b73228432",
   "signingCertificateSha256": "fe48f28149708e3ef57ff969e06188bd893bcbf0ae981896c1a3252ca2728c62",
   "packages": {
     "org.linuxdo.android.enhanced": {
       "applicationId": "org.linuxdo.android.enhanced",
-      "apkUrl": "https://github.com/Mingrui-Ai/linuxdo-android/releases/download/enhanced-v1.1.1/linuxdo-enhanced-1.1.1-arm64-v8a.apk",
-      "apkSha256": "a8fa0ae958ff898cbfa98b411bda386816a897f59a2454fd988df2ad3c04eb06",
+      "apkUrl": "https://github.com/Mingrui-Ai/linuxdo-android/releases/download/enhanced-v1.2.0/linuxdo-enhanced-1.2.0-arm64-v8a.apk",
+      "apkSha256": "d85262c13dd35febaeb05ff6f3c2c38684175893d5441eb2b2bcdc7b73228432",
       "signingCertificateSha256": "fe48f28149708e3ef57ff969e06188bd893bcbf0ae981896c1a3252ca2728c62"
     }
   }
