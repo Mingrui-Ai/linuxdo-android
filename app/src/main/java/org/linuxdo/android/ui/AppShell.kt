@@ -879,6 +879,8 @@ private fun MainNavigation(state: UiState, viewModel: MainViewModel, lifecycle: 
         showConnectSheet || globalBrowserUrl != null || privateMessageRecipient != null || accountState.switching ||
         userCard.loading || userCard.user != null || userCard.error != null || drawerVisible || showDrawerAccounts || showDrawerScore
     val visibleRoute = stack.current
+    // 底栏仅属于当前主板块根页；所有带返回栈的页面统一隐藏，新增路由无需逐个排除。
+    val isMainTabRoot = !stack.canPop && visibleRoute == selected.root
     val isKeyboardOpen = WindowInsets.ime.getBottom(LocalDensity.current) > 0
     val isDetailRoute = visibleRoute is Route.TopicDetail || visibleRoute == Route.Chat ||
         visibleRoute is Route.ChatRoom || visibleRoute is Route.Search || visibleRoute == Route.Profile || visibleRoute is Route.UserProfile
@@ -1029,7 +1031,7 @@ private fun MainNavigation(state: UiState, viewModel: MainViewModel, lifecycle: 
         drawerScope.launch { drawerState.close() }
     }
     val boardSwipe = Modifier.boundedTabSwipe(MainTab.primaryTabs.indexOf(selected), MainTab.primaryTabs.size,
-        enabled = browsing && !contentObscured) { selectBoard(MainTab.primaryTabs[it]) }
+        enabled = browsing && isMainTabRoot && !contentObscured) { selectBoard(MainTab.primaryTabs[it]) }
     PersonalDrawerHost(
         drawerState = drawerState,
         gesturesEnabled = drawerVisible && !showDrawerAccounts && !showDrawerScore && browsing && !accountState.switching,
@@ -2012,7 +2014,7 @@ private fun MainNavigation(state: UiState, viewModel: MainViewModel, lifecycle: 
                 )
             }
         }
-        val shouldShowTabBar = listBars.value && !isDetailRoute && !composer.open && !topicCreator.open && !detailOverlay && !isKeyboardOpen
+        val shouldShowTabBar = browsing && isMainTabRoot && listBars.value && !contentObscured && !isKeyboardOpen
         if (savedTopics.isNotEmpty() && !isDetailRoute && browsing && !contentObscured && !isKeyboardOpen) {
             SavedTopicChip(
                 savedTopics.size, { showSavedTopics = true },
@@ -2064,13 +2066,13 @@ private fun MainNavigation(state: UiState, viewModel: MainViewModel, lifecycle: 
                 selected,
                 modifier = boardSwipe,
                 onCreateTopic = {
-                    if (browsing && !contentObscured) {
+                    if (browsing && isMainTabRoot && !contentObscured) {
                         openDrafts()
                     }
                 },
                 unreadCount = state.unreadCount + chatUnread,
             ) { tab ->
-                if (browsing && !contentObscured) {
+                if (browsing && isMainTabRoot && !contentObscured) {
                     if (tab == selected) {
                         stacks.getValue(tab).popToRoot()
                         scrollRequests.getValue(tab).intValue++
