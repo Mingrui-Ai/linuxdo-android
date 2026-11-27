@@ -115,6 +115,7 @@ import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.drawscope.scale
 import androidx.compose.ui.graphics.drawscope.rotate
 import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.semantics.ProgressBarRangeInfo
 import androidx.compose.ui.semantics.progressBarRangeInfo
 import androidx.compose.ui.semantics.setProgress
@@ -237,6 +238,7 @@ import okhttp3.Request
 import org.linuxdo.android.App
 import org.linuxdo.android.Config
 import org.linuxdo.android.data.Post
+import org.linuxdo.android.data.sortedReactions
 import org.linuxdo.android.data.CommentOrder
 import org.linuxdo.android.data.TopicSortOrder
 import org.linuxdo.android.data.likedPostRows
@@ -3956,14 +3958,19 @@ private fun PostActions(
     var boostActionTarget by remember { mutableStateOf<Boost?>(null) }
     val clipboardManager = LocalClipboardManager.current
     val context = LocalContext.current
-    if (post.reactions.any { it.count > 0 }) {
-        Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            post.reactions.filter { it.count > 0 }.forEach { reaction ->
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    ReactionIcon(reaction.id, emojiUrls)
-                    Text(" ${reaction.count}", style = IosTheme.type.caption, color = IosTheme.colors.secondaryLabel)
-                }
+    val sortedReactions = remember(post.reactions) { post.sortedReactions }
+    if (sortedReactions.isNotEmpty()) {
+        val total = sortedReactions.sumOf { it.count.toLong() }
+        Row(
+            modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState())
+                .clearAndSetSemantics { contentDescription = "$total 个回应" },
+            horizontalArrangement = Arrangement.spacedBy(6.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            sortedReactions.forEach { reaction ->
+                ReactionIcon(reaction.id, emojiUrls)
             }
+            Text(total.toString(), style = IosTheme.type.caption, color = IosTheme.colors.secondaryLabel)
         }
     }
     FlowRow(
@@ -3990,22 +3997,26 @@ private fun PostActions(
         }
         if (!post.yours) {
             val selected = post.currentUserReaction?.id
-            val canReact = signedIn && !busy && (selected == null || post.currentUserReaction?.canUndo == true)
+            val canReact = signedIn && !busy && !pending && (selected == null || post.currentUserReaction?.canUndo == true)
+            val reactionIcon: (@Composable (Modifier) -> Unit)? = if (selected == null) null else {
+                { modifier -> ReactionIcon(selected, emojiUrls, modifier) }
+            }
             Box {
                 TiebaPostActionButton(
-                    label = "点赞",
+                    label = if (selected == null) "点赞，长按选择表情" else "已回应 $selected，点击取消，长按更换表情",
                     action = PostAction.Like,
                     selected = selected != null,
                     enabled = canReact,
                     compact = compact,
-                    onClick = { onReact("heart") },
+                    icon = reactionIcon,
+                    onClick = { onReact(selected ?: "heart") },
                     onLongClick = { chooseReaction = true },
                 )
                 if (chooseReaction) {
                     ReactionBubblePopup(
                         reactions = reactions,
                         emojiUrls = emojiUrls,
-                        busy = busy,
+                        busy = !canReact,
                         onReact = onReact,
                         onDismiss = { chooseReaction = false },
                     )
@@ -5036,6 +5047,7 @@ private fun TiebaPostActionButton(
     color: Color = IosTheme.colors.secondaryLabel,
     enabled: Boolean = true,
     compact: Boolean = false,
+    icon: (@Composable (Modifier) -> Unit)? = null,
     onClick: () -> Unit,
     onLongClick: (() -> Unit)? = null,
 ) {
@@ -5062,12 +5074,12 @@ private fun TiebaPostActionButton(
             .semantics { contentDescription = label },
         contentAlignment = Alignment.Center,
     ) {
-        PostActionIcon(
-            action = action,
-            selected = selected,
-            tint = buttonTint,
-            modifier = Modifier.size(if (compact) 18.dp else 20.dp),
-        )
+        val iconModifier = Modifier.size(if (compact) 18.dp else 20.dp)
+        if (icon != null) {
+            icon(iconModifier)
+        } else {
+            PostActionIcon(action = action, selected = selected, tint = buttonTint, modifier = iconModifier)
+        }
     }
 }
 

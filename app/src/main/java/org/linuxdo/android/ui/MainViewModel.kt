@@ -123,7 +123,7 @@ import org.linuxdo.android.data.threadRows
 import org.linuxdo.android.data.TopicNotificationLevel
 import org.linuxdo.android.data.PostResult
 import org.linuxdo.android.data.PostFlagReason
-import org.linuxdo.android.data.Reaction
+import org.linuxdo.android.data.withToggledReaction
 import org.linuxdo.android.data.UserBadgeItem
 import org.linuxdo.android.data.AutoRefreshInterval
 import org.linuxdo.android.data.NotificationPollInterval
@@ -4793,74 +4793,78 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     fun react(topicId: Long, postId: Long, reaction: String) {
         val current = _details.value[topicId] ?: return
-        if (current.loading) return
+        if (current.loading || current.refreshing || current.reactingPosts.isNotEmpty() ||
+            store.currentUserId() <= 0L || store.sessionChanging || _accounts.value.switching) return
         val original = current.posts.firstOrNull { it.id == postId } ?: return
+        if (original.yours || original.currentUserReaction?.canUndo == false) return
+        val jobKey = "reaction:$postId"
+        if (pageJobs[jobKey]?.isActive == true) return
+        val generation = accountScopeGeneration
+        val session = store.sessionGeneration
+        val userId = store.currentUserId()
+        fun sameAccount() = generation == accountScopeGeneration && session == store.sessionGeneration &&
+            userId == store.currentUserId() && !store.sessionChanging && !_accounts.value.switching
 
-        val alreadyReacted = original.currentUserReaction?.id == reaction
-        val newCurrentUserReaction = if (alreadyReacted) null else Reaction(id = reaction, count = 1, canUndo = true)
-        val newReactions = original.reactions.toMutableList()
-        val existingIndex = newReactions.indexOfFirst { it.id == reaction }
-        if (alreadyReacted) {
-            if (existingIndex >= 0) {
-                val currentCount = newReactions[existingIndex].count
-                if (currentCount <= 1) {
-                    newReactions.removeAt(existingIndex)
-                } else {
-                    newReactions[existingIndex] = newReactions[existingIndex].copy(count = currentCount - 1)
-                }
-            }
-        } else {
-            val oldReactionId = original.currentUserReaction?.id
-            if (oldReactionId != null) {
-                val oldIndex = newReactions.indexOfFirst { it.id == oldReactionId }
-                if (oldIndex >= 0) {
-                    val count = newReactions[oldIndex].count
-                    if (count <= 1) newReactions.removeAt(oldIndex) else newReactions[oldIndex] = newReactions[oldIndex].copy(count = count - 1)
-                }
-            }
-            if (existingIndex >= 0) {
-                newReactions[existingIndex] = newReactions[existingIndex].copy(count = newReactions[existingIndex].count + 1)
-            } else {
-                newReactions.add(Reaction(id = reaction, count = 1, canUndo = true))
-            }
-        }
-        val optimisticPost = original.copy(
-            currentUserReaction = newCurrentUserReaction,
-            reactions = newReactions,
-        )
+        val optimisticPost = original.withToggledReaction(reaction)
         _details.update { states ->
             val latest = states[topicId] ?: return@update states
             states + (topicId to latest.copy(
                 posts = latest.posts.map { if (it.id == postId) optimisticPost else it },
+                reactingPosts = latest.reactingPosts + postId,
                 reactionErrors = latest.reactionErrors - postId,
             ))
         }
         updateCachedTopicDetail(topicId, refreshTtl = false)
 
-        pageJobs["reaction:$postId"] = viewModelScope.launch {
+        pageJobs[jobKey] = viewModelScope.launch(start = CoroutineStart.LAZY) {
+            var confirmed = false
             try {
-                val updated = repository.toggleReaction(postId, reaction).copy(boosts = original.boosts, canBoost = original.canBoost)
+                if (!sameAccount()) return@launch
+                val updated = repository.toggleReaction(postId, reaction)
+                if (!sameAccount() || !isActive || pageJobs[jobKey] !== coroutineContext[Job]) return@launch
                 _details.update { states ->
                     val latest = states[topicId] ?: return@update states
                     states + (topicId to latest.copy(
-                        posts = latest.posts.map { if (it.id == postId) updated else it }
+                        posts = latest.posts.map { if (it.id == postId) it.copy(
+                            reactions = updated.reactions,
+                            currentUserReaction = updated.currentUserReaction,
+                            actionsSummary = updated.actionsSummary,
+                        ) else it }
                     ))
                 }
+                confirmed = true
                 updateCachedTopicDetail(topicId, refreshTtl = false)
             } catch (error: CancellationException) {
                 throw error
             } catch (error: Exception) {
+                if (!sameAccount() || !isActive || pageJobs[jobKey] !== coroutineContext[Job]) return@launch
                 _details.update { states ->
                     val latest = states[topicId] ?: return@update states
                     states + (topicId to latest.copy(
-                        posts = latest.posts.map { if (it.id == postId) original else it },
                         reactionErrors = latest.reactionErrors + (postId to (error.message ?: "回应失败")),
                     ))
                 }
-                updateCachedTopicDetail(topicId, refreshTtl = false)
-                handlePageFailure(error) { react(topicId, postId, reaction) }
+                handlePageFailure(error) { if (sameAccount()) react(topicId, postId, reaction) }
+            } finally {
+                if (pageJobs[jobKey] === coroutineContext[Job]) {
+                    pageJobs.remove(jobKey)
+                    if (sameAccount()) {
+                        _details.update { states ->
+                            val latest = states[topicId] ?: return@update states
+                            states + (topicId to latest.copy(
+                                posts = if (confirmed) latest.posts else latest.posts.map { if (it.id == postId) it.copy(
+                                    reactions = original.reactions,
+                                    currentUserReaction = original.currentUserReaction,
+                                ) else it },
+                                reactingPosts = latest.reactingPosts - postId,
+                            ))
+                        }
+                        updateCachedTopicDetail(topicId, refreshTtl = false)
+                    }
+                }
             }
         }
+        pageJobs[jobKey]?.start()
     }
 
     /**
