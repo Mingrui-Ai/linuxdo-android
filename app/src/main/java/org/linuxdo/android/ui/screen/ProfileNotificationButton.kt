@@ -1,5 +1,6 @@
 package org.linuxdo.android.ui.screen
 
+import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
@@ -7,6 +8,13 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.Path
+import androidx.compose.ui.graphics.StrokeCap
+import androidx.compose.ui.graphics.StrokeJoin
+import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.graphics.drawscope.scale
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.dp
@@ -36,9 +44,8 @@ internal fun ProfileNotificationButton(controller: UserNotificationController) {
             scope.launch { controller.load() }
         }, enabled = !state.saving, modifier = Modifier.size(44.dp)) {
             if (state.saving || (state.loading && state.settings == null)) IosActivityIndicator(diameter = 20.dp, color = activeTint)
-            else TopicNotificationIcon(
-                if (level == UserNotificationLevel.Mute || level == UserNotificationLevel.Ignore)
-                    TopicNotificationLevel.Muted else TopicNotificationLevel.Regular,
+            else UserNotificationIcon(
+                level = level,
                 modifier = Modifier.size(24.dp).semantics { contentDescription = "用户通知：${level?.label ?: "点击加载"}" },
                 tint = activeTint,
             )
@@ -55,8 +62,7 @@ internal fun ProfileNotificationButton(controller: UserNotificationController) {
                         title = option.label,
                         description = option.description,
                         selected = option == level,
-                        icon = { TopicNotificationIcon(if (option == UserNotificationLevel.Normal)
-                            TopicNotificationLevel.Regular else TopicNotificationLevel.Muted) },
+                        icon = { UserNotificationIcon(option) },
                         enabled = !busy && state.fresh && state.settings?.allows(option) == true,
                         onClick = {
                             if (option == UserNotificationLevel.Ignore) {
@@ -100,4 +106,42 @@ internal fun ProfileNotificationButton(controller: UserNotificationController) {
         dismissButton = { TextButton(enabled = !state.saving, onClick = { choosingDuration = false }) { Text("取消") } },
         containerColor = colors.card,
     )
+}
+
+@Composable
+private fun UserNotificationIcon(
+    level: UserNotificationLevel?,
+    modifier: Modifier = Modifier,
+    tint: Color? = null,
+) {
+    if (level != UserNotificationLevel.Ignore) {
+        TopicNotificationIcon(
+            if (level == UserNotificationLevel.Mute) TopicNotificationLevel.Muted else TopicNotificationLevel.Regular,
+            modifier = modifier, tint = tint,
+        )
+        return
+    }
+    val color = tint ?: Color(0xFFFF3B30)
+    val eye = remember {
+        Path().apply {
+            // Broken contours leave the diagonal slash readable on either menu background.
+            moveTo(10f, 5.2f)
+            cubicTo(10.7f, 5.1f, 11.3f, 5f, 12f, 5f)
+            cubicTo(16.5f, 5f, 20f, 7.8f, 22f, 12f)
+            cubicTo(21.4f, 13.3f, 20.6f, 14.5f, 19.7f, 15.5f)
+            moveTo(6.5f, 6.5f)
+            cubicTo(4.5f, 7.8f, 3f, 9.6f, 2f, 12f)
+            cubicTo(4f, 16.2f, 7.5f, 19f, 12f, 19f)
+            cubicTo(14f, 19f, 15.8f, 18.5f, 17.5f, 17.5f)
+            moveTo(9.9f, 9.9f)
+            cubicTo(8.7f, 11.1f, 8.7f, 12.9f, 9.9f, 14.1f)
+            cubicTo(11.1f, 15.3f, 12.9f, 15.3f, 14.1f, 14.1f)
+        }
+    }
+    Canvas(modifier.size(18.dp)) {
+        scale(size.width / 24f, size.height / 24f, Offset.Zero) {
+            drawPath(eye, color, style = Stroke(1.7f, cap = StrokeCap.Round, join = StrokeJoin.Round))
+            drawLine(color, Offset(3f, 3f), Offset(21f, 21f), 1.7f, StrokeCap.Round)
+        }
+    }
 }

@@ -2,10 +2,8 @@ package org.linuxdo.android.ui.screen
 
 import android.content.Intent
 import androidx.compose.foundation.background
-import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
-import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
@@ -156,7 +154,6 @@ internal fun ProfileHeader(
                 Spacer(Modifier.height(if (background != null) coverHeight - IosMetrics.navBarHeight - 39.dp else 24.dp))
                 Row(Modifier.fillMaxWidth().padding(horizontal = 16.dp), verticalAlignment = Alignment.Bottom) {
                     ProfileAvatar(username, avatar, staticAvatar, card?.status, 78.dp,
-                        avatarModifier = Modifier.border(3.dp, surface, CircleShape),
                         onOpenProfile = fullAvatar?.let { url -> {
                             previewImage = ImageViewerItem(url, description = "@$username 的头像",
                                 previewMemoryCacheKey = avatarPreviewKey)
@@ -167,9 +164,9 @@ internal fun ProfileHeader(
                     if (followAction != null || onChat != null) {
                         Column(verticalArrangement = Arrangement.spacedBy(6.dp), horizontalAlignment = Alignment.End) {
                             followAction?.let { action ->
-                                ProfileQuickAction(action.label, action.icon, action.enabled, action.onClick)
+                                ProfileQuickAction(action.label, action.enabled, action.onClick)
                             }
-                            onChat?.let { ProfileQuickAction("聊天", Icons.Default.Send, true, it) }
+                            onChat?.let { ProfileQuickAction("聊天", true, it) }
                         }
                     }
                 }
@@ -216,15 +213,13 @@ internal fun ProfileHeader(
 }
 
 @Composable
-private fun ProfileQuickAction(label: String, icon: ImageVector, enabled: Boolean, onClick: () -> Unit) {
+private fun ProfileQuickAction(label: String, enabled: Boolean, onClick: () -> Unit) {
     val colors = IosTheme.colors
     Surface(onClick = onClick, enabled = enabled, shape = androidx.compose.foundation.shape.RoundedCornerShape(12.dp),
         color = colors.card.copy(alpha = .94f), contentColor = if (enabled) colors.accent else colors.secondaryLabel,
         border = androidx.compose.foundation.BorderStroke(1.dp, colors.accent.copy(alpha = .16f))) {
-        Row(Modifier.widthIn(min = 100.dp).heightIn(min = 44.dp).padding(horizontal = 12.dp, vertical = 6.dp),
-            horizontalArrangement = Arrangement.spacedBy(7.dp, Alignment.CenterHorizontally),
-            verticalAlignment = Alignment.CenterVertically) {
-            Icon(icon, null, modifier = Modifier.size(18.dp))
+        Box(Modifier.widthIn(min = 76.dp).heightIn(min = 44.dp).padding(horizontal = 10.dp, vertical = 6.dp),
+            contentAlignment = Alignment.Center) {
             Text(label, fontSize = 13.sp, maxLines = 1)
         }
     }
