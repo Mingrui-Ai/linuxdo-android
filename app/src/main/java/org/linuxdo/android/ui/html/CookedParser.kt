@@ -15,6 +15,9 @@ data class InlineText(
     val bold: Boolean = false,
     val italic: Boolean = false,
     val code: Boolean = false,
+    val strikethrough: Boolean = false,
+    val small: Boolean = false,
+    val spoiler: Boolean = false,
     val href: String? = null,
     val emojiUrl: String? = null,
     val isAttachment: Boolean = false,
@@ -739,7 +742,14 @@ class CookedParser(private val onUnknown: (String) -> Unit = {}) {
                 style.copy(href = resolvedHref, isAttachment = style.isAttachment || attachment)
             }
             "img" -> return listOf(style.copy(text = node.attr("alt"), emojiUrl = contentUrl(node.attr("src"))))
-            "span", "s", "del", "u", "small", "sup", "sub", "mark", "kbd" -> style
+            "s", "del" -> style.copy(strikethrough = true)
+            "small" -> style.copy(small = true)
+            "span" -> if (node.hasClass("spoiler") || node.hasClass("spoiled")) {
+                style.copy(spoiler = true)
+            } else {
+                style
+            }
+            "u", "sup", "sub", "mark", "kbd" -> style
             else -> {
                 if (reported.add(node.normalName())) onUnknown(node.normalName())
                 style

@@ -61,7 +61,6 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.ime
-import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.WindowInsetsSides
 import androidx.compose.foundation.layout.displayCutout
@@ -252,9 +251,9 @@ private fun AppShellContent(viewModel: MainViewModel, browser: BrowserSession, s
                 .fillMaxSize()
                 .background(IosTheme.colors.groupedBackground)
                 // 顶部间距由每个导航页面处理，个人主页可将背景画到状态栏后方。
+                // 底部保留给各输入弹层自身按 IME 高度平移避让，避免键盘动画每帧触发整棵主内容树 relayout。
                 .windowInsetsPadding(WindowInsets.systemBars.union(WindowInsets.displayCutout)
                     .only(WindowInsetsSides.Horizontal + WindowInsetsSides.Bottom))
-                .imePadding()
                 .clipToBounds(),
         ) {
             // 验证期间保留导航的组合身份，返回后恢复原页面与滚动位置。
@@ -879,7 +878,11 @@ private fun MainNavigation(state: UiState, viewModel: MainViewModel, lifecycle: 
     val visibleRoute = stack.current
     // 底栏仅属于当前主板块根页；所有带返回栈的页面统一隐藏，新增路由无需逐个排除。
     val isMainTabRoot = !stack.canPop && visibleRoute == selected.root
-    val isKeyboardOpen = WindowInsets.ime.getBottom(LocalDensity.current) > 0
+    val density = LocalDensity.current
+    val imeInsets = WindowInsets.ime
+    val isKeyboardOpen by remember(density) {
+        androidx.compose.runtime.derivedStateOf { imeInsets.getBottom(density) > 0 }
+    }
     val isDetailRoute = visibleRoute is Route.TopicDetail || visibleRoute == Route.Chat ||
         visibleRoute is Route.ChatRoom || visibleRoute is Route.Search || visibleRoute == Route.Profile || visibleRoute is Route.UserProfile
     val navigationLifecycleState by lifecycle.currentStateFlow.collectAsStateWithLifecycle()

@@ -4673,18 +4673,23 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 updateCachedTopicDetail(id)
             } catch (error: CancellationException) {
                 throw error
-            } catch (error: RateLimitException) {
-                if (pageJobs["topic:$id"] === coroutineContext[Job]) _details.update { states ->
-                    val latest = states[id] ?: return@update states
-                    // 保留正文和失败的翻页方向。清空错误会让仍停在底部的列表立即再次加载。
-                    states + (id to latest.copy(error = error.message, failedPostNumber = requestPostNumber,
-                        retryAtElapsedMs = SystemClock.elapsedRealtime() + error.retryAfterMs,
-                        failedLoad = when { previous -> DetailLoad.Previous; more -> DetailLoad.Next; else -> DetailLoad.Topic }))
-                }
             } catch (error: Exception) {
-                _details.update { it + (id to current.copy(error = error.message ?: "加载失败", failedPostNumber = requestPostNumber, retryAtElapsedMs = 0L,
-                    failedLoad = when { previous -> DetailLoad.Previous; more -> DetailLoad.Next; else -> DetailLoad.Topic })) }
-                handlePageFailure(error) {
+                if (!isActive || pageJobs["topic:$id"] !== coroutineContext[Job]) return@launch
+                _details.update { states ->
+                    val latest = states[id] ?: return@update states
+                    // 等待期间可能切换了作者或收到了新回复，失败只更新重试所需的字段。
+                    states + (id to latest.copy(
+                        error = error.message ?: "加载失败",
+                        failedPostNumber = requestPostNumber,
+                        retryAtElapsedMs = if (error is RateLimitException) SystemClock.elapsedRealtime() + error.retryAfterMs else 0L,
+                        failedLoad = when {
+                            previous -> DetailLoad.Previous
+                            more -> DetailLoad.Next
+                            else -> DetailLoad.Topic
+                        },
+                    ))
+                }
+                if (error !is RateLimitException) handlePageFailure(error) {
                     loadTopic(
                         id,
                         more,
@@ -5551,6 +5556,11 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         _topicCreator.update { if (it.open && it.draftKey == key) it.copy(syncStatus = status) else it }
     }
 
+    private fun clearDraftSyncStatus(key: String) {
+        _composer.update { if (it.open && it.draftKey == key) it.copy(syncStatus = null) else it }
+        _topicCreator.update { if (it.open && it.draftKey == key) it.copy(syncStatus = null) else it }
+    }
+
     private fun isDraftUploading(key: String): Boolean =
         (_composer.value.uploading && _composer.value.open && _composer.value.draftKey == key) ||
             (_topicCreator.value.uploading && _topicCreator.value.draftKey == key)
@@ -5643,7 +5653,9 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                     if (error is HttpStatusException && error.status == 409) {
                         accountDraftStore.get(userId, key)?.let { accountDraftStore.put(userId, it.copy(conflict = true)) }
                         setDraftSyncStatus(key, "网页草稿已有更新，可直接发送手机内容")
-                    } else setDraftSyncStatus(key, "手机草稿已保留，同步稍后重试，不影响发送")
+                    } else {
+                        clearDraftSyncStatus(key)
+                    }
                 }
                 false
             } finally {
@@ -10184,11 +10196,11 @@ fun openTopicSearch(topicId: Long, title: String) {
                 error.message ?: "加载失败 (HTTP ${error.status})"
             }
             diagnostics.log("加载 ${feed.label} 失败: $msg")
-            settleFeedLoading(feed, msg)
+            settleFeedLoading(feed, msg, pageLoadFailed = page > 0)
         } catch (error: Exception) {
             if (!isCurrent()) return
             diagnostics.log("加载 ${feed.label} 异常: ${error.message}")
-            settleFeedLoading(feed, error.message ?: error.javaClass.simpleName)
+            settleFeedLoading(feed, error.message ?: error.javaClass.simpleName, pageLoadFailed = page > 0)
         } finally {
             if (loadingFeeds.remove(feed, requestJob) && requestScopeGeneration == accountScopeGeneration) {
                 // 包括独立取消：没有在途任务时，不能留下阻止下一次加载的转圈状态。
