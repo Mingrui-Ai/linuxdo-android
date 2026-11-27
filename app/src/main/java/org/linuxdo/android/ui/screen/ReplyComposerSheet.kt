@@ -63,7 +63,6 @@ import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.StrokeJoin
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.drawscope.scale
-import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
@@ -146,7 +145,10 @@ internal fun ReplyComposerSheet(
         topicId = target.topicId,
         allowPoll = true,
         onDraftChange = onDraftChange,
-        onSubmit = onSubmit,
+        onSubmit = { raw ->
+            onDraftChange(raw)
+            onSubmit()
+        },
         onClose = onClose,
         onAttach = onAttach,
         onRemoveAttachment = onRemoveAttachment,
@@ -172,7 +174,7 @@ internal fun MarkdownComposerSheet(
     allowPoll: Boolean = true,
     initialFullScreen: Boolean = false,
     onDraftChange: (String) -> Unit,
-    onSubmit: () -> Unit,
+    onSubmit: (String) -> Unit,
     onClose: () -> Unit,
     onAttach: (Uri) -> Unit,
     onRemoveAttachment: (String) -> Unit = {},
@@ -277,9 +279,6 @@ internal fun MarkdownComposerSheet(
     }
 
     val colors = IosTheme.colors
-    val density = LocalDensity.current
-    val imeInsets = WindowInsets.ime
-    val navInsets = WindowInsets.navigationBars
 
     BoxWithConstraints(
         modifier = Modifier
@@ -304,14 +303,9 @@ internal fun MarkdownComposerSheet(
                 .imePadding()
                 .height(maxHeight * 0.94f)
         } else {
-            // 常态使用 graphicsLayer 跟随 IME 逐帧平移（0 relayout），收放软键盘丝滑贴合不掉帧；
-            // 点击空白区域收起或键盘下滑时直接跟随键盘回落，无二次跳变。
+            // 和全屏态共用实际布局避让键盘，原生编辑器与 Compose 按钮的命中位置保持一致。
             Modifier
-                .graphicsLayer {
-                    val imeBottom = imeInsets.getBottom(density)
-                    val navBottom = navInsets.getBottom(density)
-                    translationY = -(imeBottom - navBottom).coerceAtLeast(0).toFloat()
-                }
+                .imePadding()
                 .heightIn(max = maxHeight * 0.85f)
         }
 
@@ -402,8 +396,9 @@ internal fun MarkdownComposerSheet(
                         enabled = canSubmit,
                         submitting = submitting,
                         onClick = {
-                            editorView?.exportToMarkdown()?.let(onDraftChange)
-                            onSubmit()
+                            val raw = editorView?.exportToMarkdown() ?: draft
+                            onDraftChange(raw)
+                            onSubmit(raw)
                         },
                     )
                 } else {
@@ -477,6 +472,9 @@ internal fun MarkdownComposerSheet(
                         },
                         update = { view ->
                             view.hint = placeholder
+                            view.isEnabled = !busy && !isPreview
+                            view.setOnMarkdownChangeListener(onDraftChange)
+                            view.setOnRemoveAttachmentListener(onRemoveAttachment)
                             view.setOnDismissInputListener(dismiss)
                             view.updateThemeColors(textColorInt, hintColorInt)
                             view.setTextSize(TypedValue.COMPLEX_UNIT_PX, editorTextSizePx)
@@ -655,8 +653,9 @@ internal fun MarkdownComposerSheet(
                         enabled = canSubmit,
                         submitting = submitting,
                         onClick = {
-                            editorView?.exportToMarkdown()?.let(onDraftChange)
-                            onSubmit()
+                            val raw = editorView?.exportToMarkdown() ?: draft
+                            onDraftChange(raw)
+                            onSubmit(raw)
                         },
                     )
                 }

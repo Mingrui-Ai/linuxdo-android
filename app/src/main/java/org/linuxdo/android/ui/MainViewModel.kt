@@ -3778,13 +3778,12 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     fun sendChatMessage(channelId: Long, raw: String, uploadIds: List<Long> = emptyList(), onSent: () -> Unit = {}) {
         val message = raw.trim()
-        if ((message.isBlank() && uploadIds.isEmpty()) || _chat.value.sendingChannelId != null) return
+        if ((message.isBlank() && uploadIds.isEmpty()) || pageJobs["chatSend"]?.isActive == true) return
         val generation = accountScopeGeneration
-        pageJobs["chatSend"] = viewModelScope.launch {
-            _chat.update { it.copy(sendingChannelId = channelId, error = null) }
+        val job = viewModelScope.launch(start = CoroutineStart.LAZY) {
             try {
                 val sent = repository.sendChatMessage(channelId, message, uploadIds)
-                if (generation != accountScopeGeneration) return@launch
+                if (!isActive || generation != accountScopeGeneration || pageJobs["chatSend"] !== coroutineContext[Job]) return@launch
                 if (sent != null) _chat.update { current -> current.copy(messagesByChannel = current.messagesByChannel +
                     (channelId to mergeChatMessages(current.messagesByChannel[channelId].orEmpty(), listOf(sent)))) }
                 onSent()
@@ -3793,11 +3792,21 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             } catch (error: CancellationException) {
                 throw error
             } catch (error: Exception) {
-                _chat.update { it.copy(error = error.message ?: "消息发送失败") }
-            } finally {
-                _chat.update { it.copy(sendingChannelId = null) }
+                if (generation == accountScopeGeneration && pageJobs["chatSend"] === coroutineContext[Job]) {
+                    _chat.update { it.copy(error = error.message ?: "消息发送失败") }
+                }
             }
         }
+        pageJobs["chatSend"] = job
+        _chat.update { it.copy(sendingChannelId = channelId, error = null) }
+        // 包括协程开始执行前的取消；旧任务不能清掉新账号或下一次发送的忙碌状态。
+        job.invokeOnCompletion {
+            if (pageJobs["chatSend"] === job) {
+                pageJobs.remove("chatSend")
+                if (generation == accountScopeGeneration) _chat.update { it.copy(sendingChannelId = null) }
+            }
+        }
+        job.start()
     }
 
     fun uploadChatAttachment(channelId: Long, uri: Uri, onUploaded: (AttachedMedia) -> Unit, onError: (String) -> Unit = {}) {
@@ -9691,7 +9700,7 @@ fun openTopicSearch(topicId: Long, title: String) {
         highestVisiblePostByTopic.forEach { (topicId, postNumber) ->
             container.reading.recordLastSeenPost(topicId, postNumber)
         }
-        pageJobs.values.forEach { it.cancel() }
+        pageJobs.values.toList().forEach { it.cancel() }
         pageJobs.clear()
         loadingFeeds.values.forEach { it.cancel() }
         loadingFeeds.clear()

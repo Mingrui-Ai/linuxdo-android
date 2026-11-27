@@ -1947,6 +1947,8 @@ private fun MainNavigation(state: UiState, viewModel: MainViewModel, lifecycle: 
             }
 
             if (topicCreator.open) {
+                // 常驻主 Tab 的层级为 1；发帖页必须同时显示并接收点击在它们上方。
+                Box(Modifier.fillMaxSize().zIndex(2f)) {
                 key(topicCreator.draftKey) {
                     TopicCreatorSheet(
                         state = topicCreator,
@@ -1968,6 +1970,7 @@ private fun MainNavigation(state: UiState, viewModel: MainViewModel, lifecycle: 
                         onClose = viewModel::closeTopicCreator,
                         onClearNotice = viewModel::clearTopicCreatorNotice,
                     )
+                }
                 }
             }
         }

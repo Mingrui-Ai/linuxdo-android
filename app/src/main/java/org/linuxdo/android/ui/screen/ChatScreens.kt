@@ -98,6 +98,7 @@ import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.flow.distinctUntilChanged
 import org.linuxdo.android.Config
 import org.linuxdo.android.data.AttachedMedia
+import org.linuxdo.android.data.prepareChatMessage
 import org.linuxdo.android.data.ChatChannelSummary
 import org.linuxdo.android.data.ChatMessageSummary
 import org.linuxdo.android.data.ChatUpload
@@ -116,6 +117,7 @@ import org.linuxdo.android.ui.format.RelativeTime
 import org.linuxdo.android.ui.html.CookedBlock
 import org.linuxdo.android.ui.html.CookedParser
 import org.linuxdo.android.ui.html.InlineText
+import org.linuxdo.android.ui.html.contentUrl
 import org.linuxdo.android.ui.html.replyMarkdownPreview
 import java.time.Instant
 import java.time.OffsetDateTime
@@ -777,12 +779,40 @@ internal fun parseChatBubbleBlocks(
         if (parsed.isNotEmpty()) return parsed
     }
     if (message.message.isNotBlank()) {
-        val rendered = renderEmojiShortcodes(message.message, keepUnknown = true).orEmpty()
-        val parsed = runCatching { replyMarkdownPreview(rendered, emojiUrls) }.getOrNull().orEmpty()
+        // 先解析 Markdown，再处理正文表情；不能改写代码块、行内代码或链接中的短码。
+        val parsed = runCatching {
+            replyMarkdownPreview(message.message, emojiUrls)
+        }.getOrNull().orEmpty()
         if (parsed.isNotEmpty()) return parsed
-        return listOf(CookedBlock.Paragraph(listOf(InlineText(rendered))))
+        return listOf(CookedBlock.Paragraph(listOf(InlineText(message.message))))
     }
     return emptyList()
+}
+
+/** cooked / Markdown 已显示的图片和附件不再从 uploads 追加一遍。 */
+internal fun unrenderedChatUploads(uploads: List<ChatUpload>, blocks: List<CookedBlock>): List<ChatUpload> {
+    val rendered = mutableSetOf<String>()
+    fun add(url: String?) { url?.let(::contentUrl)?.let(rendered::add) }
+    fun visit(items: List<CookedBlock>) {
+        items.forEach { block ->
+            when (block) {
+                is CookedBlock.Paragraph -> block.runs.forEach { add(it.href) }
+                is CookedBlock.Picture -> { add(block.url); add(block.originalUrl) }
+                is CookedBlock.ImageGrid -> block.pictures.forEach { add(it.url); add(it.originalUrl) }
+                is CookedBlock.Quote -> visit(block.blocks)
+                is CookedBlock.Details -> visit(block.blocks)
+                is CookedBlock.ListBlock -> block.entries.forEach(::visit)
+                is CookedBlock.Table -> block.rows.forEach { row -> row.forEach { visit(it.blocks) } }
+                is CookedBlock.Video -> add(block.url)
+                is CookedBlock.Audio -> add(block.url)
+                else -> Unit
+            }
+        }
+    }
+    visit(blocks)
+    return uploads.filter { upload ->
+        listOfNotNull(contentUrl(upload.url), upload.thumbnailUrl?.let(::contentUrl)).none { it in rendered }
+    }
 }
 
 @Composable
@@ -813,15 +843,6 @@ fun ChatRoomScreen(
     var isUploading by remember(channelId) { mutableStateOf(false) }
     var chatGallery by remember(channelId) { mutableStateOf<Pair<List<ImageViewerItem>, Int>?>(null) }
     val keyboard = LocalSoftwareKeyboardController.current
-    val send: (String, List<Long>) -> Unit = { text, uploads ->
-        onSend(channelId, text, uploads) {
-            draft = ""
-            pendingAttachments = emptyList()
-            showComposerSheet = false
-            composerInitialFullscreen = false
-            keyboard?.hide()
-        }
-    }
 
     fun handleAttachUri(uri: Uri) {
         isUploading = true
@@ -899,22 +920,20 @@ fun ChatRoomScreen(
     val canSendInline = (draft.isNotBlank() || pendingAttachments.isNotEmpty()) &&
         !isUploading && state.sendingChannelId == null
 
-    fun submitChatDraft() {
-        if (!canSendInline) return
-        val text = draft.trim()
-        val unincluded = pendingAttachments.filter { media ->
-            val shortUrl = media.uploaded.shortUrl
-            shortUrl.isBlank() || !text.contains(shortUrl)
-        }
-        val attachText = unincluded.joinToString("\n") { it.toMarkdown() }
-        val fullMessage = when {
-            text.isBlank() -> attachText
-            attachText.isBlank() -> text
-            else -> "$text\n\n$attachText"
-        }
-        if (fullMessage.isNotBlank()) {
-            val uploadIds = pendingAttachments.mapNotNull { it.uploadId }
-            send(fullMessage, uploadIds)
+    fun submitChatDraft(raw: String) {
+        // 编辑器导出后 Compose 可能尚未重组，不能用上一帧 canSendInline 拦截新正文。
+        if (isUploading || state.sendingChannelId != null) return
+        val submittedAttachments = pendingAttachments
+        val submission = prepareChatMessage(raw, submittedAttachments) ?: return
+        onSend(channelId, submission.message, submission.uploadIds) {
+            if (draft == raw) draft = ""
+            val sentIds = submittedAttachments.map { it.id }.toSet()
+            pendingAttachments = pendingAttachments.filterNot { it.id in sentIds }
+            if (draft.isBlank() && pendingAttachments.isEmpty()) {
+                showComposerSheet = false
+                composerInitialFullscreen = false
+                keyboard?.hide()
+            }
         }
     }
 
@@ -1189,7 +1208,7 @@ fun ChatRoomScreen(
                                 .height(34.dp)
                                 .clip(RoundedCornerShape(17.dp))
                                 .background(if (canSendInline) IosTheme.colors.accent else IosTheme.colors.accent.copy(alpha = 0.35f))
-                                .clickable(enabled = canSendInline, onClick = ::submitChatDraft)
+                                .clickable(enabled = canSendInline) { submitChatDraft(draft) }
                                 .padding(horizontal = 14.dp),
                             contentAlignment = Alignment.Center,
                         ) {
@@ -1400,8 +1419,9 @@ private fun ChatMessageBubble(
         parseChatBubbleBlocks(message, emojiUrls)
     }
     val timeStr = remember(message.createdAt) { formatBubbleClock(message.createdAt) }
-    val imageUploads = remember(message.uploads) { message.uploads.filter { it.isImage } }
-    val fileUploads = remember(message.uploads) { message.uploads.filter { !it.isImage } }
+    val remainingUploads = remember(message.uploads, blocks) { unrenderedChatUploads(message.uploads, blocks) }
+    val imageUploads = remainingUploads.filter { it.isImage }
+    val fileUploads = remainingUploads.filterNot { it.isImage }
     var fullscreenImage by remember { mutableStateOf<ChatUpload?>(null) }
 
     fullscreenImage?.let { upload ->
@@ -1450,7 +1470,7 @@ private fun ChatMessageBubble(
             Box(
                 modifier = Modifier
                     .clip(bubbleShape)
-                    .background(IosTheme.colors.accent)
+                    .background(if (IosTheme.colors.isDark) Color(0xFF1E40AF) else Color(0xFF1D4ED8))
                     .padding(horizontal = 13.dp, vertical = 8.5.dp),
             ) {
                 Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
@@ -1542,10 +1562,10 @@ private fun ChatMessageBubble(
                 Box(
                     modifier = Modifier
                         .clip(bubbleShape)
-                        .background(IosTheme.colors.card)
+                        .background(if (IosTheme.colors.isDark) Color(0xFF30343B) else Color.White)
                         .border(
-                            0.5.dp,
-                            IosTheme.colors.separator.copy(alpha = 0.5f),
+                            0.8.dp,
+                            if (IosTheme.colors.isDark) Color(0xFF555D69) else Color(0xFFCBD5E1),
                             bubbleShape,
                         )
                         .padding(horizontal = 13.dp, vertical = 8.5.dp),
@@ -1747,7 +1767,7 @@ private fun ChatMarkdownContent(
                         block.rows.forEachIndexed { rIdx, row ->
                             Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                                 row.forEach { cell ->
-                                    Box(Modifier.widthIn(min = 52.dp, max = 140.dp)) {
+                                    Box(Modifier.width(128.dp * cell.columnSpan)) {
                                         ChatMarkdownContent(cell.blocks, onAccent, onPicture, onOpenTopic, onOpenExternalUrl)
                                     }
                                 }
