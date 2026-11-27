@@ -152,7 +152,7 @@ internal fun ProfileHeader(
                     },
                 )
                 Spacer(Modifier.height(if (background != null) coverHeight - IosMetrics.navBarHeight - 39.dp else 24.dp))
-                Row(Modifier.fillMaxWidth().padding(horizontal = 16.dp), verticalAlignment = Alignment.Bottom) {
+                Row(Modifier.fillMaxWidth().padding(horizontal = 16.dp), verticalAlignment = Alignment.CenterVertically) {
                     ProfileAvatar(username, avatar, staticAvatar, card?.status, 78.dp,
                         onOpenProfile = fullAvatar?.let { url -> {
                             previewImage = ImageViewerItem(url, description = "@$username 的头像",
@@ -162,11 +162,11 @@ internal fun ProfileHeader(
                         onImageLoaded = { avatarPreviewKey = it })
                     Spacer(Modifier.weight(1f))
                     if (followAction != null || onChat != null) {
-                        Column(verticalArrangement = Arrangement.spacedBy(6.dp), horizontalAlignment = Alignment.End) {
+                        Column(Modifier.width(76.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
                             followAction?.let { action ->
-                                ProfileQuickAction(action.label, action.enabled, action.onClick)
+                                ProfileQuickAction(action.label, action.icon, action.enabled, action.onClick)
                             }
-                            onChat?.let { ProfileQuickAction("聊天", true, it) }
+                            onChat?.let { ProfileQuickAction("聊天", Icons.Default.Send, true, it) }
                         }
                     }
                 }
@@ -213,14 +213,22 @@ internal fun ProfileHeader(
 }
 
 @Composable
-private fun ProfileQuickAction(label: String, enabled: Boolean, onClick: () -> Unit) {
+private fun ProfileQuickAction(label: String, icon: ImageVector, enabled: Boolean, onClick: () -> Unit) {
     val colors = IosTheme.colors
-    Surface(onClick = onClick, enabled = enabled, shape = androidx.compose.foundation.shape.RoundedCornerShape(12.dp),
-        color = colors.card.copy(alpha = .94f), contentColor = if (enabled) colors.accent else colors.secondaryLabel,
-        border = androidx.compose.foundation.BorderStroke(1.dp, colors.accent.copy(alpha = .16f))) {
-        Box(Modifier.widthIn(min = 76.dp).heightIn(min = 44.dp).padding(horizontal = 10.dp, vertical = 6.dp),
-            contentAlignment = Alignment.Center) {
-            Text(label, fontSize = 13.sp, maxLines = 1)
+    // Keep the two controls (36 + 4 + 36 dp) within the 78 dp avatar row.
+    CompositionLocalProvider(LocalMinimumInteractiveComponentSize provides 0.dp) {
+        Surface(onClick = onClick, enabled = enabled,
+            modifier = Modifier.fillMaxWidth().height(36.dp),
+            shape = androidx.compose.foundation.shape.RoundedCornerShape(10.dp),
+            color = colors.card.copy(alpha = .94f), contentColor = if (enabled) colors.accent else colors.secondaryLabel,
+            border = androidx.compose.foundation.BorderStroke(1.dp, colors.accent.copy(alpha = .16f))) {
+            Row(Modifier.fillMaxSize().padding(horizontal = 5.dp),
+                horizontalArrangement = Arrangement.spacedBy(4.dp, Alignment.CenterHorizontally),
+                verticalAlignment = Alignment.CenterVertically) {
+                Icon(icon, null, modifier = Modifier.size(14.dp))
+                Text(label, fontSize = 12.sp, lineHeight = 16.sp, maxLines = 1,
+                    overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f, fill = false))
+            }
         }
     }
 }
