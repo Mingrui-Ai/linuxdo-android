@@ -2085,6 +2085,9 @@ private fun MainNavigation(state: UiState, viewModel: MainViewModel, lifecycle: 
         UserCardBottomSheet(
             state = userCard,
             onDismiss = viewModel::closeUserCard,
+            signedIn = !state.username.isNullOrBlank(),
+            onSetFollowing = viewModel::setProfileFollowing,
+            onChat = { username -> viewModel.openChatWithUser(username) { stack.push(it) } },
             onOpenProfile = { username ->
                 val card = userCard.user?.takeIf { it.username.equals(username, ignoreCase = true) }
                 val staticAvatar = org.linuxdo.android.data.avatarUrlOf(card?.avatarTemplate, size = 160)

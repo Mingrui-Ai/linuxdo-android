@@ -3372,7 +3372,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 following = isFollowed || effectiveCached.following,
                 isBlocked = isBlocked,
                 isSelf = isSelf,
-                loading = false,
+                // 缓存先展示；关注按钮等本次资料刷新完成后再启用，避免迟到数据覆盖操作结果。
+                loading = true,
             )
         } else {
             val placeholder = UserCardData(
