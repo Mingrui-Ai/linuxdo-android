@@ -4,6 +4,7 @@ import android.content.Context
 import android.os.Build
 import android.content.Intent
 import android.content.SharedPreferences
+import android.view.View
 import android.view.ViewGroup
 import android.view.WindowManager
 import android.widget.Toast
@@ -65,7 +66,9 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableFloatStateOf
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -1300,7 +1303,9 @@ object MiniAppSessionPool {
         var documentId: String? = null
         var bootstrapPreparing = false
         var appInfo by mutableStateOf<MiniAppEntry?>(null)
-        var mainFrameError by mutableStateOf<String?>(null)
+        var loadError by mutableStateOf<String?>(null)
+        var documentError by mutableStateOf<String?>(null)
+        val mainFrameError: String? get() = loadError ?: documentError
         var customNavMode by mutableStateOf(false)
         var desktopMode by mutableStateOf(false)
             private set
@@ -1319,7 +1324,8 @@ object MiniAppSessionPool {
             desktopMode = useDesktop
             // 初始化尚未完成时，目标页面会直接采用新模式，避免重载打断 Cookie 准备。
             if (bootstrapDone) {
-                mainFrameError = null
+                loadError = null
+                documentError = null
                 progress = 0.08f
                 session.reload()
             }
@@ -1353,7 +1359,7 @@ object MiniAppSessionPool {
 
     fun canReuse(url: String): Boolean {
         val current = activeHolder ?: return false
-        return current.key == normalizeMiniAppKey(url)
+        return current.key == normalizeMiniAppKey(url) && current.mainFrameError == null
     }
 
     fun acquireOrCreate(
@@ -1361,6 +1367,7 @@ object MiniAppSessionPool {
         url: String,
         initialTitle: String?,
         injectCss: String?,
+        restart: Boolean = false,
     ): Pair<HeldSession, Boolean> {
         val appContext = context.applicationContext ?: context
         expireJob?.cancel()
@@ -1368,8 +1375,9 @@ object MiniAppSessionPool {
         val targetKey = normalizeMiniAppKey(url)
         val existing = activeHolder
         val store = (appContext as? App)?.container?.sessionStore
-        if (existing != null && existing.key == targetKey && existing.accountId == store?.currentUserId() &&
-            existing.accountGeneration == store.sessionGeneration) {
+        val sameEntry = existing != null && existing.key == targetKey && existing.accountId == store?.currentUserId() &&
+            existing.accountGeneration == store.sessionGeneration
+        if (existing != null && sameEntry && !restart && existing.mainFrameError == null) {
             if (!initialTitle.isNullOrBlank() && existing.title == defaultMiniAppTitle(existing.entryUrl, null)) {
                 existing.title = initialTitle
             }
@@ -1377,11 +1385,11 @@ object MiniAppSessionPool {
             existing.session.setActive(true)
             return existing to true
         }
-        // 若切换到不同小程序，先释放旧实例
+        val keepFloating = sameEntry && isFloating
         destroyCurrentInternal()
         val holder = createNewSession(appContext, targetKey, url, initialTitle, injectCss)
         activeHolder = holder
-        isFloating = false
+        isFloating = keepFloating
         holder.initializationJob?.start()
         return holder to false
     }
@@ -1419,7 +1427,8 @@ object MiniAppSessionPool {
     fun relaunchCurrent(targetUrl: String? = null) {
         val holder = activeHolder ?: return
         val loadTarget = targetUrl ?: holder.entryUrl
-        holder.mainFrameError = null
+        holder.loadError = null
+        holder.documentError = null
         holder.progress = 0.08f
         holder.session.loadUri(miniAppLaunchUrl(loadTarget))
     }
@@ -1554,8 +1563,10 @@ object MiniAppSessionPool {
             holder.contentReady = phase == "ready" || phase == "permission"
             if (holder.contentReady) holder.bootstrapping = false
             holder.hasRenderedFirstPage = holder.contentReady && holder.targetPainted
-            if (phase == "error" || phase == "unavailable") {
-                holder.mainFrameError = state.optString("detail").ifBlank { "小程序暂时无法启动，请稍后重试" }
+            // 授权弹窗和加载器可在同一份文档里恢复，期间 Gecko 不会再次触发 onPageStarted。
+            holder.documentError = when (phase) {
+                "error", "unavailable" -> state.optString("detail").ifBlank { "小程序暂时无法启动，请稍后重试" }
+                else -> null
             }
             if (webApp == ProfileWebApp.Mail && holder.contentReady &&
                 documentUrl.toHttpUrlOrNull()?.host == "webmail.linux.do") {
@@ -1632,7 +1643,8 @@ object MiniAppSessionPool {
                     holder.currentUrl = startUrl
                 }
                 holder.progress = 0.08f
-                holder.mainFrameError = null
+                holder.loadError = null
+                holder.documentError = null
             },
             onProgressChanged = { newProgress ->
                 if (!isBootstrapLocation(holder.documentUrl)) {
@@ -1666,7 +1678,7 @@ object MiniAppSessionPool {
                     holder.contentReady = true
                     holder.hasRenderedFirstPage = holder.targetPainted
                 } else if (holder.bridge == null) {
-                    holder.mainFrameError = "小程序加载组件未就绪，请重试"
+                    holder.loadError = "小程序加载组件未就绪，请重试"
                 }
                 syncClearanceBack(finishedUrl)
                 holder.injectCss?.let { css ->
@@ -1683,7 +1695,7 @@ object MiniAppSessionPool {
                 } else {
                     holder.bootstrapping = false
                     holder.currentUrl = failedUrl.ifBlank { holder.currentUrl }
-                    holder.mainFrameError = describeGeckoLoadError(error)
+                    holder.loadError = describeGeckoLoadError(error)
                 }
             },
             onExternalRequest = { targetUri ->
@@ -1897,13 +1909,22 @@ fun InAppBrowserSheet(
 
     if (!validInAppUrl) return
 
-    val (holder, _) = remember(activeTargetUrl) {
+    var launchAttempt by remember(activeTargetUrl) { mutableIntStateOf(0) }
+    val holder = remember(activeTargetUrl, launchAttempt) {
         MiniAppSessionPool.acquireOrCreate(
             context = context,
             url = activeTargetUrl,
             initialTitle = targetTitle,
             injectCss = injectCss,
-        )
+            restart = launchAttempt > 0,
+        ).first
+    }
+    fun relaunchPage(pageUrl: String = holder.entryUrl) {
+        if (MiniAppEntry.idFromUrl(holder.entryUrl) != null) {
+            launchAttempt++
+        } else {
+            MiniAppSessionPool.relaunchCurrent(pageUrl)
+        }
     }
 
     val geckoView = remember(holder) {
@@ -2126,7 +2147,7 @@ fun InAppBrowserSheet(
                             fontSize = 12.sp,
                             modifier = Modifier.weight(1f),
                         )
-                        TextButton(onClick = { MiniAppSessionPool.relaunchCurrent(holder.currentUrl) }) {
+                        TextButton(onClick = { relaunchPage(holder.currentUrl) }) {
                             Text("重进", fontSize = 12.sp, color = IosTheme.colors.accent)
                         }
                         TextButton(onClick = { openExternal(context, holder.currentUrl) }) {
@@ -2142,28 +2163,30 @@ fun InAppBrowserSheet(
                         .weight(1f)
                         .background(IosTheme.colors.groupedBackground),
                 ) {
-                    if (holder.mainFrameError != null) {
-                        MiniAppErrorView(
-                            errorMessage = holder.mainFrameError.orEmpty(),
-                            onRetry = {
-                                MiniAppSessionPool.relaunchCurrent()
-                            },
-                            onOpenExternal = { openExternal(context, holder.currentUrl) },
-                        )
-                    } else {
+                    key(holder) {
                         AndroidView(
                             factory = { geckoView },
                             modifier = Modifier.fillMaxSize().clipToBounds(),
                             update = { view ->
-                                view.alpha = if (showPage) 1f else 0f
+                                val visible = showPage && holder.mainFrameError == null
+                                view.alpha = if (visible) 1f else 0f
+                                view.importantForAccessibility = if (visible) View.IMPORTANT_FOR_ACCESSIBILITY_AUTO
+                                    else View.IMPORTANT_FOR_ACCESSIBILITY_NO_HIDE_DESCENDANTS
                             },
+                        )
+                    }
+                    holder.mainFrameError?.let { message ->
+                        MiniAppErrorView(
+                            errorMessage = message,
+                            onRetry = { relaunchPage() },
+                            onOpenExternal = { openExternal(context, holder.currentUrl) },
                         )
                     }
 
                     if (showColdStartOverlay) {
                         MiniAppColdStartOverlay(
                             slow = isTimeout,
-                            onRetry = { MiniAppSessionPool.relaunchCurrent() },
+                            onRetry = { relaunchPage() },
                         )
                     }
                 }
@@ -2249,7 +2272,7 @@ fun InAppBrowserSheet(
                     },
                     onRelaunch = {
                         actionSheetVisible = false
-                        MiniAppSessionPool.relaunchCurrent(holder.currentUrl)
+                        relaunchPage(holder.currentUrl)
                     },
                     onToggleCustomNav = {
                         actionSheetVisible = false
@@ -2817,7 +2840,7 @@ fun MiniAppFloatingPill(
                         },
                     )
                 }
-                .clickable { onRestore(holder.currentUrl) }
+                .clickable { onRestore(holder.entryUrl) }
                 .padding(start = 8.dp, end = 6.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
@@ -2883,6 +2906,7 @@ private fun MiniAppErrorView(
         modifier = Modifier
             .fillMaxSize()
             .background(IosTheme.colors.groupedBackground)
+            .pointerInput(Unit) { detectTapGestures(onTap = {}) }
             .padding(24.dp),
         contentAlignment = Alignment.Center,
     ) {
