@@ -451,6 +451,7 @@ data class CategoriesUiState(
     val error: String? = null,
     val order: List<Long> = emptyList(),
     val pinnedIds: List<Long> = emptyList(),
+    val visibleCategoryIds: Set<Int> = emptySet(),
 )
 
 data class TagsUiState(
@@ -6007,6 +6008,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 loaded = true,
                 order = store.loadCategoryOrder(),
                 pinnedIds = store.loadPinnedCategoryIds(),
+                visibleCategoryIds = repository.currentVisibleCategoryIds(),
             )
             val currentCatId = _topicCreator.value.categoryId
             if (_topicCreator.value.open && currentCatId != null) {
@@ -7349,6 +7351,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                     loaded = true,
                     order = store.loadCategoryOrder(),
                     pinnedIds = store.loadPinnedCategoryIds(),
+                    visibleCategoryIds = repository.currentVisibleCategoryIds(),
                 )
             } catch (error: CancellationException) {
                 throw error
@@ -8797,6 +8800,7 @@ fun openTopicSearch(topicId: Long, title: String) {
             )
                     diagnostics.log("分类表已从服务端同步更新(${known.size} 项)")
                 }
+                _categories.update { it.copy(visibleCategoryIds = repository.currentVisibleCategoryIds()) }
                 backfillCategories(known)
             } catch (error: CancellationException) {
                 throw error

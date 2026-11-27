@@ -4265,6 +4265,15 @@ class TopicRepository(
     private var categoryPermissionsSyncedGeneration = -1L
 
     @Volatile
+    private var categoryReadAccessSnapshot: Pair<Long, Set<Int>>? = null
+
+    /** 只接受当前会话实际返回的分类，磁盘预热分类不能作为访问权限依据。 */
+    fun currentVisibleCategoryIds(): Set<Int> {
+        val snapshot = categoryReadAccessSnapshot ?: return emptySet()
+        return if (snapshot.first == (sessionStore?.sessionGeneration ?: 0L)) snapshot.second else emptySet()
+    }
+
+    @Volatile
     private var lastCategoriesRefreshAt = 0L
 
     fun hasSyncedCategoryPermissions(): Boolean {
@@ -4287,6 +4296,7 @@ class TopicRepository(
                 .associateBy { it.id }
         }.getOrDefault(emptyMap())
         if (siteById.isEmpty()) return categories
+        categoryReadAccessSnapshot = currentGen to siteById.keys.toSet()
         categoryPermissionsSyncedGeneration = currentGen
         lastCategoriesRefreshAt = SystemClock.elapsedRealtime()
         fun mergeOne(category: Category): Category {

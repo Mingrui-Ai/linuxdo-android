@@ -71,6 +71,8 @@ import org.linuxdo.android.data.Category
 import org.linuxdo.android.data.DiscourseTag
 import org.linuxdo.android.data.HomeFilterResolver
 import org.linuxdo.android.data.HomeFilterState
+import org.linuxdo.android.data.HomeLevelAccess
+import org.linuxdo.android.data.homeLevelAccess
 import org.linuxdo.android.data.TopicSortOrder
 import org.linuxdo.android.data.arrangeCategoryGroups
 import org.linuxdo.android.data.arrangeTags
@@ -89,6 +91,10 @@ import org.linuxdo.android.ui.design.IosTheme
 internal fun HomeTopFilterHeader(
     topBarVisible: Boolean,
     filter: HomeFilterState,
+    signedIn: Boolean,
+    trustLevel: Int?,
+    visibleCategoryIds: Set<Int>,
+    onOpenLevelAndCredits: (() -> Unit)?,
     sortOrder: TopicSortOrder,
     sortAscending: Boolean,
     categories: List<Category>,
@@ -288,6 +294,10 @@ internal fun HomeTopFilterHeader(
                                 expanded = showLevelMenu,
                                 filter = filter,
                                 categories = categories,
+                                signedIn = signedIn,
+                                trustLevel = trustLevel,
+                                visibleCategoryIds = visibleCategoryIds,
+                                onOpenLevelAndCredits = onOpenLevelAndCredits,
                                 onDismiss = { showLevelMenu = false },
                                 onSelectLevel = { lv ->
                                     showLevelMenu = false
@@ -750,12 +760,16 @@ internal fun TopicSortDropdownMenu(
     }
 }
 
-/** 极简独立 LV 等级下拉栏：复用用户名旁 LevelBadge 样式，右侧带轻巧「可见」提示。 */
+/** 保持窄宽度，区分可见、未解锁和类别未开放，并提供等级积分入口。 */
 @Composable
 private fun HomeLevelDropdownMenu(
     expanded: Boolean,
     filter: HomeFilterState,
     categories: List<Category>,
+    signedIn: Boolean,
+    trustLevel: Int?,
+    visibleCategoryIds: Set<Int>,
+    onOpenLevelAndCredits: (() -> Unit)?,
     onDismiss: () -> Unit,
     onSelectLevel: (Int?) -> Unit,
 ) {
@@ -766,6 +780,19 @@ private fun HomeLevelDropdownMenu(
             listOf(0, 1, 2, 3)
         }
     }
+    val levelAccess = remember(categories, filter.categoryId, allowedLevels, signedIn, trustLevel, visibleCategoryIds) {
+        (0..3).associateWith { level ->
+            val supported = filter.categoryId == null || categories.isEmpty() || level in allowedLevels
+            val visible = if (filter.categoryId != null) {
+                HomeFilterResolver.resolveCategoryWithLevel(categories, filter.categoryId, level)?.id in visibleCategoryIds
+            } else {
+                HomeFilterResolver.categoriesForLevel(categories, level).any { it.id in visibleCategoryIds }
+            }
+            homeLevelAccess(level, signedIn, trustLevel, supported, visible)
+        }
+    }
+    val knownLevel = trustLevel?.takeIf { it in 0..4 }
+    val hasLockedLevels = levelAccess.values.any { it == HomeLevelAccess.UpgradeRequired }
 
     DropdownMenu(
         expanded = expanded,
@@ -776,7 +803,7 @@ private fun HomeLevelDropdownMenu(
         modifier = Modifier.width(118.dp),
     ) {
         (0..3).forEach { lv ->
-            val supported = filter.categoryId == null || categories.isEmpty() || lv in allowedLevels
+            val access = levelAccess.getValue(lv)
             val selected = filter.level == lv
             val (lvBg, lvBorder, lvText) = levelPillColors(lv, IosTheme.colors.isDark)
             Row(
@@ -789,9 +816,9 @@ private fun HomeLevelDropdownMenu(
                         if (selected) Modifier.border(0.8.dp, lvBorder, RoundedCornerShape(9.dp))
                         else Modifier,
                     )
-                    .clickable(enabled = supported) { onSelectLevel(lv) }
+                    .clickable(enabled = access.selectable) { onSelectLevel(lv) }
                     .padding(horizontal = 9.dp, vertical = 7.dp)
-                    .alpha(if (supported) 1f else 0.38f),
+                    .alpha(if (access.selectable) 1f else 0.5f),
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.SpaceBetween,
             ) {
@@ -819,7 +846,7 @@ private fun HomeLevelDropdownMenu(
                         LevelBadge(level = lv)
                     }
                     Text(
-                        text = "可见",
+                        text = access.label,
                         style = IosTheme.type.caption.copy(fontSize = 11.5.sp),
                         color = if (selected) lvText else IosTheme.colors.secondaryLabel,
                     )
@@ -828,6 +855,32 @@ private fun HomeLevelDropdownMenu(
                     Text("✓", color = lvText, fontWeight = FontWeight.Bold, fontSize = 12.sp)
                 }
             }
+        }
+        if (!signedIn || hasLockedLevels || knownLevel == null) {
+            Text(
+                text = when {
+                    !signedIn -> "登录后查看\n等级与升级进度"
+                    knownLevel == null -> "等级信息待同步"
+                    else -> "当前 Lv.$knownLevel\n升级解锁更多分类"
+                },
+                style = IosTheme.type.caption.copy(fontSize = 10.5.sp, lineHeight = 15.sp),
+                color = IosTheme.colors.secondaryLabel,
+                modifier = Modifier.padding(start = 12.dp, end = 12.dp, top = 6.dp, bottom = 2.dp),
+            )
+        }
+        if (signedIn && onOpenLevelAndCredits != null) {
+            Text(
+                text = "等级与积分 ›",
+                style = IosTheme.type.caption.copy(fontSize = 11.5.sp, fontWeight = FontWeight.Medium),
+                color = IosTheme.colors.accent,
+                modifier = Modifier.fillMaxWidth().padding(horizontal = 6.dp)
+                    .clip(RoundedCornerShape(8.dp))
+                    .clickable(role = Role.Button) {
+                        onDismiss()
+                        onOpenLevelAndCredits()
+                    }
+                    .padding(horizontal = 6.dp, vertical = 9.dp),
+            )
         }
     }
 }
