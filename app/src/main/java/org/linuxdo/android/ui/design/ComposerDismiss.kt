@@ -59,10 +59,11 @@ internal fun rememberComposerDismiss(
         {
             if (latestEnabled && latestCanDismiss) {
                 imeState.update(visible = false, allowed = false)
-                latestOnDismiss()
+                // 先通知系统隐藏软键盘并清除焦点，再移除弹层，让键盘收起与遮罩消失同步启动、避免闪跳。
                 keyboard?.hide()
                 view.findFocus()?.clearFocus()
                 focusManager.clearFocus(force = true)
+                latestOnDismiss()
             }
         }
     }

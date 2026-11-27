@@ -22,14 +22,18 @@ import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.ime
+import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
+import androidx.compose.foundation.layout.navigationBars
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -59,6 +63,7 @@ import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.StrokeJoin
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.drawscope.scale
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
@@ -175,10 +180,9 @@ internal fun ReplyComposerSheet(
         }
     }
 
-    // 弹框打开时默认选中输入框并弹出软键盘
+    // 弹框打开时立刻聚焦输入框并呼出软键盘，消除额外延迟避免卡顿感
     LaunchedEffect(editorView, composer.loadingDraft) {
         if (!composer.loadingDraft && editorView != null && !isPreview) {
-            delay(120)
             editorView?.requestInputFocus()
         }
     }
@@ -226,6 +230,9 @@ internal fun ReplyComposerSheet(
     }
 
     val colors = IosTheme.colors
+    val density = LocalDensity.current
+    val imeInsets = WindowInsets.ime
+    val navInsets = WindowInsets.navigationBars
 
     BoxWithConstraints(
         modifier = Modifier
@@ -246,9 +253,19 @@ internal fun ReplyComposerSheet(
         )
 
         val sheetHeightModifier = if (isFullScreen) {
-            Modifier.height(maxHeight * 0.94f)
+            Modifier
+                .imePadding()
+                .height(maxHeight * 0.94f)
         } else {
-            Modifier.heightIn(max = maxHeight * 0.85f)
+            // 常态使用 graphicsLayer 跟随 IME 逐帧平移（0 relayout），收放软键盘丝滑贴合不掉帧；
+            // 点击空白区域收起或键盘下滑时直接跟随键盘回落，无二次跳变。
+            Modifier
+                .graphicsLayer {
+                    val imeBottom = imeInsets.getBottom(density)
+                    val navBottom = navInsets.getBottom(density)
+                    translationY = -(imeBottom - navBottom).coerceAtLeast(0).toFloat()
+                }
+                .heightIn(max = maxHeight * 0.85f)
         }
 
         Column(

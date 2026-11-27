@@ -23,6 +23,7 @@ import androidx.compose.foundation.layout.displayCutout
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.only
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
@@ -294,6 +295,7 @@ fun LoginScreen(
         Modifier
             .fillMaxSize()
             .background(Brush.verticalGradient(listOf(palette.bgTop, palette.bgMid, palette.bgBottom)))
+            .imePadding()
             .clickable(
                 indication = null,
                 interactionSource = remember { MutableInteractionSource() },

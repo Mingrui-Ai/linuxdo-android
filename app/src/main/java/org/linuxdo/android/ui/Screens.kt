@@ -47,6 +47,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.safeDrawingPadding
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.PaddingValues
@@ -6690,15 +6691,17 @@ internal class RichMarkdownEditorView(context: Context) : EditText(context) {
         if (!isAttachedToWindow) return
         isFocusable = true
         isFocusableInTouchMode = true
-        requestFocus()
+        if (!hasFocus()) requestFocus()
         text?.let { ed ->
-            setSelection(ed.length)
+            if (selectionStart < 0 || selectionEnd < 0) setSelection(ed.length)
         }
-        post {
-            if (!isAttachedToWindow || !hasFocus()) return@post
-            val imm = context.getSystemService(Context.INPUT_METHOD_SERVICE) as? android.view.inputmethod.InputMethodManager
-            imm?.showSoftInput(this, android.view.inputmethod.InputMethodManager.SHOW_IMPLICIT)
+        val showNow = {
+            if (isAttachedToWindow && hasFocus()) {
+                val imm = context.getSystemService(Context.INPUT_METHOD_SERVICE) as? android.view.inputmethod.InputMethodManager
+                imm?.showSoftInput(this, android.view.inputmethod.InputMethodManager.SHOW_IMPLICIT)
+            }
         }
+        if (hasWindowFocus()) showNow() else post { showNow() }
     }
 
     fun insertToken(token: String) {
@@ -7197,6 +7200,7 @@ fun TopicCreatorSheet(
             .composerBackKeys(dismiss)
             .background(IosTheme.colors.card)
             .windowInsetsPadding(WindowInsets.systemBars.union(WindowInsets.displayCutout).only(WindowInsetsSides.Top))
+            .imePadding()
             .clickable(
                 interactionSource = remember { MutableInteractionSource() },
                 indication = null,

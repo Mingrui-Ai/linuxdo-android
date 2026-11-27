@@ -4414,19 +4414,29 @@ private fun BoostSheet(
                 ),
         )
 
+        val density = LocalDensity.current
+        val imeInsets = WindowInsets.ime
+        val navInsets = WindowInsets.navigationBars
+
         Column(
             modifier = Modifier
                 .fillMaxWidth()
-                .clip(RoundedCornerShape(topStart = 16.dp, topEnd = 16.dp))
+                .graphicsLayer {
+                    val imeBottom = imeInsets.getBottom(density)
+                    val navBottom = navInsets.getBottom(density)
+                    translationY = -(imeBottom - navBottom).coerceAtLeast(0).toFloat()
+                }
+                .clip(RoundedCornerShape(topStart = 14.dp, topEnd = 14.dp))
                 .background(IosTheme.colors.card)
                 .clickable(
                     interactionSource = remember { MutableInteractionSource() },
                     indication = null,
                     onClick = {},
                 )
-                .padding(horizontal = 12.dp, vertical = 8.dp),
-            verticalArrangement = Arrangement.spacedBy(6.dp),
+                .padding(horizontal = 12.dp, vertical = 7.dp),
+            verticalArrangement = Arrangement.spacedBy(5.dp),
         ) {
+            // 顶行：左侧简评目标，右侧紧凑字数/表情计数
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 verticalAlignment = Alignment.CenterVertically,
@@ -4434,85 +4444,94 @@ private fun BoostSheet(
             ) {
                 Text(
                     text = "简评 #${target.postNumber} · @${target.username}",
-                    style = IosTheme.type.headline,
+                    style = IosTheme.type.subheadline,
                     fontWeight = FontWeight.SemiBold,
                     color = IosTheme.colors.label,
                     maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.weight(1f),
                 )
-
+                Spacer(Modifier.width(8.dp))
+                Text(
+                    text = "${length.visible}/${BoostLength.MAX_VISIBLE} · 表情 ${length.emoji}/${BoostLength.MAX_EMOJI}",
+                    style = IosTheme.type.caption.copy(fontSize = 11.sp),
+                    color = if (over) IosTheme.colors.destructive else IosTheme.colors.secondaryLabel,
+                    maxLines = 1,
+                )
             }
 
-            Box(
+            // 输入框与发送按钮合并为同一紧凑胶囊行，整体更低矮利落
+            Row(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .heightIn(min = 44.dp, max = 160.dp)
-                    .clip(RoundedCornerShape(12.dp))
+                    .clip(RoundedCornerShape(18.dp))
                     .background(IosTheme.colors.fieldBackground)
-                    .verticalScroll(rememberScrollState())
-                    .padding(12.dp),
+                    .padding(start = 12.dp, end = 4.dp, top = 4.dp, bottom = 4.dp),
+                verticalAlignment = Alignment.Bottom,
+                horizontalArrangement = Arrangement.spacedBy(6.dp),
             ) {
-                BasicTextField(
-                    value = textFieldValue,
-                    onValueChange = { newValue ->
-                        if (newValue.text.length <= BoostLength.RAW_INPUT_CAP) {
-                            textFieldValue = newValue
-                            if (newValue.text != draft) {
-                                onDraftChange(newValue.text)
-                            }
-                        }
-                    },
-                    textStyle = IosTheme.type.body.copy(color = IosTheme.colors.label),
-                    cursorBrush = SolidColor(IosTheme.colors.accent),
+                Box(
                     modifier = Modifier
-                        .fillMaxWidth()
-                        .focusRequester(focus),
-                    decorationBox = { field ->
-                        Box {
-                            if (textFieldValue.text.isEmpty()) {
-                                Text("写一句简评…", style = IosTheme.type.body, color = IosTheme.colors.tertiaryLabel)
-                            }
-                            field()
-                        }
-                    },
-                )
-            }
-
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                Row(
-                    horizontalArrangement = Arrangement.spacedBy(8.dp),
-                    verticalAlignment = Alignment.CenterVertically,
+                        .weight(1f)
+                        .heightIn(min = 32.dp, max = 96.dp)
+                        .verticalScroll(rememberScrollState())
+                        .padding(vertical = 5.dp),
+                    contentAlignment = Alignment.CenterStart,
                 ) {
-                    Text(
-                        text = "可见 ${length.visible}/${BoostLength.MAX_VISIBLE} · 表情 ${length.emoji}/${BoostLength.MAX_EMOJI}",
-                        style = IosTheme.type.caption,
-                        color = if (over) IosTheme.colors.destructive else IosTheme.colors.secondaryLabel,
+                    BasicTextField(
+                        value = textFieldValue,
+                        onValueChange = { newValue ->
+                            if (newValue.text.length <= BoostLength.RAW_INPUT_CAP) {
+                                textFieldValue = newValue
+                                if (newValue.text != draft) {
+                                    onDraftChange(newValue.text)
+                                }
+                            }
+                        },
+                        textStyle = IosTheme.type.body.copy(fontSize = 15.sp, color = IosTheme.colors.label),
+                        cursorBrush = SolidColor(IosTheme.colors.accent),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .focusRequester(focus),
+                        decorationBox = { field ->
+                            Box {
+                                if (textFieldValue.text.isEmpty()) {
+                                    Text(
+                                        "写一句简评…",
+                                        style = IosTheme.type.body.copy(fontSize = 15.sp),
+                                        color = IosTheme.colors.tertiaryLabel,
+                                    )
+                                }
+                                field()
+                            }
+                        },
                     )
                 }
-                Row(
-                    horizontalArrangement = Arrangement.spacedBy(8.dp),
-                    verticalAlignment = Alignment.CenterVertically,
+
+                Box(
+                    modifier = Modifier
+                        .height(32.dp)
+                        .clip(CircleShape)
+                        .background(if (canSend) IosTheme.colors.accent else IosTheme.colors.accent.copy(alpha = 0.35f))
+                        .clickable(enabled = canSend, onClick = onSend)
+                        .padding(horizontal = 14.dp),
+                    contentAlignment = Alignment.Center,
                 ) {
-                    Box(
-                        modifier = Modifier
-                            .clip(RoundedCornerShape(50))
-                            .background(if (canSend) IosTheme.colors.accent else IosTheme.colors.accent.copy(alpha = 0.35f))
-                            .clickable(enabled = canSend, onClick = onSend)
-                            .padding(horizontal = 20.dp, vertical = 7.dp),
-                    ) {
-                        Text("发送", style = IosTheme.type.subheadline.copy(fontWeight = FontWeight.Medium), color = Color.White)
-                    }
+                    Text(
+                        text = "发送",
+                        style = IosTheme.type.footnote.copy(fontSize = 13.sp, fontWeight = FontWeight.SemiBold),
+                        color = Color.White,
+                    )
                 }
             }
-
         }
     }
 
     LaunchedEffect(target.postId) {
-        runCatching { focus.requestFocus() }
+        runCatching {
+            focus.requestFocus()
+            keyboardController?.show()
+        }
     }
 }
 
