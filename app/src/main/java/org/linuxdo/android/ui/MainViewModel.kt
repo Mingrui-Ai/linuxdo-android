@@ -9824,22 +9824,22 @@ fun openTopicSearch(topicId: Long, title: String) {
         val requestJob = currentCoroutineContext()[Job]!!
         fun isCurrent() = requestJob.isActive && requestScopeGeneration == accountScopeGeneration && loadingFeeds[feed] === requestJob
         val current = _feedStates.value[feed] ?: if (_state.value.homeFeed == feed) _state.value.latest else TopicListUiState()
-        val existingFeedGeneration = loadingFeeds.putIfAbsent(feed, requestJob)
-        if (existingFeedGeneration != null || current.refreshing || current.loadingMore) {
-            if (existingFeedGeneration == null) {
-                loadingFeeds.remove(feed, requestJob)
-            }
-            // 已有加载在途，不重复发请求。但下拉刷新不能静默吞掉：下拉指示器要等
-            // refreshing 由 true 回落才收起，直接 return 会让它一直转。
-            // 让这次下拉跟随在途加载走完一次完整跳变（带超时兜底，避免无限等待）。
+        // 筛选会先显示本地预过滤结果并置 refreshing；展示状态不代表已有请求。
+        // 仅按真实任务去重，否则带本地结果/过期缓存的筛选会在发请求前被自己拦下。
+        loadingFeeds[feed]?.takeUnless { it.isActive }?.let { loadingFeeds.remove(feed, it) }
+        val existingFeedJob = loadingFeeds.putIfAbsent(feed, requestJob)
+        if (existingFeedJob != null) {
+            // 下拉刷新跟随已有任务；结束、取消或超时只收起它自己的指示器，
+            // 不得清掉切换筛选后新任务的刷新状态。
             if (pullRefresh && page == 0 && !current.refreshing) {
                 setFeedRefreshing(feed, true)
-                var waitedMs = 0L
-                while (loadingFeeds.containsKey(feed) && waitedMs < FEED_REFRESH_JOIN_TIMEOUT_MS) {
-                    delay(50)
-                    waitedMs += 50
+                try {
+                    kotlinx.coroutines.withTimeoutOrNull(FEED_REFRESH_JOIN_TIMEOUT_MS) { existingFeedJob.join() }
+                } finally {
+                    if (requestScopeGeneration == accountScopeGeneration && loadingFeeds[feed] === existingFeedJob) {
+                        setFeedRefreshing(feed, false)
+                    }
                 }
-                if (requestJob.isActive && requestScopeGeneration == accountScopeGeneration && !loadingFeeds.containsKey(feed)) setFeedRefreshing(feed, false)
             }
             return
         }
@@ -9866,6 +9866,7 @@ fun openTopicSearch(topicId: Long, title: String) {
                     _categories.update { it.copy(items = fetched, loaded = true, loading = false) }
                 }
             }
+            if (!isCurrent()) return
             val result = repository.fetchFilteredHomeTopics(
                 filter = filter,
                 categories = categoriesList,
@@ -9929,13 +9930,8 @@ fun openTopicSearch(topicId: Long, title: String) {
             enterWebScreen(Screen.Verify, error.message.orEmpty(), error.readProbePath)
         } catch (error: RateLimitException) {
             if (!isCurrent()) return
-            val current = _feedStates.value[feed] ?: TopicListUiState()
-            if (current.items.isNotEmpty()) {
-                diagnostics.log("列表受限流冷却保护，继续展示本地缓存: ${error.message}")
-                settleFeedLoading(feed, null)
-            } else {
-                settleFeedLoading(feed, error.message)
-            }
+            diagnostics.log("列表受限流冷却保护，保留已有内容并提示重试: ${error.message}")
+            settleFeedLoading(feed, error.message ?: "请求过于频繁，请稍后重试")
         } catch (error: HttpStatusException) {
             if (!isCurrent()) return
             val msg = if (error.status == 403 && _state.value.username == null) {
@@ -9950,7 +9946,13 @@ fun openTopicSearch(topicId: Long, title: String) {
             diagnostics.log("加载 ${feed.label} 异常: ${error.message}")
             settleFeedLoading(feed, error.message ?: error.javaClass.simpleName)
         } finally {
-            loadingFeeds.remove(feed, requestJob)
+            if (loadingFeeds.remove(feed, requestJob) && requestScopeGeneration == accountScopeGeneration) {
+                // 包括独立取消：没有在途任务时，不能留下阻止下一次加载的转圈状态。
+                val latest = _feedStates.value[feed] ?: _state.value.latest
+                if (latest.refreshing || latest.loadingMore || latest.initialLoading) {
+                    settleFeedLoading(feed, latest.error)
+                }
+            }
         }
     }
 
