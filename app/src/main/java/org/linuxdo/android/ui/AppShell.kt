@@ -757,6 +757,8 @@ private fun MainNavigation(state: UiState, viewModel: MainViewModel, lifecycle: 
     val fontScale by viewModel.fontScale.collectAsStateWithLifecycle()
     val showTopicScrollbar by viewModel.showTopicScrollbar.collectAsStateWithLifecycle()
     val syncReadProgress by viewModel.syncReadProgress.collectAsStateWithLifecycle()
+    val autoTrackTopic by viewModel.autoTrackTopic.collectAsStateWithLifecycle()
+    val autoTrackTopicSeconds by viewModel.autoTrackTopicSeconds.collectAsStateWithLifecycle()
     val showUnreadDot by viewModel.showUnreadDot.collectAsStateWithLifecycle()
     val unreadDotPosition by viewModel.unreadDotPosition.collectAsStateWithLifecycle()
     val seeSignatures by viewModel.seeSignatures.collectAsStateWithLifecycle()
@@ -1782,6 +1784,10 @@ private fun MainNavigation(state: UiState, viewModel: MainViewModel, lifecycle: 
                                 onCheckUpdate = viewModel::onVersionItemClick,
                                 syncReadProgress = syncReadProgress,
                                 onSyncReadProgress = viewModel::setSyncReadProgress,
+                                autoTrackTopic = autoTrackTopic,
+                                onAutoTrackTopic = viewModel::setAutoTrackTopic,
+                                autoTrackTopicSeconds = autoTrackTopicSeconds,
+                                onAutoTrackTopicSeconds = viewModel::setAutoTrackTopicSeconds,
                                 onDiagnostics = { stack.push(Route.Diagnostics) },
                                 onLogout = viewModel::logout,
                                 autoRefreshIncoming = autoRefreshIncoming,

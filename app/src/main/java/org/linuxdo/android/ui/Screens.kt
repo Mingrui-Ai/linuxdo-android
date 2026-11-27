@@ -930,6 +930,10 @@ fun SettingsScreen(
     onCheckUpdate: () -> Unit = {},
     syncReadProgress: Boolean = true,
     onSyncReadProgress: (Boolean) -> Unit = {},
+    autoTrackTopic: Boolean = true,
+    onAutoTrackTopic: (Boolean) -> Unit = {},
+    autoTrackTopicSeconds: Int = 3,
+    onAutoTrackTopicSeconds: (Int) -> Unit = {},
     showUnreadDot: Boolean = true,
     onShowUnreadDot: (Boolean) -> Unit = {},
     unreadDotPosition: UnreadDotPosition = UnreadDotPosition.Avatar,
@@ -1014,6 +1018,7 @@ fun SettingsScreen(
     val miniAppOpenMode = rememberMiniAppOpenMode()
     var showLogoutConfirmDialog by remember { mutableStateOf(false) }
     var showAutoRefreshIntervalDialog by remember { mutableStateOf(false) }
+    var showAutoTrackSecondsDialog by remember { mutableStateOf(false) }
     var showNotificationScopeDialog by remember { mutableStateOf(false) }
     var showTestPushLabDialog by remember { mutableStateOf(false) }
     var showSignatureSyncDialog by remember { mutableStateOf(false) }
@@ -1585,6 +1590,32 @@ fun SettingsScreen(
                         style = IosTheme.type.subheadline.copy(fontSize = 13.sp),
                         color = if (seeSignatures && !signatureSyncBusy) IosTheme.colors.accent else IosTheme.colors.secondaryLabel,
                     )
+                }
+
+                IosDivider()
+
+                IosRow(onClick = { onAutoTrackTopic(!autoTrackTopic) }) {
+                    SettingIconBadge(bgColor = Color(0xFFF0EDFF)) {
+                        SettingClockIcon(tint = Color(0xFF6C5CE7))
+                    }
+                    Spacer(Modifier.width(12.dp))
+                    Column(Modifier.weight(1f).padding(end = 8.dp)) {
+                        Text("阅读后自动跟随", style = IosTheme.type.body.copy(fontSize = 14.5.sp))
+                        Text(
+                            "阅读满 ${autoTrackTopicSeconds} 秒后设为「跟踪」",
+                            style = IosTheme.type.footnote.copy(fontSize = 12.sp),
+                            color = IosTheme.colors.secondaryLabel,
+                            modifier = Modifier.padding(top = 3.dp),
+                        )
+                    }
+                    IosSwitch(checked = autoTrackTopic, onCheckedChange = onAutoTrackTopic)
+                }
+                if (autoTrackTopic) {
+                    IosDivider()
+                    IosRow(onClick = { showAutoTrackSecondsDialog = true }) {
+                        Text("跟随等待时间", style = IosTheme.type.body.copy(fontSize = 14.5.sp), modifier = Modifier.weight(1f))
+                        Text("${autoTrackTopicSeconds} 秒 ›", style = IosTheme.type.subheadline.copy(fontSize = 13.sp), color = IosTheme.colors.accent)
+                    }
                 }
 
                 IosDivider()
@@ -3107,6 +3138,62 @@ fun SettingsScreen(
                 }
             }
         }
+    }
+
+    if (showAutoTrackSecondsDialog) {
+        var secondsText by remember { mutableStateOf(autoTrackTopicSeconds.toString()) }
+        val seconds = secondsText.toIntOrNull()?.takeIf { it in 1..3600 }
+        androidx.compose.material3.AlertDialog(
+            onDismissRequest = { showAutoTrackSecondsDialog = false },
+            containerColor = IosTheme.colors.card,
+            title = { Text("跟随等待时间", color = IosTheme.colors.label) },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                    Text("仅计算帖子正文在前台的阅读时间。已有关注、跟踪或免打扰设置会保留。", style = IosTheme.type.footnote, color = IosTheme.colors.secondaryLabel)
+                    androidx.compose.material3.OutlinedTextField(
+                        value = secondsText,
+                        onValueChange = { value ->
+                            if (value.length <= 4 && value.all { it in '0'..'9' }) secondsText = value
+                        },
+                        label = { Text("秒数（1–3600）") },
+                        singleLine = true,
+                        isError = seconds == null,
+                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                        colors = androidx.compose.material3.OutlinedTextFieldDefaults.colors(
+                            focusedTextColor = IosTheme.colors.label,
+                            unfocusedTextColor = IosTheme.colors.label,
+                            errorTextColor = IosTheme.colors.label,
+                            focusedContainerColor = IosTheme.colors.fieldBackground,
+                            unfocusedContainerColor = IosTheme.colors.fieldBackground,
+                            errorContainerColor = IosTheme.colors.fieldBackground,
+                            focusedBorderColor = IosTheme.colors.accent,
+                            unfocusedBorderColor = IosTheme.colors.separator,
+                            errorBorderColor = IosTheme.colors.destructive,
+                            focusedLabelColor = IosTheme.colors.accent,
+                            unfocusedLabelColor = IosTheme.colors.secondaryLabel,
+                            errorLabelColor = IosTheme.colors.destructive,
+                            cursorColor = IosTheme.colors.accent,
+                            errorCursorColor = IosTheme.colors.destructive,
+                        ),
+                        modifier = Modifier.fillMaxWidth(),
+                    )
+                }
+            },
+            confirmButton = {
+                androidx.compose.material3.TextButton(
+                    enabled = seconds != null,
+                    onClick = {
+                        seconds?.let(onAutoTrackTopicSeconds)
+                        showAutoTrackSecondsDialog = false
+                    },
+                ) { Text("保存", color = if (seconds != null) IosTheme.colors.accent else IosTheme.colors.tertiaryLabel) }
+            },
+            dismissButton = {
+                androidx.compose.material3.TextButton(onClick = { showAutoTrackSecondsDialog = false }) {
+                    Text("取消", color = IosTheme.colors.secondaryLabel)
+                }
+            },
+        )
     }
 
     if (showAutoRefreshIntervalDialog) {

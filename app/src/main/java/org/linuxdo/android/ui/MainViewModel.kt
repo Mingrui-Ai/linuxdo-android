@@ -1158,6 +1158,12 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     val topicUnreadDotPosition = _topicUnreadDotPosition.asStateFlow()
     private val _syncReadProgress = MutableStateFlow(container.reading.syncReadProgress)
     val syncReadProgress = _syncReadProgress.asStateFlow()
+    private val _autoTrackTopic = MutableStateFlow(container.preferences.getBoolean("auto_track_topic", true))
+    val autoTrackTopic = _autoTrackTopic.asStateFlow()
+    private val _autoTrackTopicSeconds = MutableStateFlow(
+        container.preferences.getInt("auto_track_topic_seconds", 3).coerceIn(1, 3600)
+    )
+    val autoTrackTopicSeconds = _autoTrackTopicSeconds.asStateFlow()
     data class NotificationTarget(val topicId: Long, val postNumber: Int?)
     private val _pendingNotificationTarget = MutableStateFlow<NotificationTarget?>(null)
     val pendingNotificationTarget = _pendingNotificationTarget.asStateFlow()
@@ -1625,12 +1631,17 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     /** 各话题在当前屏幕上当前可见的楼层号。 */
     private val currentVisiblePostsByTopic = mutableMapOf<Long, List<Int>>()
     private val highestVisiblePostByTopic = mutableMapOf<Long, Int>()
+    private val autoTrackJobs = mutableMapOf<Long, Job>()
+    /** 每次进帖最多自动尝试一次；手动选过通知级别后，本次阅读不再自动修改。 */
+    private val autoTrackHandledTopics = mutableSetOf<Long>()
     fun setTopicActive(topicId: Long, active: Boolean) {
         if (active) {
             activeTopicPages.update { if (topicId in it) it else it + (topicId to CompletableDeferred()) }
             beginReadTracking(topicId)
             startTopicLiveUpdates(topicId)
+            scheduleAutoTrackTopic(topicId)
         } else {
+            autoTrackJobs.remove(topicId)?.cancel()
             if (_syncReadProgress.value && !store.sessionChanging && !_accounts.value.switching) {
                 readTrackers[topicId]?.let { queueReadBatch(topicId, it) }
                 drainReadOutbox()
@@ -3023,6 +3034,25 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         diagnostics.log(if (enabled) "已开启阅读进度同步(低频 timings 上报)" else "已关闭阅读进度同步(仅本地标记已读)")
     }
 
+    fun setAutoTrackTopic(enabled: Boolean) {
+        _autoTrackTopic.value = enabled
+        container.preferences.edit { putBoolean("auto_track_topic", enabled) }
+        restartAutoTrackTimers()
+    }
+
+    fun setAutoTrackTopicSeconds(seconds: Int) {
+        val value = seconds.coerceIn(1, 3600)
+        _autoTrackTopicSeconds.value = value
+        container.preferences.edit { putInt("auto_track_topic_seconds", value) }
+        restartAutoTrackTimers()
+    }
+
+    private fun restartAutoTrackTimers() {
+        autoTrackJobs.values.toList().forEach { it.cancel() }
+        autoTrackJobs.clear()
+        activeTopicPages.value.keys.forEach(::scheduleAutoTrackTopic)
+    }
+
     fun hasViewedFloor(accountId: Long, topicId: Long, floor: Int) =
         container.reading.hasViewedFloor(accountId, topicId, floor)
 
@@ -3037,6 +3067,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         currentVisiblePostsByTopic[topicId] = valid
         valid.maxOrNull()?.let { highestVisiblePostByTopic[topicId] = maxOf(highestVisiblePostByTopic[topicId] ?: 0, it) }
         readTrackers[topicId]?.setVisible(valid, SystemClock.elapsedRealtime())
+        scheduleAutoTrackTopic(topicId)
     }
 
     fun onTopicScrolled(topicId: Long) {
@@ -3245,6 +3276,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     /** 离帖结算真实停留并持久化；失败等待同账号下一次同步。 */
     fun leaveTopic(topicId: Long) {
         setTopicActive(topicId, false)
+        autoTrackHandledTopics.remove(topicId)
         val lastSeenPost = highestVisiblePostByTopic.remove(topicId) ?: 0
         val currentDetail = _details.value[topicId]
         currentDetail?.topic?.let { topic ->
@@ -4484,7 +4516,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             if (effectivePostNumber != null) {
                 refreshTopic(id, silent = true, includeLatestPosts = false)
             }
-            autoTrackTopicIfNeeded(id, current.topic.details.notificationLevel)
+            scheduleAutoTrackTopic(id)
             return
         }
 
@@ -4587,7 +4619,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                     if (requestPostNumber != null && resolvedTarget != null && resolvedTarget.postNumber != requestPostNumber) {
                         setNoticeMessage(id, "第 $requestPostNumber 楼不可用，已定位到第 ${resolvedTarget.postNumber} 楼")
                     }
-                    autoTrackTopicIfNeeded(id, topic.details.notificationLevel)
+                    scheduleAutoTrackTopic(id)
                     val scopeGeneration = accountScopeGeneration
                     viewModelScope.launch {
                         val resolvedCategory = runCatching { repository.categoryById(topic.categoryId) }.getOrNull()
@@ -6711,23 +6743,50 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
-    /**
-     * 点击进入话题时自动切换为「跟踪」：
-     * - 仅对当前处于「常规 (Regular)」状态的话题生效；
-     * - 已经是「跟踪」「关注」或手动设为「免打扰」的话题保持原状态，不覆盖用户设置；
-     * - 静默提交，不弹出 toast/横幅打扰阅读。
-     */
-    private fun autoTrackTopicIfNeeded(topicId: Long, currentDetailLevel: Int?) {
-        if (_state.value.username == null || topicId <= 0L) return
-        val effective = currentDetailLevel?.let(TopicNotificationLevel::fromCode)
-            ?: store.getTopicNotificationLevel(topicId)?.let(TopicNotificationLevel::fromCode)
-            ?: TopicNotificationLevel.Regular
-        if (effective != TopicNotificationLevel.Regular) return
-        setTopicNotificationLevel(topicId, TopicNotificationLevel.Tracking, silent = true)
+    private fun canAutoTrackTopic(topicId: Long): Boolean {
+        if (!_autoTrackTopic.value || topicId <= 0L || topicId in autoTrackHandledTopics ||
+            _state.value.username == null || store.currentUserId() <= 0L || !isTopicActive(topicId) ||
+            currentVisiblePostsByTopic[topicId].isNullOrEmpty()) return false
+        val detail = _details.value[topicId] ?: return false
+        if (detail.notificationLevelUpdating || detail.topic == null || detail.posts.isEmpty()) return false
+        // 以当前详情为准；无法确定状态时不主动修改通知级别。
+        return detail.topic.details.notificationLevel == TopicNotificationLevel.Regular.code
+    }
+
+    /** 只计算正文在前台连续可见的时间；滚动换楼不重置，离开/遮挡/后台停止计时。 */
+    private fun scheduleAutoTrackTopic(topicId: Long) {
+        if (!canAutoTrackTopic(topicId)) {
+            autoTrackJobs.remove(topicId)?.cancel()
+            return
+        }
+        if (autoTrackJobs[topicId]?.isActive == true) return
+        val generation = store.sessionGeneration
+        val accountGeneration = accountScopeGeneration
+        val userId = store.currentUserId()
+        autoTrackJobs[topicId] = viewModelScope.launch {
+            try {
+                delay(_autoTrackTopicSeconds.value * 1000L)
+                if (generation != store.sessionGeneration || accountGeneration != accountScopeGeneration ||
+                    userId != store.currentUserId() || !canAutoTrackTopic(topicId)) return@launch
+                autoTrackHandledTopics.add(topicId)
+                setTopicNotificationLevel(topicId, TopicNotificationLevel.Tracking, silent = true)
+            } finally {
+                if (autoTrackJobs[topicId] === coroutineContext[Job]) autoTrackJobs.remove(topicId)
+            }
+        }
     }
 
     fun setTopicNotificationLevel(topicId: Long, level: TopicNotificationLevel, silent: Boolean = false) {
+        if (!silent) {
+            autoTrackHandledTopics.add(topicId)
+            autoTrackJobs.remove(topicId)?.cancel()
+        }
         if (_state.value.username == null || pageJobs["notification:$topicId"]?.isActive == true) return
+        val generation = store.sessionGeneration
+        val accountGeneration = accountScopeGeneration
+        val userId = store.currentUserId()
+        fun sameAccount() = generation == store.sessionGeneration && accountGeneration == accountScopeGeneration &&
+            userId == store.currentUserId() && !store.sessionChanging && !_accounts.value.switching
         val detailLevel = _details.value[topicId]?.topic?.details?.notificationLevel
         val snapshot = NotificationLevelSnapshot(detailLevel, _state.value.homeFeed, _state.value.latest, _feedStates.value,
             _categoryTopics.value, _userTopicStates.value, _search.value.results)
@@ -6742,7 +6801,9 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         pageJobs["notification:$topicId"] = viewModelScope.launch {
             var confirmed = false
             try {
+                if (!sameAccount()) throw CancellationException("会话已切换")
                 repository.setTopicNotificationLevel(topicId, level.code)
+                if (!sameAccount()) throw CancellationException("会话已切换")
                 confirmed = true
                 if (!silent) {
                     setNoticeMessage(topicId, "通知级别已设为「${level.title}」")
@@ -6750,15 +6811,15 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             } catch (error: CancellationException) {
                 throw error
             } catch (error: Exception) {
-                if (!silent) {
+                if (!silent && sameAccount()) {
                     Toast.makeText(getApplication(), error.message ?: "通知级别设置失败，已恢复原状态", Toast.LENGTH_LONG).show()
                     handlePageFailure(error) {}
                 }
             } finally {
-                if (confirmed) {
+                if (confirmed && sameAccount()) {
                     updateNotificationLevel(topicId, level, changing = false)
                     if (level == TopicNotificationLevel.Muted) removeMutedTopicFromLatest(topicId)
-                } else {
+                } else if (sameAccount()) {
                     restoreNotificationLevel(topicId, snapshot)
                 }
             }
@@ -9566,6 +9627,9 @@ fun openTopicSearch(topicId: Long, title: String) {
         readTrackers.clear()
         activeTopicPages.value.values.forEach { it.complete(Unit) }
         activeTopicPages.value = emptyMap()
+        autoTrackJobs.values.toList().forEach { it.cancel() }
+        autoTrackJobs.clear()
+        autoTrackHandledTopics.clear()
         homePageExit?.let { it.complete(Unit); homePageExit = CompletableDeferred() }
         currentVisiblePostsByTopic.clear()
         highestVisiblePostByTopic.clear()
