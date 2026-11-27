@@ -1,6 +1,6 @@
 <div align="center">
 
-<img src="./.github/assets/hero-banner.png" alt="LinuxDo 增强版 1.2.0" width="100%" />
+<img src="./.github/assets/hero-banner.png" alt="LinuxDo 增强版 1.2.5" width="100%" />
 
 <br />
 
@@ -12,8 +12,8 @@
 </p>
 
 <p>
-  <a href="https://github.com/Mingrui-Ai/linuxdo-android/releases/tag/enhanced-v1.2.0">
-    <img src="https://img.shields.io/badge/Release-v1.2.0-FFB300?style=for-the-badge&logo=android&logoColor=white" alt="Release v1.2.0" />
+  <a href="https://github.com/Mingrui-Ai/linuxdo-android/releases/tag/enhanced-v1.2.5">
+    <img src="https://img.shields.io/badge/Release-v1.2.5-FFB300?style=for-the-badge&logo=android&logoColor=white" alt="Release v1.2.5" />
   </a>
   <img src="https://img.shields.io/badge/Android-8.0%2B%20(ARM64)-3DDC84?style=for-the-badge&logo=android&logoColor=white" alt="Android 8.0+" />
   <img src="https://img.shields.io/badge/Jetpack-Compose-4285F4?style=for-the-badge&logo=jetpackcompose&logoColor=white" alt="Jetpack Compose" />
@@ -23,13 +23,13 @@
 </p>
 
 <p>
-  <a href="https://github.com/Mingrui-Ai/linuxdo-android/releases/tag/enhanced-v1.2.0"><strong>⬇️ 下载增强版 1.2.0 APK</strong></a>
+  <a href="https://github.com/Mingrui-Ai/linuxdo-android/releases/tag/enhanced-v1.2.5"><strong>⬇️ 下载增强版 1.2.5 APK</strong></a>
   &nbsp;·&nbsp;
   <a href="#-动态演示">动态演示</a>
   &nbsp;·&nbsp;
   <a href="#-界面一览">界面一览</a>
   &nbsp;·&nbsp;
-  <a href="#-v120-更新">v1.2.0 更新</a>
+  <a href="#-v125-更新">v1.2.5 更新</a>
   &nbsp;·&nbsp;
   <a href="#-下载与构建">构建指南</a>
 </p>
@@ -88,14 +88,26 @@
 
 ---
 
-## 📦 v1.2.0 更新
+## 📦 v1.2.5 更新
 
-- **全新视觉**：重设计「曜石黑底 · 跃升 L+」应用图标与浅/深色自适应登录页；首页品牌标题加入经典琥珀黄点缀。
-- **首页两层筛选与动态排序**：支持类别 / 等级 / 标签组合筛选与独立等级筛选、长按置顶与本地缓存加速；排序升级为 5 项动态语义图标下拉并支持范围搜索；新增 X 风格新帖叠放头像胶囊。
-- **帖子与跟踪交互重构**：
-  - 顶栏精简为 **帖内搜索 / 权限编辑 / 四态跟踪铃铛** 三个直达按钮；移除暂存、复制原文与冗余分享卡片。
-  - 进入帖子自动设为「跟踪」，主页卡片右下角以主题色徽标醒目显示未读新回复数，支持主页左滑快速「关注 / 免打扰」并统一详情页回复排序与筛选下拉栏。
-- **导航与图标同步**：所有二级页面与编辑弹层统一隐藏底栏；同步站点类别与标签图标，新增首页深拉进入应用广场开关。
+### 首页与筛选
+
+- 修复分类筛选后长时间转圈、无法加载新帖的问题。
+- 限流时保留已加载内容，并提示等待后重试。
+- 移除三个筛选菜单的“全部”选项，可用 × 或“重置”清除筛选。
+- 底栏去掉小字，中间改为发帖加号。
+
+### 个人资料
+
+- 资料卡背景完整覆盖顶部，头像边缘与按钮布局更协调。
+- 新增分享、关注、聊天快捷入口，统一通知菜单样式。
+- 优化铃铛同步，移除本地黑名单，改用网页版免打扰／忽略。
+
+### 列表页面
+
+- 统一徽章、草稿、关注、历史和收藏页的顶栏与筛选样式。
+- 收藏支持标题与内容搜索；回复草稿补充原帖作者头像。
+- 更新弹窗按主题分组，标题与条目分层显示，长文字对齐更清楚。
 
 ---
 
@@ -103,9 +115,9 @@
 
 ### 下载安装
 
-前往 [Releases](https://github.com/Mingrui-Ai/linuxdo-android/releases/tag/enhanced-v1.2.0) 下载 **`linuxdo-enhanced-1.2.0-arm64-v8a.apk`**（Android 8.0+ / `arm64-v8a`）。
+前往 [Releases](https://github.com/Mingrui-Ai/linuxdo-android/releases/tag/enhanced-v1.2.5) 下载 **`linuxdo-enhanced-1.2.5-arm64-v8a.apk`**（Android 8.0+ / `arm64-v8a`）。
 
-- 包名 `org.linuxdo.android.enhanced`，独立签名，可与原版共存；从增强版 `1.0 / 1.1 / 1.1.1` 升级可直接覆盖保留数据，并支持应用内自动检查更新。
+- 包名 `org.linuxdo.android.enhanced`，独立签名，可与原版共存；从增强版 `1.0 / 1.1 / 1.1.1 / 1.2.0` 升级可直接覆盖保留数据，并支持应用内自动检查更新。
 - 公开 Release 仅发布正式版 APK，附带 `version.json`、`SHA256SUMS` 与公开签名证书 `release-certificate.pem`。
 
 <details>
