@@ -763,31 +763,6 @@ private fun HomeLevelDropdownMenu(
         shape = RoundedCornerShape(14.dp),
         modifier = Modifier.width(118.dp),
     ) {
-        val allSelected = filter.level == null
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(horizontal = 6.dp, vertical = 2.dp)
-                .clip(RoundedCornerShape(9.dp))
-                .background(if (allSelected) IosTheme.colors.accent.copy(alpha = 0.12f) else Color.Transparent)
-                .clickable { onSelectLevel(null) }
-                .padding(horizontal = 9.dp, vertical = 7.dp),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.SpaceBetween,
-        ) {
-            Text(
-                text = "全部",
-                style = IosTheme.type.footnote.copy(
-                    fontSize = 13.sp,
-                    fontWeight = if (allSelected) FontWeight.SemiBold else FontWeight.Medium,
-                ),
-                color = if (allSelected) IosTheme.colors.accent else IosTheme.colors.label,
-            )
-            if (allSelected) {
-                Text("✓", color = IosTheme.colors.accent, fontWeight = FontWeight.Bold, fontSize = 12.sp)
-            }
-        }
-
         (0..3).forEach { lv ->
             val supported = filter.categoryId == null || categories.isEmpty() || lv in allowedLevels
             val selected = filter.level == lv
@@ -918,25 +893,6 @@ private fun HomeCategoryDropdownMenu(
                         }
                         inner()
                     },
-                )
-            }
-            val isAll = selectedCategoryId == null
-            Box(
-                modifier = Modifier
-                    .height(28.dp)
-                    .clip(RoundedCornerShape(8.dp))
-                    .background(if (isAll) IosTheme.colors.accent.copy(alpha = 0.14f) else IosTheme.colors.groupedBackground)
-                    .clickable {
-                        query = ""
-                        onSelectCategory(null)
-                    }
-                    .padding(horizontal = 7.dp),
-                contentAlignment = Alignment.Center,
-            ) {
-                Text(
-                    text = "全部",
-                    style = IosTheme.type.caption.copy(fontSize = 11.5.sp, fontWeight = if (isAll) FontWeight.SemiBold else FontWeight.Medium),
-                    color = if (isAll) IosTheme.colors.accent else IosTheme.colors.label,
                 )
             }
         }
@@ -1145,22 +1101,6 @@ private fun HomeTagDropdownMenu(
                         }
                         inner()
                     },
-                )
-            }
-            val isAll = selectedTag.isNullOrBlank()
-            Box(
-                modifier = Modifier
-                    .height(29.dp)
-                    .clip(RoundedCornerShape(8.dp))
-                    .background(if (isAll) IosTheme.colors.accent.copy(alpha = 0.14f) else IosTheme.colors.groupedBackground)
-                    .clickable { onSelectTag(null) }
-                    .padding(horizontal = 8.dp),
-                contentAlignment = Alignment.Center,
-            ) {
-                Text(
-                    text = "全部",
-                    style = IosTheme.type.caption.copy(fontSize = 11.5.sp, fontWeight = if (isAll) FontWeight.SemiBold else FontWeight.Medium),
-                    color = if (isAll) IosTheme.colors.accent else IosTheme.colors.label,
                 )
             }
         }
