@@ -5499,6 +5499,11 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         _topicCreator.update { if (it.open && it.draftKey == key) it.copy(syncStatus = status) else it }
     }
 
+    private fun clearDraftSyncStatus(key: String) {
+        _composer.update { if (it.open && it.draftKey == key) it.copy(syncStatus = null) else it }
+        _topicCreator.update { if (it.open && it.draftKey == key) it.copy(syncStatus = null) else it }
+    }
+
     private fun isDraftUploading(key: String): Boolean =
         (_composer.value.uploading && _composer.value.open && _composer.value.draftKey == key) ||
             (_topicCreator.value.uploading && _topicCreator.value.draftKey == key)
@@ -5591,7 +5596,9 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                     if (error is HttpStatusException && error.status == 409) {
                         accountDraftStore.get(userId, key)?.let { accountDraftStore.put(userId, it.copy(conflict = true)) }
                         setDraftSyncStatus(key, "网页草稿已有更新，可直接发送手机内容")
-                    } else setDraftSyncStatus(key, "手机草稿已保留，同步稍后重试，不影响发送")
+                    } else {
+                        clearDraftSyncStatus(key)
+                    }
                 }
                 false
             } finally {

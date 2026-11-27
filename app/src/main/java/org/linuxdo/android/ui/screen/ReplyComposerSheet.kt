@@ -68,7 +68,6 @@ import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardType
-import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -97,16 +96,16 @@ import org.linuxdo.android.ui.nextAvailablePollName
 
 private enum class ComposerExpandedTab { Edit, Preview }
 
-private enum class ComposerSubToolbar { Heading, Code, List, More }
+private enum class ComposerSubToolbar { Heading, Quote, Code, List, More }
 
 /**
  * 回复 / 编辑共用的 Markdown 输入弹层。
- * 严格遵循交互原型设计：
- * - 常态精简：低矮自适应输入框，底栏只放 图片 / 附件 / 投票 / Aa 快捷格式开关 + 发表胶囊；
- *   点 Aa 滑出高频快捷 Markdown 胶囊条（B/I/S/链接/引用/代码/标题/列表）。
- * - 展开全屏：顶栏左侧收起按钮 + 标题 + 字数，右侧「编辑 / 预览」分段胶囊 + 发表胶囊；
- *   编辑态常驻横向可滚全功能 MD 工具栏（含 H1-H4/小字、代码块、列表、折叠详情/模糊剧透/表格/分割线/投票/脚注子菜单）；
- *   预览态本地实时渲染 Markdown + Discourse 扩展语法。
+ * 对齐 LINUX DO 云端 Discourse 新版编辑器（composer-redesign）底部工具栏体系，并兼顾移动端体验：
+ * - 常态精简：低矮自适应输入框；底栏左起与云端一致（图片 / 附件 / 投票 | Aa），点 Aa 展开发言快捷条；
+ * - 展开全屏：顶栏左侧收起 + 标题 + 字数，右侧「编辑 / 预览」分段胶囊 + 发表胶囊；
+ *   编辑态底部常驻与云端顺序一致的横向可滚工具栏：
+ *   粗体(B) / 斜体(I) / 文本大小(T▾: 标题1-4、小) | 链接 / 引用(▾: 块引用、隐藏详细信息 [details="总结"]) / 代码(</>▾) / 图片 / 附件 | 列表(▾: 项目符号/编号/待办) / 更多(⊕: 隐藏详细信息、模糊剧透、表格、分割线、投票、脚注)；
+ * - 预览态本地实时渲染 Markdown + Discourse 扩展语法。
  */
 @Composable
 internal fun ReplyComposerSheet(
@@ -483,7 +482,7 @@ internal fun ReplyComposerSheet(
                 }
             }
 
-            // 常态模式：可折叠高频快捷 MD 条（点击 Aa 展开） + 底部单行极简操作栏
+            // 常态模式：底部工具栏与云端对齐（上滑出快捷格式 / 子菜单，底行放操作按钮 + 取消/发表）
             if (!isFullScreen) {
                 AnimatedVisibility(
                     visible = quickMdOpen,
@@ -494,14 +493,22 @@ internal fun ReplyComposerSheet(
                         enabled = !busy,
                         onBold = { editorView?.applyMarkdownWrap("**", "**", "粗体文字") },
                         onItalic = { editorView?.applyMarkdownWrap("*", "*", "斜体文字") },
-                        onStrike = { editorView?.applyMarkdownWrap("~~", "~~", "删除线") },
+                        onHeading = { editorView?.applyMarkdownLinePrefix("## ", "标题") },
                         onLink = ::openLinkInsert,
-                        onQuote = { editorView?.applyMarkdownLinePrefix("> ", "引用内容") },
+                        onQuote = { editorView?.applyMarkdownLinePrefix("> ", "块引用") },
+                        onDetails = {
+                            editorView?.applyMarkdownBlock(
+                                prefix = "[details=\"总结\"]\n",
+                                suffix = "\n[/details]",
+                                placeholder = "此文本将被隐藏",
+                            )
+                        },
                         onCode = { editorView?.applyMarkdownWrap("`", "`", "code") },
-                        onHeading = { editorView?.applyMarkdownLinePrefix("## ", "小标题") },
                         onList = { editorView?.applyMarkdownLinePrefix("- ", "列表项") },
                     )
                 }
+
+                IosFullDivider()
 
                 Row(
                     modifier = Modifier
@@ -593,7 +600,7 @@ internal fun ReplyComposerSheet(
                 }
             }
 
-            // 展开编辑态：键盘上方常驻横向可滚全功能 MD 工具栏 + 按需二级子条
+            // 展开编辑态：严格对齐 LINUX DO 云端（Discourse composer-redesign）底部工具栏与分组顺序
             if (isFullScreen && !isPreview) {
                 ExpandedMarkdownToolbar(
                     enabled = !busy,
@@ -789,18 +796,18 @@ private fun CompactQuickMdStrip(
     enabled: Boolean,
     onBold: () -> Unit,
     onItalic: () -> Unit,
-    onStrike: () -> Unit,
+    onHeading: () -> Unit,
     onLink: () -> Unit,
     onQuote: () -> Unit,
+    onDetails: () -> Unit,
     onCode: () -> Unit,
-    onHeading: () -> Unit,
     onList: () -> Unit,
 ) {
     Row(
         modifier = Modifier
             .fillMaxWidth()
             .horizontalScroll(rememberScrollState())
-            .padding(start = 12.dp, end = 12.dp, top = 6.dp, bottom = 2.dp),
+            .padding(start = 12.dp, end = 12.dp, top = 6.dp, bottom = 6.dp),
         horizontalArrangement = Arrangement.spacedBy(5.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
@@ -810,25 +817,25 @@ private fun CompactQuickMdStrip(
         QuickMdChip(enabled = enabled, contentDescription = "斜体", onClick = onItalic) {
             Text("I", fontSize = 12.sp, fontWeight = FontWeight.SemiBold, fontStyle = FontStyle.Italic, color = it)
         }
-        QuickMdChip(enabled = enabled, contentDescription = "删除线", onClick = onStrike) {
-            Text("S", fontSize = 12.sp, fontWeight = FontWeight.SemiBold, textDecoration = TextDecoration.LineThrough, color = it)
+        QuickMdChip(enabled = enabled, contentDescription = "文本大小", onClick = onHeading) {
+            Text("T 标题", fontSize = 12.sp, fontWeight = FontWeight.SemiBold, color = it)
         }
         QuickMdChip(enabled = enabled, contentDescription = "插入链接", onClick = onLink) {
             MdLinkIcon(tint = it, modifier = Modifier.size(13.dp))
             Text("链接", fontSize = 12.sp, fontWeight = FontWeight.SemiBold, color = it)
         }
-        QuickMdChip(enabled = enabled, contentDescription = "引用", onClick = onQuote) {
+        QuickMdChip(enabled = enabled, contentDescription = "块引用", onClick = onQuote) {
             MdQuoteIcon(tint = it, modifier = Modifier.size(13.dp))
             Text("引用", fontSize = 12.sp, fontWeight = FontWeight.SemiBold, color = it)
         }
-        QuickMdChip(enabled = enabled, contentDescription = "行内代码", onClick = onCode) {
+        QuickMdChip(enabled = enabled, contentDescription = "隐藏详细信息", onClick = onDetails) {
+            Text("▸ 折叠", fontSize = 12.sp, fontWeight = FontWeight.SemiBold, color = it)
+        }
+        QuickMdChip(enabled = enabled, contentDescription = "代码", onClick = onCode) {
             MdCodeIcon(tint = it, modifier = Modifier.size(13.dp))
             Text("代码", fontSize = 12.sp, fontWeight = FontWeight.SemiBold, color = it)
         }
-        QuickMdChip(enabled = enabled, contentDescription = "小标题", onClick = onHeading) {
-            Text("H 标题", fontSize = 12.sp, fontWeight = FontWeight.SemiBold, color = it)
-        }
-        QuickMdChip(enabled = enabled, contentDescription = "无序列表", onClick = onList) {
+        QuickMdChip(enabled = enabled, contentDescription = "列表", onClick = onList) {
             Text("• 列表", fontSize = 12.sp, fontWeight = FontWeight.SemiBold, color = it)
         }
     }
@@ -901,11 +908,22 @@ private fun ExpandedMarkdownToolbar(
                     ) {
                         when (sub) {
                             ComposerSubToolbar.Heading -> {
-                                SubToolbarPill("H1 一级", enabled) { onLinePrefix("# ", "一级标题"); onCloseSub() }
-                                SubToolbarPill("H2 二级", enabled) { onLinePrefix("## ", "二级标题"); onCloseSub() }
-                                SubToolbarPill("H3 三级", enabled) { onLinePrefix("### ", "三级标题"); onCloseSub() }
-                                SubToolbarPill("H4 四级", enabled) { onLinePrefix("#### ", "四级标题"); onCloseSub() }
-                                SubToolbarPill("小号文字", enabled) { onWrap("<small>", "</small>", "小号文字"); onCloseSub() }
+                                SubToolbarPill("标题 1", enabled) { onLinePrefix("# ", "标题 1"); onCloseSub() }
+                                SubToolbarPill("标题 2", enabled) { onLinePrefix("## ", "标题 2"); onCloseSub() }
+                                SubToolbarPill("标题 3", enabled) { onLinePrefix("### ", "标题 3"); onCloseSub() }
+                                SubToolbarPill("标题 4", enabled) { onLinePrefix("#### ", "标题 4"); onCloseSub() }
+                                SubToolbarPill("小", enabled) { onWrap("<small>", "</small>", "小号文字"); onCloseSub() }
+                                SubToolbarPill("删除线", enabled) { onWrap("~~", "~~", "删除文字"); onCloseSub() }
+                            }
+                            ComposerSubToolbar.Quote -> {
+                                SubToolbarPill("❝ 块引用", enabled) {
+                                    onLinePrefix("> ", "块引用")
+                                    onCloseSub()
+                                }
+                                SubToolbarPill("▸ 隐藏详细信息", enabled) {
+                                    onBlock("[details=\"总结\"]\n", "\n[/details]", "此文本将被隐藏")
+                                    onCloseSub()
+                                }
                             }
                             ComposerSubToolbar.Code -> {
                                 SubToolbarPill("`行内代码`", enabled) { onWrap("`", "`", "行内代码"); onCloseSub() }
@@ -915,23 +933,23 @@ private fun ExpandedMarkdownToolbar(
                                 }
                             }
                             ComposerSubToolbar.List -> {
-                                SubToolbarPill("• 无序列表", enabled) { onLinePrefix("- ", "列表项"); onCloseSub() }
-                                SubToolbarPill("1. 有序列表", enabled) { onLinePrefix("1. ", "列表项"); onCloseSub() }
+                                SubToolbarPill("• 项目符号列表", enabled) { onLinePrefix("- ", "列表项"); onCloseSub() }
+                                SubToolbarPill("1. 编号列表", enabled) { onLinePrefix("1. ", "列表项"); onCloseSub() }
                                 SubToolbarPill("☑ 待办清单", enabled) { onLinePrefix("- [ ] ", "待办事项"); onCloseSub() }
                             }
                             ComposerSubToolbar.More -> {
-                                SubToolbarPill("▾ 折叠详情", enabled) {
-                                    onBlock("[details=\"点击展开详情\"]\n", "\n[/details]", "隐藏内容")
+                                SubToolbarPill("▸ 隐藏详细信息", enabled) {
+                                    onBlock("[details=\"总结\"]\n", "\n[/details]", "此文本将被隐藏")
                                     onCloseSub()
                                 }
                                 SubToolbarPill("◐ 模糊剧透", enabled) {
-                                    onWrap("[spoiler]", "[/spoiler]", "剧透文字")
+                                    onWrap("[spoiler]", "[/spoiler]", "此文本将被模糊处理")
                                     onCloseSub()
                                 }
                                 SubToolbarPill("▦ 插入表格", enabled) { onTable(); onCloseSub() }
                                 SubToolbarPill("— 分割线", enabled) { onDivider(); onCloseSub() }
-                                SubToolbarPill("投票", enabled) { onCloseSub(); onOpenPoll() }
-                                SubToolbarPill("¹ 脚注", enabled) { onFootnote(); onCloseSub() }
+                                SubToolbarPill("构建投票", enabled) { onCloseSub(); onOpenPoll() }
+                                SubToolbarPill("¹ 添加脚注", enabled) { onFootnote(); onCloseSub() }
                             }
                         }
                     }
@@ -939,62 +957,64 @@ private fun ExpandedMarkdownToolbar(
             }
         }
 
+        // 与云端 LINUX DO（Discourse composer-redesign）一致的底部工具栏分组顺序：
+        // [fontStyles: B, I, 文本大小(T▾)] | [insertions: 链接, 引用(▾含折叠总结), 代码(▾), 图片, 附件] | [extras: 列表(▾), 更多(⊕)]
         IosFullDivider()
 
         Row(
             modifier = Modifier
                 .fillMaxWidth()
                 .horizontalScroll(rememberScrollState())
-                .padding(horizontal = 10.dp, vertical = 6.dp),
+                .padding(horizontal = 10.dp, vertical = 7.dp),
             horizontalArrangement = Arrangement.spacedBy(2.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
+            // Group 1: fontStyles (bold, italic, heading/text size)
             ExpandedToolButton(
                 contentDescription = "粗体",
                 enabled = enabled,
                 onClick = { onCloseSub(); onWrap("**", "**", "粗体文字") },
             ) {
-                Text("B", fontSize = 14.sp, fontWeight = FontWeight.ExtraBold, color = it)
+                Text("B", fontSize = 14.5.sp, fontWeight = FontWeight.ExtraBold, color = it)
             }
             ExpandedToolButton(
-                contentDescription = "斜体",
+                contentDescription = "强调",
                 enabled = enabled,
                 onClick = { onCloseSub(); onWrap("*", "*", "斜体文字") },
             ) {
-                Text("I", fontSize = 14.sp, fontWeight = FontWeight.SemiBold, fontStyle = FontStyle.Italic, color = it)
+                Text("I", fontSize = 14.5.sp, fontWeight = FontWeight.SemiBold, fontStyle = FontStyle.Italic, color = it)
             }
             ExpandedToolButton(
-                contentDescription = "删除线",
-                enabled = enabled,
-                onClick = { onCloseSub(); onWrap("~~", "~~", "删除文字") },
-            ) {
-                Text("S", fontSize = 14.sp, fontWeight = FontWeight.SemiBold, textDecoration = TextDecoration.LineThrough, color = it)
-            }
-            ExpandedToolButton(
-                contentDescription = "标题 / 字号",
+                contentDescription = "文本大小",
                 enabled = enabled,
                 active = openSub == ComposerSubToolbar.Heading,
                 onClick = { onToggleSub(ComposerSubToolbar.Heading) },
             ) {
-                Text("H", fontSize = 13.5.sp, fontWeight = FontWeight.Bold, color = it)
+                Text("T", fontSize = 14.sp, fontWeight = FontWeight.Bold, color = it)
                 Text("▾", fontSize = 9.sp, color = it.copy(alpha = 0.7f))
             }
+
+            ComposerVerticalDivider()
+
+            // Group 2: insertions (link, blockquote + details, code, upload image/file)
             ExpandedToolButton(
-                contentDescription = "插入链接",
+                contentDescription = "链接",
                 enabled = enabled,
                 onClick = onLink,
             ) {
                 MdLinkIcon(tint = it, modifier = Modifier.size(17.dp))
             }
             ExpandedToolButton(
-                contentDescription = "引用",
+                contentDescription = "引用与隐藏详细信息",
                 enabled = enabled,
-                onClick = { onCloseSub(); onLinePrefix("> ", "引用内容") },
+                active = openSub == ComposerSubToolbar.Quote,
+                onClick = { onToggleSub(ComposerSubToolbar.Quote) },
             ) {
                 MdQuoteIcon(tint = it, modifier = Modifier.size(17.dp))
+                Text("▾", fontSize = 9.sp, color = it.copy(alpha = 0.7f))
             }
             ExpandedToolButton(
-                contentDescription = "行内 / 块级代码",
+                contentDescription = "预先格式化的文本",
                 enabled = enabled,
                 active = openSub == ComposerSubToolbar.Code,
                 onClick = { onToggleSub(ComposerSubToolbar.Code) },
@@ -1003,19 +1023,7 @@ private fun ExpandedMarkdownToolbar(
                 Text("▾", fontSize = 9.sp, color = it.copy(alpha = 0.7f))
             }
             ExpandedToolButton(
-                contentDescription = "列表",
-                enabled = enabled,
-                active = openSub == ComposerSubToolbar.List,
-                onClick = { onToggleSub(ComposerSubToolbar.List) },
-            ) {
-                MdListIcon(tint = it, modifier = Modifier.size(17.dp))
-                Text("▾", fontSize = 9.sp, color = it.copy(alpha = 0.7f))
-            }
-
-            ComposerVerticalDivider()
-
-            ExpandedToolButton(
-                contentDescription = "插入图片",
+                contentDescription = "上传图片",
                 enabled = enabled,
                 onClick = onPickImage,
             ) {
@@ -1028,8 +1036,21 @@ private fun ExpandedMarkdownToolbar(
             ) {
                 ComposerAttachmentIcon(tint = it, modifier = Modifier.size(19.dp))
             }
+
+            ComposerVerticalDivider()
+
+            // Group 3: extras (list, options +)
             ExpandedToolButton(
-                contentDescription = "更多 Discourse 模块",
+                contentDescription = "列表",
+                enabled = enabled,
+                active = openSub == ComposerSubToolbar.List,
+                onClick = { onToggleSub(ComposerSubToolbar.List) },
+            ) {
+                MdListIcon(tint = it, modifier = Modifier.size(17.dp))
+                Text("▾", fontSize = 9.sp, color = it.copy(alpha = 0.7f))
+            }
+            ExpandedToolButton(
+                contentDescription = "更多选项",
                 enabled = enabled,
                 active = openSub == ComposerSubToolbar.More,
                 onClick = { onToggleSub(ComposerSubToolbar.More) },
