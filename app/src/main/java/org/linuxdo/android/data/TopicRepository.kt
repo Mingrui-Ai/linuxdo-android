@@ -963,10 +963,11 @@ class TopicRepository(
     suspend fun fetchUserCreatedTopics(username: String, page: Int): TopicPage =
         toPage(json.decodeFromString(request("/topics/created-by/${encode(username)}.json?page=$page", burst = page == 0)), awaitCategories = false)
 
-    suspend fun fetchUserBookmarks(username: String, page: Int): TopicPage {
+    suspend fun fetchUserBookmarks(username: String, page: Int, query: String = ""): TopicPage {
         val userPath = encode(username)
+        val encodedQuery = encode(query.trim())
         val pageQuery = if (page > 0) "&page=$page" else ""
-        val root = objectRequest("/u/$userPath/bookmarks.json?q=$pageQuery", burst = page == 0)
+        val root = objectRequest("/u/$userPath/bookmarks.json?q=$encodedQuery$pageQuery", burst = page == 0)
         val listObj = root["user_bookmark_list"] as? JsonObject
         val bookmarks = listObj?.objects("bookmarks") ?: root.objects("bookmarks")
         val moreUrl = listObj?.text("more_bookmarks_url").orEmpty().ifBlank { root.text("more_bookmarks_url") }
@@ -2772,6 +2773,35 @@ class TopicRepository(
 
     suspend fun fetchCategoryTags(categoryId: Int?, query: String = "", limit: Int = 8): List<String> {
         return searchTags(categoryId, query, limit = limit).results.map { it.name }
+    }
+
+    private val draftTopicAuthorCache = ConcurrentHashMap<Long, Pair<String?, String?>>()
+
+    /**
+     * 拉取回复草稿所在话题的 1 楼发帖者信息（用户名与头像），用于草稿箱展示。
+     * 不记录访问，失败时静默返回 null，不影响草稿列表显示。
+     */
+    suspend fun fetchTopicAuthorBrief(topicId: Long): Pair<String?, String?>? {
+        if (topicId <= 0L) return null
+        draftTopicAuthorCache[topicId]?.let { return it }
+        return runCatching {
+            val root = objectRequest("/t/$topicId/1.json?track_visit=false", burst = false, present = false, retryAllowed = false)
+            val createdBy = (root["details"] as? JsonObject)?.get("created_by") as? JsonObject
+            val firstPost = (root["post_stream"] as? JsonObject)?.objects("posts")
+                ?.firstOrNull { it.number("post_number")?.toInt() == 1 }
+                ?: (root["post_stream"] as? JsonObject)?.objects("posts")?.firstOrNull()
+            val authorUsername = createdBy?.text("username")?.takeIf { it.isNotBlank() }
+                ?: firstPost?.text("username")?.takeIf { it.isNotBlank() }
+            val avatarTemplate = createdBy?.text("avatar_template")?.takeIf { it.isNotBlank() }
+                ?: firstPost?.text("avatar_template")?.takeIf { it.isNotBlank() }
+            val animatedAvatar = createdBy?.text("animated_avatar")?.takeIf { it.isNotBlank() }
+                ?: firstPost?.text("animated_avatar")?.takeIf { it.isNotBlank() }
+                ?: authorUsername?.let { AvatarCache.get(it) }
+            val avatarUrl = avatarUrlOf(avatarTemplate, animatedAvatar, size = 96, username = authorUsername)
+            if (authorUsername != null || avatarUrl != null) {
+                (authorUsername to avatarUrl).also { draftTopicAuthorCache[topicId] = it }
+            } else null
+        }.getOrNull()
     }
 
     /**

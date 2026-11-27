@@ -8,20 +8,28 @@ import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.foundation.lazy.grid.rememberLazyGridState
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.KeyboardArrowRight
-import androidx.compose.material.icons.filled.Star
 import androidx.compose.material.icons.filled.Lock
-import androidx.compose.material3.*
+import androidx.compose.material.icons.filled.Star
+import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.Icon
+import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
+import androidx.compose.material3.pulltorefresh.PullToRefreshBox
+import androidx.compose.material3.pulltorefresh.rememberPullToRefreshState
 import androidx.compose.runtime.*
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.semantics.semantics
@@ -31,14 +39,18 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import kotlin.math.min
 import org.linuxdo.android.App
 import org.linuxdo.android.data.UserBadgeItem
 import org.linuxdo.android.ui.BadgeDetailDialog
 import org.linuxdo.android.ui.DiscourseBadgeIcon
-import org.linuxdo.android.ui.design.IosTheme
+import org.linuxdo.android.ui.design.HeaderCountPill
+import org.linuxdo.android.ui.design.HeaderFilterPill
+import org.linuxdo.android.ui.design.HeaderFilterPillRow
+import org.linuxdo.android.ui.design.IosActivityIndicator
 import org.linuxdo.android.ui.design.IosNavBar
-import org.linuxdo.android.ui.design.IosDivider
-import org.linuxdo.android.ui.design.SectionHeader
+import org.linuxdo.android.ui.design.IosTheme
+import org.linuxdo.android.ui.design.boundedTabSwipe
 
 private enum class BadgeFilter(val label: String) {
     All("全部"), Earned("已解锁"), Unearned("待解锁")
@@ -77,6 +89,7 @@ internal fun ProfileBadgePreview(badges: List<UserBadgeItem>?, loading: Boolean,
     }
 }
 
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun ProfileBadgesScreen(
     username: String,
@@ -88,9 +101,13 @@ fun ProfileBadgesScreen(
     var loading by remember(username) { mutableStateOf(true) }
     var error by remember(username) { mutableStateOf<String?>(null) }
     var refreshGeneration by remember(username) { mutableIntStateOf(0) }
+    var userRefreshing by remember(username) { mutableStateOf(false) }
     var selectedBadge by remember(username) { mutableStateOf<UserBadgeItem?>(null) }
     var filter by rememberSaveable(username) { mutableStateOf(BadgeFilter.All) }
+
+    val totalCount = badges?.size ?: 0
     val earnedCount = remember(badges) { badges.orEmpty().count { it.isEarned } }
+    val unearnedCount = remember(badges, earnedCount) { (badges?.size ?: 0) - earnedCount }
     val filteredBadges = remember(badges, filter) {
         badges.orEmpty().filter {
             when (filter) {
@@ -113,66 +130,150 @@ fun ProfileBadgesScreen(
             error = e.message ?: "徽章加载失败"
         } finally {
             loading = false
+            userRefreshing = false
         }
     }
 
     val colors = IosTheme.colors
+    val pullState = rememberPullToRefreshState()
+
     Column(Modifier.fillMaxSize().background(colors.groupedBackground)) {
-        IosNavBar(title = "徽章展示", onBack = onBack, trailing = {
-            TextButton(onClick = { refreshGeneration++ }, enabled = !loading) {
-                Text(if (loading) "加载中" else "刷新")
+        // 通透单行导航栏：与首页 / 搜索 / 帖子详情统一 groupedBackground 底色，右侧直接呈现解锁进度
+        IosNavBar(
+            title = "徽章",
+            onBack = onBack,
+            backLabel = "",
+            background = colors.groupedBackground,
+            showDivider = false,
+            trailingWidth = 76.dp,
+            trailing = {
+                if (badges != null) {
+                    HeaderCountPill(
+                        text = "$earnedCount/$totalCount",
+                        modifier = Modifier.padding(end = 8.dp),
+                    )
+                }
+            },
+        )
+
+        // 与首页筛选栏一致的轻量胶囊筛选行（含各项计数），紧凑单行不割裂
+        HeaderFilterPillRow {
+            BadgeFilter.entries.forEach { option ->
+                val count = if (badges == null) null else when (option) {
+                    BadgeFilter.All -> totalCount
+                    BadgeFilter.Earned -> earnedCount
+                    BadgeFilter.Unearned -> unearnedCount
+                }
+                HeaderFilterPill(
+                    label = option.label,
+                    count = count,
+                    selected = filter == option,
+                    onClick = { filter = option },
+                )
             }
-        })
-        Row(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 10.dp),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-            Text("@$username", color = colors.secondaryLabel, style = IosTheme.type.footnote,
-                maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
-            Text(if (badges == null) "—" else "$earnedCount / ${badges.orEmpty().size} 已解锁",
-                color = colors.accent, fontSize = 12.sp, fontWeight = FontWeight.Medium)
         }
-        SectionHeader(labels = BadgeFilter.entries.map { it.label }, selected = filter.ordinal,
-            onSelect = { filter = BadgeFilter.entries[it] }, compact = true)
-        IosDivider()
 
         if (error != null && !badges.isNullOrEmpty()) {
-            Row(Modifier.fillMaxWidth().padding(horizontal = 16.dp), verticalAlignment = Alignment.CenterVertically) {
-                Text(error.orEmpty(), color = colors.secondaryLabel, fontSize = 12.sp, modifier = Modifier.weight(1f))
-                TextButton(onClick = { refreshGeneration++ }, enabled = !loading) { Text("重试") }
+            Row(
+                Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 4.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Text(
+                    error.orEmpty(),
+                    color = colors.secondaryLabel,
+                    fontSize = 12.sp,
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.weight(1f),
+                )
+                TextButton(onClick = { refreshGeneration++ }, enabled = !loading) {
+                    Text("重试", color = colors.accent)
+                }
                 org.linuxdo.android.ui.design.NetworkSettingsLink()
             }
         }
-        when {
-            loading && badges == null -> Box(Modifier.fillMaxWidth().weight(1f), contentAlignment = Alignment.Center) {
-                CircularProgressIndicator(color = colors.accent, modifier = Modifier.size(28.dp))
-            }
-            error != null && badges.isNullOrEmpty() -> Box(Modifier.fillMaxWidth().weight(1f), contentAlignment = Alignment.Center) {
-                Column(Modifier.padding(24.dp), horizontalAlignment = Alignment.CenterHorizontally) {
-                    Text(error.orEmpty(), color = colors.secondaryLabel, textAlign = TextAlign.Center)
-                    org.linuxdo.android.ui.design.NetworkSettingsLink()
-                    TextButton(onClick = { refreshGeneration++ }, enabled = !loading) { Text("重新加载") }
+
+        PullToRefreshBox(
+            isRefreshing = userRefreshing && loading,
+            onRefresh = {
+                if (!loading) {
+                    userRefreshing = true
+                    refreshGeneration++
                 }
-            }
-            filteredBadges.isEmpty() -> Box(Modifier.fillMaxWidth().weight(1f), contentAlignment = Alignment.Center) {
-                Text(when (filter) {
-                    BadgeFilter.All -> "暂无徽章"
-                    BadgeFilter.Earned -> "暂无已解锁的徽章"
-                    BadgeFilter.Unearned -> "全部徽章已解锁"
-                }, color = colors.secondaryLabel)
-            }
-            else -> key(username, filter) {
-                val gridState = rememberLazyGridState()
-                val minCellWidth = maxOf(96.dp, with(LocalDensity.current) { 96.sp.toDp() })
-                LazyVerticalGrid(
-                    columns = GridCells.Adaptive(minCellWidth),
-                    state = gridState,
-                    modifier = Modifier.fillMaxWidth().weight(1f),
-                    contentPadding = PaddingValues(start = 16.dp, end = 16.dp, top = 16.dp, bottom = 80.dp),
-                    horizontalArrangement = Arrangement.spacedBy(8.dp),
-                    verticalArrangement = Arrangement.spacedBy(8.dp),
+            },
+            state = pullState,
+            modifier = Modifier
+                .fillMaxWidth()
+                .weight(1f)
+                .boundedTabSwipe(
+                    selected = filter.ordinal,
+                    count = BadgeFilter.entries.size,
+                    enabled = selectedBadge == null,
+                    onSelect = { filter = BadgeFilter.entries[it] },
+                ),
+            indicator = {
+                val fraction = pullState.distanceFraction
+                if ((userRefreshing && loading) || fraction > 0f) {
+                    Box(
+                        Modifier
+                            .align(Alignment.TopCenter)
+                            .padding(top = 10.dp)
+                            .graphicsLayer {
+                                alpha = if (userRefreshing && loading) 1f else min(1f, fraction * 1.4f)
+                            },
+                    ) {
+                        IosActivityIndicator(diameter = 22.dp)
+                    }
+                }
+            },
+        ) {
+            when {
+                loading && badges == null -> Box(
+                    Modifier.fillMaxSize(),
+                    contentAlignment = Alignment.Center,
                 ) {
-                    items(filteredBadges, key = { it.badgeId }) { badge ->
-                        ProfileBadgeTile(badge) { selectedBadge = badge }
+                    IosActivityIndicator(diameter = 24.dp)
+                }
+                error != null && badges.isNullOrEmpty() -> Box(
+                    Modifier.fillMaxSize().verticalScroll(rememberScrollState()),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Column(Modifier.padding(24.dp), horizontalAlignment = Alignment.CenterHorizontally) {
+                        Text(error.orEmpty(), color = colors.secondaryLabel, textAlign = TextAlign.Center)
+                        org.linuxdo.android.ui.design.NetworkSettingsLink()
+                        TextButton(onClick = { refreshGeneration++ }, enabled = !loading) {
+                            Text("重新加载", color = colors.accent)
+                        }
+                    }
+                }
+                filteredBadges.isEmpty() -> Box(
+                    Modifier.fillMaxSize().verticalScroll(rememberScrollState()),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Text(
+                        when (filter) {
+                            BadgeFilter.All -> "暂无徽章"
+                            BadgeFilter.Earned -> "暂无已解锁的徽章"
+                            BadgeFilter.Unearned -> "全部徽章已解锁"
+                        },
+                        color = colors.secondaryLabel,
+                        style = IosTheme.type.footnote,
+                    )
+                }
+                else -> key(username, filter) {
+                    val gridState = rememberLazyGridState()
+                    val minCellWidth = maxOf(100.dp, with(LocalDensity.current) { 100.sp.toDp() })
+                    LazyVerticalGrid(
+                        columns = GridCells.Adaptive(minCellWidth),
+                        state = gridState,
+                        modifier = Modifier.fillMaxSize(),
+                        contentPadding = PaddingValues(start = 14.dp, end = 14.dp, top = 12.dp, bottom = 80.dp),
+                        horizontalArrangement = Arrangement.spacedBy(10.dp),
+                        verticalArrangement = Arrangement.spacedBy(10.dp),
+                    ) {
+                        items(filteredBadges, key = { it.badgeId }) { badge ->
+                            ProfileBadgeTile(badge) { selectedBadge = badge }
+                        }
                     }
                 }
             }
@@ -184,39 +285,80 @@ fun ProfileBadgesScreen(
 @Composable
 private fun ProfileBadgeTile(badge: UserBadgeItem, onClick: () -> Unit) {
     val colors = IosTheme.colors
+    val isDark = colors.isDark
     val medalColors = when (badge.badgeTypeId) {
         1 -> listOf(Color(0xFFFFD66E), Color(0xFFC88B24))
         2 -> listOf(Color(0xFFE3EDF2), Color(0xFF97AAB5))
         else -> listOf(Color(0xFFFFB088), Color(0xFFCA7543))
     }
+    val unearnedDiskColors = if (isDark) {
+        listOf(Color(0xFF34373D), Color(0xFF23262B))
+    } else {
+        listOf(Color(0xFFE9ECF2), Color(0xFFD8DDE6))
+    }
+    val unearnedBorderColor = if (isDark) Color(0xFF4C5058) else Color(0xFFC9CFD9)
     val status = if (!badge.isEarned) "待解锁" else if (badge.count > 1) "已获得 ${badge.count} 次" else "已解锁"
     Column(
-        Modifier.fillMaxWidth().clip(RoundedCornerShape(12.dp)).background(colors.card)
+        Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(14.dp))
+            .background(colors.card)
+            .border(
+                0.5.dp,
+                if (isDark) Color.White.copy(alpha = 0.06f) else Color.Black.copy(alpha = 0.04f),
+                RoundedCornerShape(14.dp),
+            )
             .clickable(onClickLabel = "查看徽章详情", onClick = onClick)
             .semantics { stateDescription = status }
-            .padding(horizontal = 6.dp, vertical = 12.dp),
+            .padding(horizontal = 8.dp, vertical = 14.dp),
         horizontalAlignment = Alignment.CenterHorizontally,
     ) {
-        Box(Modifier.size(60.dp), contentAlignment = Alignment.Center) {
-            val diskColors = if (badge.isEarned) medalColors else listOf(Color(0xFF393C42), Color(0xFF26292E))
-            Box(Modifier.matchParentSize().clip(CircleShape).background(Brush.linearGradient(diskColors))
-                .border(1.dp, if (badge.isEarned) medalColors.first() else Color(0xFF50545A), CircleShape),
-                contentAlignment = Alignment.Center) {
-                DiscourseBadgeIcon(badge.icon, badge.imageUrl, badge.isEarned, badge.badgeTypeId, Modifier.size(30.dp))
+        Box(Modifier.size(58.dp), contentAlignment = Alignment.Center) {
+            val diskColors = if (badge.isEarned) medalColors else unearnedDiskColors
+            Box(
+                Modifier
+                    .matchParentSize()
+                    .clip(CircleShape)
+                    .background(Brush.linearGradient(diskColors))
+                    .border(1.dp, if (badge.isEarned) medalColors.first() else unearnedBorderColor, CircleShape),
+                contentAlignment = Alignment.Center,
+            ) {
+                DiscourseBadgeIcon(badge.icon, badge.imageUrl, badge.isEarned, badge.badgeTypeId, Modifier.size(28.dp))
             }
             if (!badge.isEarned) {
-                Box(Modifier.align(Alignment.BottomEnd).size(20.dp).clip(CircleShape).background(colors.card),
-                    contentAlignment = Alignment.Center) {
-                    Icon(Icons.Default.Lock, null, tint = colors.secondaryLabel, modifier = Modifier.size(12.dp))
+                Box(
+                    Modifier
+                        .align(Alignment.BottomEnd)
+                        .size(20.dp)
+                        .clip(CircleShape)
+                        .background(colors.card)
+                        .border(0.6.dp, colors.separator, CircleShape),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Icon(Icons.Default.Lock, null, tint = colors.secondaryLabel, modifier = Modifier.size(11.dp))
                 }
             }
         }
-        Spacer(Modifier.height(8.dp))
-        Text(badge.name, color = if (badge.isEarned) colors.label else colors.secondaryLabel,
-            fontSize = 12.sp, lineHeight = 16.sp, fontWeight = FontWeight.Medium,
-            minLines = 2, maxLines = 2, overflow = TextOverflow.Ellipsis, textAlign = TextAlign.Center)
+        Spacer(Modifier.height(9.dp))
+        Text(
+            badge.name,
+            color = if (badge.isEarned) colors.label else colors.secondaryLabel,
+            fontSize = 12.5.sp,
+            lineHeight = 16.sp,
+            fontWeight = FontWeight.Medium,
+            minLines = 2,
+            maxLines = 2,
+            overflow = TextOverflow.Ellipsis,
+            textAlign = TextAlign.Center,
+        )
         Spacer(Modifier.height(4.dp))
-        Text(status, color = colors.secondaryLabel, fontSize = 10.sp, lineHeight = 14.sp,
-            maxLines = 1, overflow = TextOverflow.Ellipsis)
+        Text(
+            status,
+            color = if (badge.isEarned) colors.secondaryLabel else colors.tertiaryLabel,
+            fontSize = 10.5.sp,
+            lineHeight = 14.sp,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+        )
     }
 }
