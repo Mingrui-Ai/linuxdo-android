@@ -9004,7 +9004,6 @@ internal fun TopicNotificationHeaderButton(
     enabled: Boolean,
 ) {
     var expanded by remember { mutableStateOf(false) }
-    val isDark = IosTheme.colors.isDark
     val activeTint = when (currentLevel) {
         TopicNotificationLevel.Watching -> Color(0xFF007AFF)
         TopicNotificationLevel.Tracking -> Color(0xFF34C759)
@@ -9028,39 +9027,16 @@ internal fun TopicNotificationHeaderButton(
             )
         }
 
-        DropdownMenu(
+        org.linuxdo.android.ui.design.NotificationMenu(
             expanded = expanded,
-            onDismissRequest = { expanded = false },
-            containerColor = if (isDark) IosTheme.colors.card else Color.White,
-            tonalElevation = 0.dp,
-            modifier = Modifier.background(if (isDark) IosTheme.colors.card else Color.White),
+            onDismiss = { expanded = false },
         ) {
             TopicNotificationLevel.entries.forEach { level ->
-                val isSelected = level == currentLevel
-                DropdownMenuItem(
-                    modifier = if (isSelected) Modifier.background(IosTheme.colors.accent.copy(alpha = 0.12f)) else Modifier,
-                    text = {
-                        Column(modifier = Modifier.padding(vertical = 2.dp)) {
-                            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                                TopicNotificationIcon(level)
-                                Text(
-                                    level.title,
-                                    style = IosTheme.type.subheadline,
-                                    fontWeight = if (isSelected) FontWeight.SemiBold else FontWeight.Normal,
-                                    color = if (isSelected) IosTheme.colors.accent else IosTheme.colors.label,
-                                )
-                                if (isSelected) {
-                                    Text("✓", style = IosTheme.type.caption, color = IosTheme.colors.accent, fontWeight = FontWeight.Bold)
-                                }
-                            }
-                            Text(
-                                level.description,
-                                style = IosTheme.type.caption,
-                                color = if (isDark) Color(0xFFB0B0B5) else IosTheme.colors.secondaryLabel,
-                                maxLines = 2,
-                            )
-                        }
-                    },
+                org.linuxdo.android.ui.design.NotificationMenuItem(
+                    title = level.title,
+                    description = level.description,
+                    selected = level == currentLevel,
+                    icon = { TopicNotificationIcon(level) },
                     onClick = {
                         expanded = false
                         onSelectLevel(level)

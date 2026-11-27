@@ -3,8 +3,6 @@ package org.linuxdo.android.ui.screen
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -12,12 +10,13 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.sp
 import kotlinx.coroutines.launch
 import org.linuxdo.android.data.*
 import org.linuxdo.android.ui.UserNotificationController
 import org.linuxdo.android.ui.design.IosActivityIndicator
 import org.linuxdo.android.ui.design.IosTheme
+import org.linuxdo.android.ui.design.NotificationMenu
+import org.linuxdo.android.ui.design.NotificationMenuItem
 
 @Composable
 internal fun ProfileNotificationButton(controller: UserNotificationController) {
@@ -26,46 +25,47 @@ internal fun ProfileNotificationButton(controller: UserNotificationController) {
     var expanded by remember(controller) { mutableStateOf(false) }
     var choosingDuration by remember(controller) { mutableStateOf(false) }
     var duration by remember(controller) { mutableStateOf<UserIgnoreDuration?>(null) }
-    val busy = state.loading || state.saving
+    val busy = state.saving || (state.loading && !state.fresh)
     val colors = IosTheme.colors
     val level = state.settings?.level
-    LaunchedEffect(controller) { controller.load() }
+    val activeTint = if (level == UserNotificationLevel.Mute || level == UserNotificationLevel.Ignore)
+        androidx.compose.ui.graphics.Color(0xFFFF3B30) else colors.label
     Box {
         IconButton(onClick = {
             expanded = true
             scope.launch { controller.load() }
         }, enabled = !state.saving, modifier = Modifier.size(44.dp)) {
-            if (busy) IosActivityIndicator(diameter = 20.dp, color = colors.accent)
+            if (state.saving || (state.loading && state.settings == null)) IosActivityIndicator(diameter = 20.dp, color = activeTint)
             else TopicNotificationIcon(
                 if (level == UserNotificationLevel.Mute || level == UserNotificationLevel.Ignore)
                     TopicNotificationLevel.Muted else TopicNotificationLevel.Regular,
                 modifier = Modifier.size(24.dp).semantics { contentDescription = "用户通知：${level?.label ?: "点击加载"}" },
-                tint = colors.accent,
+                tint = activeTint,
             )
         }
-        DropdownMenu(expanded = expanded, onDismissRequest = { expanded = false },
-            containerColor = colors.card, tonalElevation = 0.dp, modifier = Modifier.widthIn(max = 300.dp)) {
-            if (state.loading) DropdownMenuItem(text = { Text("正在同步通知设置…") }, onClick = {}, enabled = false)
+        NotificationMenu(expanded = expanded, onDismiss = { expanded = false }) {
+            if (state.loading && state.settings == null) DropdownMenuItem(text = { Text("正在同步通知设置…") }, onClick = {}, enabled = false)
             state.error?.let { message ->
                 DropdownMenuItem(text = { Text("$message，点击重试", color = colors.secondaryLabel) },
-                    onClick = { scope.launch { controller.load() } }, enabled = !busy)
+                    onClick = { scope.launch { controller.load(force = true) } }, enabled = !busy)
             }
             UserNotificationLevel.entries.filter { it != UserNotificationLevel.Ignore || state.settings?.canIgnore == true || level == it }
                 .forEach { option ->
-                    DropdownMenuItem(
-                        text = { Column {
-                            Text(option.label, color = colors.label)
-                            Text(option.description, fontSize = 12.sp, color = colors.secondaryLabel)
-                        } },
-                        trailingIcon = { if (option == level) Icon(Icons.Default.Check, "当前设置", tint = colors.accent) },
+                    NotificationMenuItem(
+                        title = option.label,
+                        description = option.description,
+                        selected = option == level,
+                        icon = { TopicNotificationIcon(if (option == UserNotificationLevel.Normal)
+                            TopicNotificationLevel.Regular else TopicNotificationLevel.Muted) },
                         enabled = !busy && state.fresh && state.settings?.allows(option) == true,
                         onClick = {
                             if (option == UserNotificationLevel.Ignore) {
                                 expanded = false
                                 duration = null
                                 choosingDuration = true
-                            } else scope.launch {
-                                if (controller.save(option)) expanded = false
+                            } else {
+                                expanded = false
+                                scope.launch { if (!controller.save(option)) expanded = true }
                             }
                         },
                     )
@@ -88,7 +88,7 @@ internal fun ProfileNotificationButton(controller: UserNotificationController) {
                     }
                 }
                 state.error?.let { Text(it, color = colors.secondaryLabel) }
-                if (!state.fresh && !busy) TextButton(onClick = { scope.launch { controller.load() } }) { Text("重新同步") }
+                if (!state.fresh && !busy) TextButton(onClick = { scope.launch { controller.load(force = true) } }) { Text("重新同步") }
             }
         },
         confirmButton = {

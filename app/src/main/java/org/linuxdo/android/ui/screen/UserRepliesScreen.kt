@@ -397,6 +397,9 @@ fun UserProfileScreen(
     var finishedRefresh by remember(username) { mutableIntStateOf(0) }
     var followUpdating by remember(username) { mutableStateOf(false) }
     var profileError by remember(username) { mutableStateOf<String?>(null) }
+    LaunchedEffect(notificationController, refreshGeneration) {
+        notificationController?.load(force = refreshGeneration > 0)
+    }
     val tabEntries = remember { UserProfileTab.entries }
 
     var summaryData by remember(username) { mutableStateOf<UserSummaryData?>(null) }

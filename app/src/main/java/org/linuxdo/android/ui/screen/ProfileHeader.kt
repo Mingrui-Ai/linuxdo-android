@@ -131,13 +131,13 @@ internal fun ProfileHeader(
                                     putExtra(Intent.EXTRA_TEXT, "${Config.BASE_URL}/u/${android.net.Uri.encode(username)}")
                                 }, "分享个人主页"))
                             }, modifier = Modifier.size(44.dp)) {
-                                Icon(Icons.Default.Share, "分享个人主页", tint = colors.accent)
+                                Icon(Icons.Default.Share, "分享个人主页", tint = if (colors.isDark) Color.White else Color.Black)
                             }
                             notificationController?.let { ProfileNotificationButton(it) }
                             Box {
                                 TextButton(onClick = { showMenu = true },
                                     modifier = Modifier.width(44.dp).semantics { contentDescription = "个人主页菜单" }) {
-                                    Text("⋯", color = colors.accent, fontSize = 22.sp)
+                                    Text("⋯", color = if (colors.isDark) Color.White else Color.Black, fontSize = 22.sp)
                                 }
                                 ProfileMenu(
                                     expanded = showMenu,

@@ -2262,7 +2262,7 @@ class TopicRepository(
 
     suspend fun fetchUserNotificationSettings(username: String, userId: Long, generation: Long): UserNotificationSettings {
         require(userId > 0) { "请先登录" }
-        val root = profileEditorRead("/u/${encode(username)}.json", userId, generation)
+        val root = profileEditorRead("/u/${encode(username)}/card.json", userId, generation)
         val settings = json.decodeFromJsonElement<UserNotificationSettings>(root.getValue("user"))
         require(settings.username.equals(username, ignoreCase = true) && settings.id != userId) { "用户资料不匹配" }
         return settings

@@ -4311,7 +4311,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     fun onUserNotificationSettingsObserved(settings: org.linuxdo.android.data.UserNotificationSettings) {
         val previous = observedUserIgnores.put(settings.username.lowercase(), settings.ignored)
-        if (previous == settings.ignored) return
+        if (previous == settings.ignored || (previous == null && !settings.ignored)) return
         // A cached stream can contain now-ignored replies or miss newly unignored replies.
         // Drop it and let returning detail routes reload the server-filtered stream.
         // Do not translate account settings into another local username filter.
