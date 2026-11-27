@@ -19,6 +19,7 @@ import androidx.compose.ui.semantics.semantics
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.filter
 import org.linuxdo.android.ui.design.IosActivityIndicator
+import org.linuxdo.android.ui.design.IosFullDivider
 import org.linuxdo.android.ui.design.IosNavBar
 import org.linuxdo.android.ui.design.ListNavigationHeader
 import org.linuxdo.android.ui.design.MessageListRefresh
@@ -120,10 +121,15 @@ fun HistoryScreen(
     Column(Modifier.fillMaxSize().background(IosTheme.colors.groupedBackground)) {
         ListNavigationHeader {
             IosNavBar(
-                title = "浏览历史", onBack = onBack, backLabel = "返回",
+                title = "浏览历史",
+                onBack = onBack,
+                backLabel = "",
+                background = IosTheme.colors.groupedBackground,
+                showDivider = false,
+                trailingWidth = 48.dp,
                 trailing = {
                     Box(
-                        Modifier.size(48.dp).clip(CircleShape)
+                        Modifier.size(40.dp).clip(CircleShape)
                             .clickable {
                                 searchExpanded = !searchExpanded
                                 if (!searchExpanded) { onQueryChange(""); focusManager.clearFocus() }
@@ -133,7 +139,7 @@ fun HistoryScreen(
                     ) {
                         HistorySearchIcon(
                             if (searchExpanded) IosTheme.colors.accent else IosTheme.colors.label,
-                            Modifier.size(22.dp),
+                            Modifier.size(20.dp),
                         )
                     }
                 },
@@ -141,11 +147,22 @@ fun HistoryScreen(
             if (searchExpanded) {
                 LaunchedEffect(Unit) { focus.requestFocus() }
                 Row(
-                    Modifier.fillMaxWidth().background(IosTheme.colors.card).padding(horizontal = 16.dp, vertical = 8.dp)
-                        .clip(RoundedCornerShape(50)).background(IosTheme.colors.fieldBackground)
-                        .padding(horizontal = 12.dp, vertical = 10.dp),
+                    Modifier
+                        .fillMaxWidth()
+                        .padding(start = 16.dp, end = 16.dp, top = 2.dp, bottom = 10.dp)
+                        .clip(RoundedCornerShape(16.dp))
+                        .background(
+                            if (IosTheme.colors.isDark) Color.White.copy(alpha = 0.08f)
+                            else Color(0xFF767680).copy(alpha = 0.11f),
+                        )
+                        .padding(horizontal = 12.dp, vertical = 8.dp),
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
+                    HistorySearchIcon(
+                        IosTheme.colors.secondaryLabel,
+                        Modifier.size(15.dp),
+                    )
+                    Spacer(Modifier.width(8.dp))
                     BasicTextField(
                         value = query, onValueChange = onQueryChange, singleLine = true,
                         textStyle = IosTheme.type.body.copy(color = IosTheme.colors.label, fontSize = 14.sp),
@@ -160,12 +177,15 @@ fun HistoryScreen(
                         },
                     )
                     if (query.isNotEmpty()) Box(
-                        Modifier.size(24.dp).clip(CircleShape).clickable { onQueryChange("") }
+                        Modifier.size(22.dp).clip(CircleShape)
+                            .background(IosTheme.colors.secondaryLabel.copy(alpha = 0.16f))
+                            .clickable { onQueryChange("") }
                             .semantics { contentDescription = "清除搜索内容" },
                         contentAlignment = Alignment.Center,
-                    ) { Text("✕", fontSize = 12.sp, color = IosTheme.colors.secondaryLabel) }
+                    ) { Text("×", fontSize = 12.sp, fontWeight = FontWeight.Bold, color = IosTheme.colors.secondaryLabel) }
                 }
             }
+            IosFullDivider()
         }
         MessageListRefresh(
             refreshing = refreshing && loading, active = !loading,
@@ -174,7 +194,7 @@ fun HistoryScreen(
         ) {
             LazyColumn(
                 state = list, modifier = Modifier.fillMaxSize().scrollListBars(list),
-                contentPadding = PaddingValues(bottom = 20.dp),
+                contentPadding = PaddingValues(bottom = 24.dp),
             ) {
                 error?.let { message ->
                     item("history-error") {
@@ -186,15 +206,11 @@ fun HistoryScreen(
                     item("history-loading") { IosLoadingBox() }
                 } else if (filtered.isEmpty()) {
                     item("history-empty") {
-                        Text(if (entries.isEmpty()) "暂无浏览历史，下拉刷新" else "没有匹配的话题",
-                            modifier = Modifier.fillMaxWidth().padding(24.dp), style = IosTheme.type.footnote,
-                            color = IosTheme.colors.secondaryLabel)
+                        Box(Modifier.fillMaxWidth().padding(48.dp), contentAlignment = Alignment.Center) {
+                            Text(if (entries.isEmpty()) "暂无浏览历史，下拉刷新" else "没有匹配的话题",
+                                style = IosTheme.type.footnote, color = IosTheme.colors.secondaryLabel)
+                        }
                     }
-                }
-                if (filtered.isNotEmpty()) item("history-heading") {
-                    Text("最近浏览", modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp),
-                        style = IosTheme.type.caption.copy(fontWeight = FontWeight.SemiBold),
-                        color = IosTheme.colors.secondaryLabel)
                 }
                 items(filtered, key = { it.topicId }) { entry ->
                     HistoryRow(entry = entry, query = query) {

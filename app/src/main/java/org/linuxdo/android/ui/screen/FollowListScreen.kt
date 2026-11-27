@@ -6,6 +6,7 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
@@ -15,7 +16,9 @@ import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -24,6 +27,7 @@ import androidx.compose.material3.SwipeToDismissBoxValue
 import androidx.compose.material3.Text
 import androidx.compose.material3.rememberSwipeToDismissBoxState
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -44,10 +48,14 @@ import org.linuxdo.android.data.BlockedUser
 import org.linuxdo.android.data.FollowUser
 import org.linuxdo.android.data.avatarUrlOf
 import org.linuxdo.android.ui.FollowUiState
-import org.linuxdo.android.ui.design.IosDivider
+import org.linuxdo.android.ui.design.HeaderActionPill
+import org.linuxdo.android.ui.design.IosFullDivider
 import org.linuxdo.android.ui.design.IosLoadingBox
-import org.linuxdo.android.ui.design.IosLargeTitleScaffold
+import org.linuxdo.android.ui.design.IosNavBar
 import org.linuxdo.android.ui.design.IosTheme
+import org.linuxdo.android.ui.design.ListNavigationHeader
+import org.linuxdo.android.ui.design.MessageListRefresh
+import org.linuxdo.android.ui.design.scrollListBars
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -66,118 +74,142 @@ fun FollowListScreen(
     var selectedUsernames by remember { mutableStateOf(setOf<String>()) }
     var singleTargetForDismiss by remember { mutableStateOf<FollowUser?>(null) }
     var showBatchConfirmDialog by remember { mutableStateOf(false) }
+    var refreshing by remember { mutableStateOf(false) }
+    val listState = rememberLazyListState()
 
-    IosLargeTitleScaffold(
-        title = title,
-        showLargeTitle = false,
-        onBack = onBack,
-        backLabel = "返回",
-        trailing = {
-            if (canManage && state.users.isNotEmpty()) {
-                Box(
-                    modifier = Modifier
-                        .clip(RoundedCornerShape(8.dp))
-                        .clickable {
-                            isBatchMode = !isBatchMode
-                            if (!isBatchMode) selectedUsernames = emptySet()
+    LaunchedEffect(state.loading) {
+        if (!state.loading) refreshing = false
+    }
+
+    Box(Modifier.fillMaxSize().background(IosTheme.colors.groupedBackground)) {
+        Column(Modifier.fillMaxSize()) {
+            ListNavigationHeader {
+                IosNavBar(
+                    title = title,
+                    onBack = onBack,
+                    backLabel = "",
+                    background = IosTheme.colors.groupedBackground,
+                    showDivider = false,
+                    trailingWidth = if (canManage) 76.dp else 56.dp,
+                    trailing = {
+                        if (canManage && state.users.isNotEmpty()) {
+                            HeaderActionPill(
+                                text = if (isBatchMode) "完成" else "管理",
+                                emphasized = isBatchMode,
+                                modifier = Modifier.padding(end = 8.dp),
+                                onClick = {
+                                    isBatchMode = !isBatchMode
+                                    if (!isBatchMode) selectedUsernames = emptySet()
+                                },
+                            )
                         }
-                        .padding(horizontal = 8.dp, vertical = 6.dp),
-                    contentAlignment = Alignment.Center,
+                    },
+                )
+                IosFullDivider()
+            }
+
+            MessageListRefresh(
+                refreshing = refreshing && state.loading,
+                active = !state.loading,
+                onRefresh = {
+                    refreshing = true
+                    onRetry()
+                },
+                modifier = Modifier.weight(1f).fillMaxWidth(),
+            ) {
+                LazyColumn(
+                    state = listState,
+                    modifier = Modifier.fillMaxSize().scrollListBars(listState),
+                    contentPadding = PaddingValues(top = 8.dp, bottom = if (isBatchMode) 88.dp else 32.dp),
                 ) {
-                    Text(
-                        text = if (isBatchMode) "完成" else "管理",
-                        fontSize = 14.5.sp,
-                        fontWeight = FontWeight.Medium,
-                        color = IosTheme.colors.accent,
-                    )
-                }
-            }
-        },
-    ) {
-        when {
-            state.loading && state.users.isEmpty() -> item("loading") {
-                IosLoadingBox()
-            }
-            state.error != null && state.users.isEmpty() -> item("error") {
-                Column(Modifier.fillMaxWidth().padding(20.dp), verticalArrangement = Arrangement.spacedBy(8.dp), horizontalAlignment = Alignment.CenterHorizontally) {
-                    Text(state.error, style = IosTheme.type.footnote, color = IosTheme.colors.secondaryLabel)
-                    Text("重试", modifier = Modifier.clickable(onClick = onRetry), color = IosTheme.colors.accent)
-                }
-            }
-            state.users.isEmpty() -> item("empty") {
-                Box(Modifier.fillMaxWidth().padding(36.dp), contentAlignment = Alignment.Center) {
-                    Text(emptyText, color = IosTheme.colors.secondaryLabel)
-                }
-            }
-            else -> {
-                items(state.users, key = { it.username }) { user ->
-                    val isSelected = user.username in selectedUsernames
-                    val dismissState = rememberSwipeToDismissBoxState(
-                        confirmValueChange = { value ->
-                            if (value == SwipeToDismissBoxValue.EndToStart) {
-                                singleTargetForDismiss = user
-                                false
-                            } else false
+                    when {
+                        state.loading && state.users.isEmpty() -> item("loading") {
+                            IosLoadingBox()
                         }
-                    )
-
-                    SwipeToDismissBox(
-                        state = dismissState,
-                        enableDismissFromStartToEnd = false,
-                        enableDismissFromEndToStart = canManage && !isBatchMode,
-                        backgroundContent = {
-                            Box(
-                                modifier = Modifier
-                                    .fillMaxSize()
-                                    .background(Color(0xFFFF3B30))
-                                    .padding(horizontal = 20.dp),
-                                contentAlignment = Alignment.CenterEnd,
+                        state.error != null && state.users.isEmpty() -> item("error") {
+                            Column(
+                                Modifier.fillMaxWidth().padding(24.dp),
+                                verticalArrangement = Arrangement.spacedBy(8.dp),
+                                horizontalAlignment = Alignment.CenterHorizontally,
                             ) {
-                                Text(
-                                    text = "取消关注",
-                                    color = Color.White,
-                                    fontSize = 14.5.sp,
-                                    fontWeight = FontWeight.SemiBold,
-                                )
+                                Text(state.error, style = IosTheme.type.footnote, color = IosTheme.colors.secondaryLabel)
+                                Text("重试", modifier = Modifier.clickable(onClick = onRetry), color = IosTheme.colors.accent)
                             }
-                        },
-                    ) {
-                        UserRowItem(
-                            username = user.username,
-                            name = user.name,
-                            avatarTemplate = user.avatarTemplate,
-                            trustLevel = user.trustLevel,
-                            isBatchMode = isBatchMode,
-                            isSelected = isSelected,
-                            onToggleSelect = {
-                                selectedUsernames = if (isSelected) {
-                                    selectedUsernames - user.username
-                                } else {
-                                    selectedUsernames + user.username
-                                }
-                            },
-                            onClick = {
-                                if (isBatchMode) {
-                                    selectedUsernames = if (isSelected) {
-                                        selectedUsernames - user.username
-                                    } else {
-                                        selectedUsernames + user.username
+                        }
+                        state.users.isEmpty() -> item("empty") {
+                            Box(Modifier.fillMaxWidth().padding(48.dp), contentAlignment = Alignment.Center) {
+                                Text(emptyText, style = IosTheme.type.footnote, color = IosTheme.colors.secondaryLabel)
+                            }
+                        }
+                        else -> {
+                            items(state.users, key = { it.username }) { user ->
+                                val isSelected = user.username in selectedUsernames
+                                val dismissState = rememberSwipeToDismissBoxState(
+                                    confirmValueChange = { value ->
+                                        if (value == SwipeToDismissBoxValue.EndToStart) {
+                                            singleTargetForDismiss = user
+                                            false
+                                        } else false
                                     }
-                                } else {
-                                    onOpenUser(user.username)
-                                }
-                            },
-                        )
-                    }
-                }
+                                )
 
-                if (isBatchMode) {
-                    item("bottom-spacer") {
-                        Spacer(Modifier.height(80.dp))
+                                SwipeToDismissBox(
+                                    state = dismissState,
+                                    enableDismissFromStartToEnd = false,
+                                    enableDismissFromEndToStart = canManage && !isBatchMode,
+                                    backgroundContent = {
+                                        Box(
+                                            modifier = Modifier
+                                                .fillMaxSize()
+                                                .padding(horizontal = 14.dp, vertical = 5.dp)
+                                                .clip(RoundedCornerShape(14.dp))
+                                                .background(Color(0xFFFF3B30))
+                                                .padding(horizontal = 20.dp),
+                                            contentAlignment = Alignment.CenterEnd,
+                                        ) {
+                                            Text(
+                                                text = "取消关注",
+                                                color = Color.White,
+                                                fontSize = 14.5.sp,
+                                                fontWeight = FontWeight.SemiBold,
+                                            )
+                                        }
+                                    },
+                                ) {
+                                    UserRowItem(
+                                        username = user.username,
+                                        name = user.name,
+                                        avatarTemplate = user.avatarTemplate,
+                                        trustLevel = user.trustLevel,
+                                        isBatchMode = isBatchMode,
+                                        isSelected = isSelected,
+                                        onToggleSelect = {
+                                            selectedUsernames = if (isSelected) {
+                                                selectedUsernames - user.username
+                                            } else {
+                                                selectedUsernames + user.username
+                                            }
+                                        },
+                                        onClick = {
+                                            if (isBatchMode) {
+                                                selectedUsernames = if (isSelected) {
+                                                    selectedUsernames - user.username
+                                                } else {
+                                                    selectedUsernames + user.username
+                                                }
+                                            } else {
+                                                onOpenUser(user.username)
+                                            }
+                                        },
+                                    )
+                                }
+                            }
+
+                            if (state.loading && !refreshing) {
+                                item("loading-more") { IosLoadingBox() }
+                            }
+                        }
                     }
-                }
-                if (state.loading) {
-                    item("loading-more") { IosLoadingBox() }
                 }
             }
         }
@@ -292,104 +324,106 @@ fun BlacklistScreen(
     var singleTargetForDismiss by remember { mutableStateOf<BlockedUser?>(null) }
     var showBatchConfirmDialog by remember { mutableStateOf(false) }
 
-    IosLargeTitleScaffold(
-        title = "本地拉黑用户",
-        showLargeTitle = false,
-        onBack = onBack,
-        backLabel = "返回",
-        trailing = {
-            if (users.isNotEmpty()) {
-                Box(
-                    modifier = Modifier
-                        .clip(RoundedCornerShape(8.dp))
-                        .clickable {
-                            isBatchMode = !isBatchMode
-                            if (!isBatchMode) selectedUsernames = emptySet()
-                        }
-                        .padding(horizontal = 8.dp, vertical = 6.dp),
-                    contentAlignment = Alignment.Center,
-                ) {
-                    Text(
-                        text = if (isBatchMode) "完成" else "管理",
-                        fontSize = 14.5.sp,
-                        fontWeight = FontWeight.Medium,
-                        color = IosTheme.colors.accent,
-                    )
-                }
-            }
-        },
-    ) {
-        if (users.isEmpty()) {
-            item("empty") {
-                Box(Modifier.fillMaxWidth().padding(36.dp), contentAlignment = Alignment.Center) {
-                    Text("本地黑名单暂无被拉黑的用户", color = IosTheme.colors.secondaryLabel)
-                }
-            }
-        } else {
-            items(users, key = { it.username }) { user ->
-                val isSelected = user.username in selectedUsernames
-                val dismissState = rememberSwipeToDismissBoxState(
-                    confirmValueChange = { value ->
-                        if (value == SwipeToDismissBoxValue.EndToStart) {
-                            singleTargetForDismiss = user
-                            false
-                        } else false
-                    }
-                )
+    val listState = rememberLazyListState()
 
-                SwipeToDismissBox(
-                    state = dismissState,
-                    enableDismissFromStartToEnd = false,
-                    enableDismissFromEndToStart = !isBatchMode,
-                    backgroundContent = {
-                        Box(
-                            modifier = Modifier
-                                .fillMaxSize()
-                                .background(Color(0xFFFF3B30))
-                                .padding(horizontal = 20.dp),
-                            contentAlignment = Alignment.CenterEnd,
-                        ) {
-                            Text(
-                                text = "移除黑名单",
-                                color = Color.White,
-                                fontSize = 14.5.sp,
-                                fontWeight = FontWeight.SemiBold,
-                            )
+    Column(Modifier.fillMaxSize().background(IosTheme.colors.groupedBackground)) {
+        ListNavigationHeader {
+            IosNavBar(
+                title = "本地拉黑用户",
+                onBack = onBack,
+                backLabel = "",
+                background = IosTheme.colors.groupedBackground,
+                showDivider = false,
+                trailingWidth = 76.dp,
+                trailing = {
+                    if (users.isNotEmpty()) {
+                        HeaderActionPill(
+                            text = if (isBatchMode) "完成" else "管理",
+                            emphasized = isBatchMode,
+                            modifier = Modifier.padding(end = 8.dp),
+                            onClick = {
+                                isBatchMode = !isBatchMode
+                                if (!isBatchMode) selectedUsernames = emptySet()
+                            },
+                        )
+                    }
+                },
+            )
+            IosFullDivider()
+        }
+        LazyColumn(
+            state = listState,
+            modifier = Modifier.weight(1f).fillMaxWidth().scrollListBars(listState),
+            contentPadding = PaddingValues(top = 8.dp, bottom = if (isBatchMode) 88.dp else 32.dp),
+        ) {
+            if (users.isEmpty()) {
+                item("empty") {
+                    Box(Modifier.fillMaxWidth().padding(48.dp), contentAlignment = Alignment.Center) {
+                        Text("本地黑名单暂无被拉黑的用户", style = IosTheme.type.footnote, color = IosTheme.colors.secondaryLabel)
+                    }
+                }
+            } else {
+                items(users, key = { it.username }) { user ->
+                    val isSelected = user.username in selectedUsernames
+                    val dismissState = rememberSwipeToDismissBoxState(
+                        confirmValueChange = { value ->
+                            if (value == SwipeToDismissBoxValue.EndToStart) {
+                                singleTargetForDismiss = user
+                                false
+                            } else false
                         }
-                    },
-                ) {
-                    UserRowItem(
-                        username = user.username,
-                        name = user.name,
-                        avatarTemplate = user.avatarTemplate,
-                        trustLevel = user.trustLevel,
-                        isBatchMode = isBatchMode,
-                        isSelected = isSelected,
-                        onToggleSelect = {
-                            selectedUsernames = if (isSelected) {
-                                selectedUsernames - user.username
-                            } else {
-                                selectedUsernames + user.username
+                    )
+
+                    SwipeToDismissBox(
+                        state = dismissState,
+                        enableDismissFromStartToEnd = false,
+                        enableDismissFromEndToStart = !isBatchMode,
+                        backgroundContent = {
+                            Box(
+                                modifier = Modifier
+                                    .fillMaxSize()
+                                    .padding(horizontal = 14.dp, vertical = 5.dp)
+                                    .clip(RoundedCornerShape(14.dp))
+                                    .background(Color(0xFFFF3B30))
+                                    .padding(horizontal = 20.dp),
+                                contentAlignment = Alignment.CenterEnd,
+                            ) {
+                                Text(
+                                    text = "移除黑名单",
+                                    color = Color.White,
+                                    fontSize = 14.5.sp,
+                                    fontWeight = FontWeight.SemiBold,
+                                )
                             }
                         },
-                        onClick = {
-                            if (isBatchMode) {
+                    ) {
+                        UserRowItem(
+                            username = user.username,
+                            name = user.name,
+                            avatarTemplate = user.avatarTemplate,
+                            trustLevel = user.trustLevel,
+                            isBatchMode = isBatchMode,
+                            isSelected = isSelected,
+                            onToggleSelect = {
                                 selectedUsernames = if (isSelected) {
                                     selectedUsernames - user.username
                                 } else {
                                     selectedUsernames + user.username
                                 }
-                            } else {
-                                onOpenUser(user.username)
-                            }
-                        },
-                    )
-                }
-            }
-
-            if (isBatchMode) {
-                item("bottom-spacer") {
-                    Spacer(Modifier.height(80.dp))
+                            },
+                            onClick = {
+                                if (isBatchMode) {
+                                    selectedUsernames = if (isSelected) {
+                                        selectedUsernames - user.username
+                                    } else {
+                                        selectedUsernames + user.username
+                                    }
+                                } else {
+                                    onOpenUser(user.username)
+                                }
+                            },
+                        )
+                    }
                 }
             }
         }
@@ -505,66 +539,79 @@ private fun UserRowItem(
     onClick: () -> Unit,
 ) {
     val avatar = avatarUrlOf(avatarTemplate)
-    Row(
-        Modifier
-            .fillMaxWidth()
-            .background(IosTheme.colors.card)
-            .clickable(onClick = onClick)
-            .padding(horizontal = 16.dp, vertical = 12.dp),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        if (isBatchMode) {
-            Box(
-                modifier = Modifier
-                    .size(22.dp)
-                    .clip(CircleShape)
-                    .border(
-                        1.5.dp,
-                        if (isSelected) IosTheme.colors.accent else IosTheme.colors.tertiaryLabel,
-                        CircleShape
-                    )
-                    .background(if (isSelected) IosTheme.colors.accent else Color.Transparent)
-                    .clickable(onClick = onToggleSelect),
-                contentAlignment = Alignment.Center,
+        // 关注/黑名单卡片行：使用分组背景 + 圆角卡片，与草稿箱、徽章页保持统一
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 14.dp, vertical = 5.dp)
+                .clip(RoundedCornerShape(14.dp))
+                .background(IosTheme.colors.card)
+                .border(
+                    0.5.dp,
+                    if (IosTheme.colors.isDark) Color.White.copy(alpha = 0.06f)
+                    else Color.Black.copy(alpha = 0.05f),
+                    RoundedCornerShape(14.dp),
+                ),
+        ) {
+            Row(
+                Modifier
+                    .fillMaxWidth()
+                    .clickable(onClick = onClick)
+                    .padding(horizontal = 14.dp, vertical = 12.dp),
+                verticalAlignment = Alignment.CenterVertically,
             ) {
-                if (isSelected) {
-                    Text("✓", color = Color.White, fontSize = 13.sp, fontWeight = FontWeight.Bold)
+                if (isBatchMode) {
+                    Box(
+                        modifier = Modifier
+                            .size(22.dp)
+                            .clip(CircleShape)
+                            .border(
+                                1.5.dp,
+                                if (isSelected) IosTheme.colors.accent else IosTheme.colors.tertiaryLabel,
+                                CircleShape
+                            )
+                            .background(if (isSelected) IosTheme.colors.accent else Color.Transparent)
+                            .clickable(onClick = onToggleSelect),
+                        contentAlignment = Alignment.Center,
+                    ) {
+                        if (isSelected) {
+                            Text("✓", color = Color.White, fontSize = 13.sp, fontWeight = FontWeight.Bold)
+                        }
+                    }
+                    Spacer(Modifier.width(12.dp))
+                }
+
+                AsyncImage(
+                    model = avatar,
+                    contentDescription = username,
+                    contentScale = ContentScale.Crop,
+                    modifier = Modifier
+                        .size(42.dp)
+                        .clip(CircleShape)
+                        .background(IosTheme.colors.fieldBackground),
+                )
+                Spacer(Modifier.width(12.dp))
+                Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                    Text(
+                        name?.takeIf { it.isNotBlank() } ?: username,
+                        style = IosTheme.type.subheadline,
+                        color = IosTheme.colors.label,
+                        fontWeight = FontWeight.Medium,
+                    )
+                    Text("@$username", style = IosTheme.type.caption, color = IosTheme.colors.secondaryLabel)
+                }
+                trustLevel?.let {
+                    Box(
+                        modifier = Modifier
+                            .clip(RoundedCornerShape(6.dp))
+                            .background(IosTheme.colors.accent.copy(alpha = 0.12f))
+                            .padding(horizontal = 7.dp, vertical = 2.dp),
+                    ) {
+                        Text("Lv.$it", style = IosTheme.type.caption.copy(fontSize = 11.sp), color = IosTheme.colors.accent, fontWeight = FontWeight.SemiBold)
+                    }
                 }
             }
-            Spacer(Modifier.width(12.dp))
         }
-
-        AsyncImage(
-            model = avatar,
-            contentDescription = username,
-            contentScale = ContentScale.Crop,
-            modifier = Modifier
-                .size(42.dp)
-                .clip(RoundedCornerShape(8.dp))
-                .background(IosTheme.colors.fieldBackground),
-        )
-        Spacer(Modifier.width(12.dp))
-        Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
-            Text(
-                name?.takeIf { it.isNotBlank() } ?: username,
-                style = IosTheme.type.subheadline,
-                color = IosTheme.colors.label,
-                fontWeight = FontWeight.Medium,
-            )
-            Text("@$username", style = IosTheme.type.caption, color = IosTheme.colors.secondaryLabel)
-        }
-        trustLevel?.let {
-            Box(
-                modifier = Modifier
-                    .clip(RoundedCornerShape(4.dp))
-                    .background(IosTheme.colors.accent.copy(alpha = 0.12f))
-                    .padding(horizontal = 6.dp, vertical = 2.dp),
-            ) {
-                Text("Lv.$it", style = IosTheme.type.caption.copy(fontSize = 11.sp), color = IosTheme.colors.accent, fontWeight = FontWeight.SemiBold)
-            }
-        }
-    }
-    IosDivider()
 }
 
 /**

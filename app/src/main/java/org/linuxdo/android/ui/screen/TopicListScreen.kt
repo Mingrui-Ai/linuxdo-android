@@ -114,9 +114,12 @@ import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.input.pointer.PointerEventPass
 import androidx.compose.ui.input.pointer.PointerType
 import androidx.compose.ui.layout.onSizeChanged
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.geometry.CornerRadius
@@ -206,6 +209,10 @@ fun TopicListScreen(
     modifier: Modifier = Modifier,
     onBack: (() -> Unit)? = null,
     showLargeTitle: Boolean = true,
+    unifiedSecondaryHeader: Boolean = false,
+    inlineSearchQuery: String? = null,
+    inlineSearchPlaceholder: String = "搜索标题或内容",
+    onInlineSearchQueryChange: ((String) -> Unit)? = null,
     active: Boolean = true,
     scrollToTopRequest: Int = 0,
     trailing: @Composable () -> Unit = {},
@@ -587,7 +594,19 @@ fun TopicListScreen(
             item(key = "${keyPrefix}_loading") { IosLoadingBox() }
         }
         if (!pageState.initialLoading && pageState.items.isEmpty() && pageState.error == null) {
-            item(key = "${keyPrefix}_empty") { EmptyNotice() }
+            item(key = "${keyPrefix}_empty") {
+                if (!inlineSearchQuery.isNullOrBlank()) {
+                    Box(Modifier.fillMaxWidth().padding(48.dp), contentAlignment = Alignment.Center) {
+                        Text(
+                            text = "没有匹配的收藏",
+                            style = IosTheme.type.footnote,
+                            color = IosTheme.colors.secondaryLabel,
+                        )
+                    }
+                } else {
+                    EmptyNotice()
+                }
+            }
         }
 
         itemsIndexed(
@@ -620,17 +639,43 @@ fun TopicListScreen(
             Column(modifier = Modifier.fillMaxWidth()) {
                 if (item.bookmarkId != null) {
                     var removing by remember(item.bookmarkId) { mutableStateOf(false) }
-                    Row(Modifier.fillMaxWidth().padding(start = 16.dp, end = 8.dp), verticalAlignment = Alignment.CenterVertically) {
-                        Text(item.targetPostNumber?.let { "收藏于第 $it 楼" } ?: "话题书签",
-                            style = IosTheme.type.caption, color = IosTheme.colors.accent)
+                    val isDark = IosTheme.colors.isDark
+                    Row(
+                        Modifier
+                            .fillMaxWidth()
+                            .background(IosTheme.colors.card)
+                            .padding(start = 16.dp, end = 12.dp, top = 10.dp, bottom = 2.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    ) {
+                        Text(
+                            text = item.targetPostNumber?.let { "收藏于第 $it 楼" } ?: "话题收藏",
+                            style = IosTheme.type.caption.copy(fontSize = 11.5.sp, fontWeight = FontWeight.SemiBold),
+                            color = IosTheme.colors.accent,
+                            modifier = Modifier
+                                .clip(RoundedCornerShape(99.dp))
+                                .background(IosTheme.colors.accent.copy(alpha = if (isDark) 0.18f else 0.11f))
+                                .padding(horizontal = 8.dp, vertical = 3.dp),
+                        )
                         Spacer(Modifier.weight(1f))
-                        if (onRemoveBookmark != null) androidx.compose.material3.TextButton(
-                            enabled = !removing,
-                            onClick = {
-                                removing = true
-                                onRemoveBookmark(item) { message -> removing = false; showNotice(message) }
-                            },
-                        ) { Text(if (removing) "处理中…" else "取消收藏", style = IosTheme.type.caption) }
+                        if (onRemoveBookmark != null) {
+                            Text(
+                                text = if (removing) "处理中…" else "取消收藏",
+                                style = IosTheme.type.caption.copy(fontSize = 12.sp, fontWeight = FontWeight.Medium),
+                                color = IosTheme.colors.secondaryLabel,
+                                modifier = Modifier
+                                    .clip(RoundedCornerShape(99.dp))
+                                    .background(
+                                        if (isDark) Color.White.copy(alpha = 0.08f)
+                                        else Color(0xFF767680).copy(alpha = 0.11f),
+                                    )
+                                    .clickable(enabled = !removing) {
+                                        removing = true
+                                        onRemoveBookmark(item) { message -> removing = false; showNotice(message) }
+                                    }
+                                    .padding(horizontal = 9.dp, vertical = 4.dp),
+                            )
+                        }
                     }
                 }
                 TopicRow(
@@ -678,7 +723,11 @@ fun TopicListScreen(
         }
     }
 
-    PullToRefreshBox(
+        val inlineSearchEnabled = unifiedSecondaryHeader && onInlineSearchQueryChange != null
+        var visibleHeaderHeight by remember(useHomeFilterHeader, inlineSearchEnabled, onBack) {
+            mutableStateOf(if (useHomeFilterHeader) 94.dp else if (onBack == null) 54.dp else IosMetrics.navBarHeight)
+        }
+        PullToRefreshBox(
         isRefreshing = effectiveState.refreshing,
         onRefresh = {
             if (!miniAppPullEnabled) {
@@ -704,7 +753,7 @@ fun TopicListScreen(
                 Box(
                     Modifier
                         .align(Alignment.TopCenter)
-                        .padding(top = if (useHomeFilterHeader) 98.dp else IosMetrics.navBarHeight + 10.dp)
+                        .padding(top = visibleHeaderHeight + 10.dp)
                         .graphicsLayer {
                             alpha = if (effectiveState.refreshing) 1f else min(1f, fraction * 1.4f)
                         },
@@ -730,17 +779,25 @@ fun TopicListScreen(
             }
         },
     ) {
-        var visibleHeaderHeight by remember(useHomeFilterHeader, onBack) {
-            mutableStateOf(if (useHomeFilterHeader) 94.dp else if (onBack == null) 54.dp else IosMetrics.navBarHeight)
+        var inlineSearchExpanded by rememberSaveable(title) {
+            mutableStateOf(!inlineSearchQuery.isNullOrBlank())
         }
+        val inlineSearchFocus = remember { FocusRequester() }
+        val inlineFocusManager = LocalFocusManager.current
         IosLargeTitleScaffold(
             title = title,
             listState = listState,
             onBack = onBack,
             compactTop = onBack == null,
             showLargeTitle = showLargeTitle,
+            backLabel = if (unifiedSecondaryHeader) "" else "返回",
+            navBarBackground = if (unifiedSecondaryHeader) IosTheme.colors.groupedBackground else null,
             scrollToTopRequest = scrollToTopRequest,
-            trailingWidth = if (showHeaderActions) 88.dp else 0.dp,
+            trailingWidth = when {
+                showHeaderActions -> 88.dp
+                inlineSearchEnabled -> 48.dp
+                else -> 0.dp
+            },
             onVisibleHeaderHeightChanged = { visibleHeaderHeight = it },
             trailing = {
                 Row(verticalAlignment = Alignment.CenterVertically) {
@@ -756,57 +813,169 @@ fun TopicListScreen(
                     )
                 }
             },
-            stickySubHeader = if (useHomeFilterHeader) {
-                {
-                    HomeTopFilterHeader(
-                        topBarVisible = org.linuxdo.android.ui.design.LocalListBars.current?.value != false,
-                        filter = homeFilter!!,
-                        sortOrder = sortOrder,
-                        sortAscending = sortAscending,
-                        categories = homeCategories,
-                        categoriesLoading = homeCategoriesLoading,
-                        categoryOrder = homeCategoryOrder,
-                        pinnedCategoryIds = homePinnedCategoryIds,
-                        tags = homeTags,
-                        tagsLoading = homeTagsLoading,
-                        searchedTags = homeSearchedTags,
-                        pinnedTags = homePinnedTags,
-                        tagOrder = homeTagOrder,
-                        tagSearchQuery = homeTagSearchQuery,
-                        leading = homeLeading,
-                        onSelectCategory = { cat ->
-                            scope.launch { listState.scrollToItem(0) }
-                            onSelectHomeCategory!!.invoke(cat)
-                        },
-                        onSelectLevel = { lv ->
-                            scope.launch { listState.scrollToItem(0) }
-                            onSelectHomeLevel!!.invoke(lv)
-                        },
-                        onSelectTag = { tg ->
-                            scope.launch { listState.scrollToItem(0) }
-                            onSelectHomeTag!!.invoke(tg)
-                        },
-                        onClearFilters = {
-                            scope.launch { listState.scrollToItem(0) }
-                            onClearHomeFilters!!.invoke()
-                        },
-                        onTogglePinCategory = { id -> onTogglePinCategory?.invoke(id) },
-                        onSaveCategoryOrder = { ids -> onSaveCategoryOrder?.invoke(ids) },
-                        onResetCategoryOrder = { onResetCategoryOrder?.invoke() },
-                        onTogglePinTag = { name -> onTogglePinTag?.invoke(name) },
-                        onSaveTagOrder = { names -> onSaveTagOrder?.invoke(names) },
-                        onResetTagOrder = { onResetTagOrder?.invoke() },
-                        onEnsureCategories = { onEnsureHomeCategories?.invoke() },
-                        onEnsureTags = { onEnsureHomeTags?.invoke() },
-                        onTagSearchQueryChange = { onHomeTagSearchQueryChange?.invoke(it) },
-                        onSortChange = { order ->
-                            scope.launch { listState.scrollToItem(0) }
-                            onSortChange(order)
-                        },
-                        onSearch = onNavigateToSearch,
-                    )
+            stickySubHeader = when {
+                useHomeFilterHeader -> {
+                    {
+                        HomeTopFilterHeader(
+                            topBarVisible = org.linuxdo.android.ui.design.LocalListBars.current?.value != false,
+                            filter = homeFilter!!,
+                            sortOrder = sortOrder,
+                            sortAscending = sortAscending,
+                            categories = homeCategories,
+                            categoriesLoading = homeCategoriesLoading,
+                            categoryOrder = homeCategoryOrder,
+                            pinnedCategoryIds = homePinnedCategoryIds,
+                            tags = homeTags,
+                            tagsLoading = homeTagsLoading,
+                            searchedTags = homeSearchedTags,
+                            pinnedTags = homePinnedTags,
+                            tagOrder = homeTagOrder,
+                            tagSearchQuery = homeTagSearchQuery,
+                            leading = homeLeading,
+                            onSelectCategory = { cat ->
+                                scope.launch { listState.scrollToItem(0) }
+                                onSelectHomeCategory!!.invoke(cat)
+                            },
+                            onSelectLevel = { lv ->
+                                scope.launch { listState.scrollToItem(0) }
+                                onSelectHomeLevel!!.invoke(lv)
+                            },
+                            onSelectTag = { tg ->
+                                scope.launch { listState.scrollToItem(0) }
+                                onSelectHomeTag!!.invoke(tg)
+                            },
+                            onClearFilters = {
+                                scope.launch { listState.scrollToItem(0) }
+                                onClearHomeFilters!!.invoke()
+                            },
+                            onTogglePinCategory = { id -> onTogglePinCategory?.invoke(id) },
+                            onSaveCategoryOrder = { ids -> onSaveCategoryOrder?.invoke(ids) },
+                            onResetCategoryOrder = { onResetCategoryOrder?.invoke() },
+                            onTogglePinTag = { name -> onTogglePinTag?.invoke(name) },
+                            onSaveTagOrder = { names -> onSaveTagOrder?.invoke(names) },
+                            onResetTagOrder = { onResetTagOrder?.invoke() },
+                            onEnsureCategories = { onEnsureHomeCategories?.invoke() },
+                            onEnsureTags = { onEnsureHomeTags?.invoke() },
+                            onTagSearchQueryChange = { onHomeTagSearchQueryChange?.invoke(it) },
+                            onSortChange = { order ->
+                                scope.launch { listState.scrollToItem(0) }
+                                onSortChange(order)
+                            },
+                            onSearch = onNavigateToSearch,
+                        )
+                    }
                 }
-            } else null,
+                inlineSearchEnabled -> {
+                    {
+                        val query = inlineSearchQuery.orEmpty()
+                        org.linuxdo.android.ui.design.ListNavigationHeader {
+                            Column(Modifier.fillMaxWidth().background(IosTheme.colors.groupedBackground)) {
+                                org.linuxdo.android.ui.design.IosNavBar(
+                                    title = title,
+                                    onBack = onBack,
+                                    backLabel = "",
+                                    background = IosTheme.colors.groupedBackground,
+                                    showDivider = false,
+                                    trailingWidth = 48.dp,
+                                    trailing = {
+                                        Box(
+                                            Modifier
+                                                .size(40.dp)
+                                                .clip(CircleShape)
+                                                .clickable {
+                                                    inlineSearchExpanded = !inlineSearchExpanded
+                                                    if (!inlineSearchExpanded) {
+                                                        if (query.isNotEmpty()) onInlineSearchQueryChange!!.invoke("")
+                                                        inlineFocusManager.clearFocus()
+                                                    }
+                                                }
+                                                .semantics {
+                                                    contentDescription = if (inlineSearchExpanded) "关闭搜索" else "搜索$title"
+                                                },
+                                            contentAlignment = Alignment.Center,
+                                        ) {
+                                            Icon(
+                                                imageVector = Icons.Default.Search,
+                                                contentDescription = null,
+                                                tint = if (inlineSearchExpanded) IosTheme.colors.accent else IosTheme.colors.label,
+                                                modifier = Modifier.size(21.dp),
+                                            )
+                                        }
+                                    },
+                                )
+                                if (inlineSearchExpanded) {
+                                    LaunchedEffect(Unit) { inlineSearchFocus.requestFocus() }
+                                    Row(
+                                        Modifier
+                                            .fillMaxWidth()
+                                            .padding(start = 16.dp, end = 16.dp, top = 2.dp, bottom = 10.dp)
+                                            .clip(RoundedCornerShape(16.dp))
+                                            .background(
+                                                if (IosTheme.colors.isDark) Color.White.copy(alpha = 0.08f)
+                                                else Color(0xFF767680).copy(alpha = 0.11f),
+                                            )
+                                            .padding(horizontal = 12.dp, vertical = 8.dp),
+                                        verticalAlignment = Alignment.CenterVertically,
+                                    ) {
+                                        Icon(
+                                            imageVector = Icons.Default.Search,
+                                            contentDescription = null,
+                                            tint = IosTheme.colors.secondaryLabel,
+                                            modifier = Modifier.size(16.dp),
+                                        )
+                                        Spacer(Modifier.width(8.dp))
+                                        BasicTextField(
+                                            value = query,
+                                            onValueChange = { onInlineSearchQueryChange!!.invoke(it) },
+                                            singleLine = true,
+                                            textStyle = IosTheme.type.body.copy(
+                                                color = IosTheme.colors.label,
+                                                fontSize = 14.sp,
+                                            ),
+                                            cursorBrush = SolidColor(IosTheme.colors.accent),
+                                            modifier = Modifier
+                                                .weight(1f)
+                                                .focusRequester(inlineSearchFocus),
+                                            decorationBox = { field ->
+                                                Box {
+                                                    if (query.isEmpty()) {
+                                                        Text(
+                                                            text = inlineSearchPlaceholder,
+                                                            style = IosTheme.type.body.copy(fontSize = 14.sp),
+                                                            color = IosTheme.colors.secondaryLabel,
+                                                        )
+                                                    }
+                                                    field()
+                                                }
+                                            },
+                                        )
+                                        if (query.isNotEmpty()) {
+                                            Box(
+                                                Modifier
+                                                    .size(22.dp)
+                                                    .clip(CircleShape)
+                                                    .background(IosTheme.colors.secondaryLabel.copy(alpha = 0.16f))
+                                                    .clickable { onInlineSearchQueryChange!!.invoke("") }
+                                                    .semantics { contentDescription = "清除搜索内容" },
+                                                contentAlignment = Alignment.Center,
+                                            ) {
+                                                Text(
+                                                    text = "×",
+                                                    fontSize = 12.sp,
+                                                    fontWeight = FontWeight.Bold,
+                                                    color = IosTheme.colors.secondaryLabel,
+                                                )
+                                            }
+                                        }
+                                    }
+                                }
+                                org.linuxdo.android.ui.design.IosFullDivider()
+                            }
+                        }
+                    }
+                }
+                else -> null
+            },
             pageOffsetXProvider = if (!useHomeFilterHeader && effectiveFeed != null) ({ feedOffset }) else null,
             secondaryListState = if (useHomeFilterHeader) null else secondaryListState,
             secondaryPageOffsetXProvider = if (!useHomeFilterHeader && incomingFeed != null) {

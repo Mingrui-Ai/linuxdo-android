@@ -838,6 +838,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     val tagTopics = _tagTopics.asStateFlow()
     private val _userTopicStates = MutableStateFlow<Map<String, TopicListUiState>>(emptyMap())
     val userTopicStates = _userTopicStates.asStateFlow()
+    private val _bookmarkSearchQueries = MutableStateFlow<Map<String, String>>(emptyMap())
+    val bookmarkSearchQueries = _bookmarkSearchQueries.asStateFlow()
     private val _userRepliesStates = MutableStateFlow<Map<String, UserRepliesUiState>>(emptyMap())
     val userRepliesStates = _userRepliesStates.asStateFlow()
     private val _search = MutableStateFlow(SearchUiState())
@@ -5721,15 +5723,109 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 syncStatus = if (draft.conflict) "两端草稿不同" else "待同步")
         }
 
+    private fun resolveKnownTopicAuthor(topicId: Long): Pair<String?, String?>? {
+        if (topicId <= 0L) return null
+        _details.value[topicId]?.let { detail ->
+            val firstPost = detail.posts.firstOrNull { it.postNumber == 1 }
+                ?: detail.topic?.postStream?.posts?.firstOrNull { it.postNumber == 1 }
+            val username = firstPost?.username?.takeIf { it.isNotBlank() }
+            val template = firstPost?.avatarTemplate?.takeIf { it.isNotBlank() }
+            val anim = firstPost?.animatedAvatar?.takeIf { it.isNotBlank() }
+            val avatar = avatarUrlOf(template, anim, size = 96, username = username)
+            if (username != null || avatar != null) return username to avatar
+        }
+        val listSources = sequence {
+            yield(_state.value.latest.items)
+            _feedStates.value.values.forEach { yield(it.items) }
+            _categoryTopics.value.values.forEach { yield(it.items) }
+            _tagTopics.value.values.forEach { yield(it.items) }
+            _userTopicStates.value.values.forEach { yield(it.items) }
+            yield(_search.value.results.items)
+        }
+        for (items in listSources) {
+            val found = items.firstOrNull { it.topic.id == topicId }
+            if (found != null) {
+                val avatar = found.avatarUrl?.takeIf { it.isNotBlank() } ?: found.staticAvatarUrl?.takeIf { it.isNotBlank() }
+                if (found.authorUsername != null || avatar != null) return found.authorUsername to avatar
+            }
+        }
+        val historyEntry = _history.value.entries.firstOrNull { it.topicId == topicId }
+        if (historyEntry != null) {
+            val avatar = historyEntry.avatarTemplate?.let { avatarUrlOf(it, size = 96, username = historyEntry.authorUsername) }
+            if (historyEntry.authorUsername != null || avatar != null) return historyEntry.authorUsername to avatar
+        }
+        return null
+    }
+
+    private fun applyKnownTopicAuthorsToDrafts(items: List<DraftItem>): List<DraftItem> = items.map { draft ->
+        val tid = draft.topicId
+        if (!draft.isNewTopic && tid != null && tid > 0L) {
+            val author = resolveKnownTopicAuthor(tid)
+            if (author != null) {
+                draft.copy(
+                    username = author.first ?: draft.username,
+                    avatarUrl = author.second ?: draft.avatarUrl,
+                )
+            } else draft
+        } else draft
+    }
+
+    private fun enrichReplyDraftAuthors(items: List<DraftItem>, generation: Long) {
+        val currentUsername = _state.value.username
+        val missingTopicIds = items
+            .asSequence()
+            .filter { !it.isNewTopic }
+            .mapNotNull { draft ->
+                val tid = draft.topicId?.takeIf { it > 0L } ?: return@mapNotNull null
+                val known = resolveKnownTopicAuthor(tid)
+                val needsFetch = known?.second.isNullOrBlank() &&
+                    (draft.avatarUrl.isNullOrBlank() || draft.username.equals(currentUsername, ignoreCase = true) || draft.username.isNullOrBlank())
+                if (needsFetch) tid else null
+            }
+            .distinct()
+            .take(15)
+            .toList()
+        if (missingTopicIds.isEmpty()) return
+        pageJobs["draft-authors"]?.cancel()
+        pageJobs["draft-authors"] = viewModelScope.launch {
+            val resolved = mutableMapOf<Long, Pair<String?, String?>>()
+            for (tid in missingTopicIds) {
+                if (generation != accountScopeGeneration) return@launch
+                repository.fetchTopicAuthorBrief(tid)?.let { resolved[tid] = it }
+            }
+            if (generation != accountScopeGeneration || resolved.isEmpty()) return@launch
+            _drafts.update { state ->
+                state.copy(
+                    items = state.items.map { draft ->
+                        val tid = draft.topicId
+                        val author = if (!draft.isNewTopic && tid != null) resolved[tid] else null
+                        if (author != null) {
+                            draft.copy(
+                                username = author.first ?: draft.username,
+                                avatarUrl = author.second ?: draft.avatarUrl,
+                            )
+                        } else draft
+                    },
+                )
+            }
+        }
+    }
+
     fun loadDrafts(refresh: Boolean = false, silent: Boolean = false) {
         if (_state.value.username == null) return
         val generation = accountScopeGeneration
         runCatching { localDraftItems() }.getOrNull()?.let { local ->
-            _drafts.update { it.copy(items = (local + it.items.filterNot { item -> item.localOnly }).distinctBy { item -> item.draftKey }) }
+            _drafts.update {
+                val merged = (local + it.items.filterNot { item -> item.localOnly }).distinctBy { item -> item.draftKey }
+                it.copy(items = applyKnownTopicAuthorsToDrafts(merged))
+            }
         }
         val current = _drafts.value
         if (current.loading || pageJobs["drafts"]?.isActive == true) return
-        if (!refresh && current.loaded) return
+        if (!refresh && current.loaded) {
+            enrichReplyDraftAuthors(current.items, generation)
+            return
+        }
         pageJobs["drafts"] = viewModelScope.launch {
             if (!silent || !current.loaded) {
                 _drafts.update { it.copy(loading = true, error = null) }
@@ -5737,7 +5833,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             try {
                 val remote = repository.fetchDrafts()
                 if (generation != accountScopeGeneration) return@launch
-                val list = (localDraftItems() + remote).distinctBy { it.draftKey }
+                val list = applyKnownTopicAuthorsToDrafts((localDraftItems() + remote).distinctBy { it.draftKey })
                 _drafts.update {
                     it.copy(
                         items = list,
@@ -5746,6 +5842,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                         error = null,
                     )
                 }
+                enrichReplyDraftAuthors(list, generation)
             } catch (error: CancellationException) {
                 throw error
             } catch (error: Exception) {
@@ -7761,20 +7858,52 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
-    fun loadUserTopics(username: String, isBookmark: Boolean, refresh: Boolean = false, more: Boolean = false) {
+    fun updateBookmarkSearchQuery(username: String, query: String) {
+        val key = "bookmark:$username"
+        val prev = _bookmarkSearchQueries.value[username].orEmpty()
+        if (prev == query) return
+        _bookmarkSearchQueries.update { it + (username to query) }
+        pageJobs[key]?.cancel()
+        pageJobs["bookmark-search:$username"]?.cancel()
+        val generation = accountScopeGeneration
+        val trimmed = query.trim()
+        pageJobs["bookmark-search:$username"] = viewModelScope.launch {
+            if (trimmed.isNotEmpty()) delay(280L)
+            if (generation != accountScopeGeneration) return@launch
+            loadUserTopics(username, isBookmark = true, refresh = true, queryOverride = trimmed)
+        }
+    }
+
+    fun loadUserTopics(
+        username: String,
+        isBookmark: Boolean,
+        refresh: Boolean = false,
+        more: Boolean = false,
+        queryOverride: String? = null,
+    ) {
         val key = "${if (isBookmark) "bookmark" else "created"}:$username"
+        val query = if (isBookmark) (queryOverride ?: _bookmarkSearchQueries.value[username].orEmpty().trim()) else ""
         val current = _userTopicStates.value[key]
-        if (pageJobs[key]?.isActive == true) return
+        if (pageJobs[key]?.isActive == true) {
+            if (!refresh) return
+            pageJobs[key]?.cancel()
+        }
         if (!refresh && !more && current != null && !current.needsRefresh) return
         val previous = current ?: TopicListUiState()
         if (more && !previous.hasMore) return
         val page = if (more) previous.page + 1 else 0
+        val generation = accountScopeGeneration
         pageJobs[key] = viewModelScope.launch {
             _userTopicStates.update { it + (key to previous.copy(
-                refreshing = refresh, loadingMore = more, initialLoading = previous.items.isEmpty(), error = null,
+                refreshing = refresh && previous.items.isNotEmpty(),
+                loadingMore = more,
+                initialLoading = previous.items.isEmpty() || (refresh && queryOverride != null),
+                error = null,
             )) }
             try {
-                val result = if (isBookmark) repository.fetchUserBookmarks(username, page) else repository.fetchUserCreatedTopics(username, page)
+                val result = if (isBookmark) repository.fetchUserBookmarks(username, page, query) else repository.fetchUserCreatedTopics(username, page)
+                if (generation != accountScopeGeneration) return@launch
+                if (isBookmark && query != _bookmarkSearchQueries.value[username].orEmpty().trim()) return@launch
                 val items = if (more) (previous.items + result.items).distinctBy { it.listKey } else result.items
                 val hasMore = result.hasMore && result.items.isNotEmpty() && (!more || page > previous.page)
                 _userTopicStates.update { it + (key to TopicListUiState(items, page,
@@ -7782,12 +7911,15 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             } catch (error: CancellationException) {
                 throw error
             } catch (error: Exception) {
+                if (generation != accountScopeGeneration) return@launch
                 _userTopicStates.update { it + (key to previous.copy(initialLoading = false, error = error.message ?: "加载失败")) }
-                handlePageFailure(error) { loadUserTopics(username, isBookmark, refresh = !more, more = more) }
+                handlePageFailure(error) { loadUserTopics(username, isBookmark, refresh = !more, more = more, queryOverride = queryOverride) }
             } finally {
-                _userTopicStates.update { states -> states[key]?.let {
-                    states + (key to it.copy(initialLoading = false, refreshing = false, loadingMore = false))
-                } ?: states }
+                if (generation == accountScopeGeneration) {
+                    _userTopicStates.update { states -> states[key]?.let {
+                        states + (key to it.copy(initialLoading = false, refreshing = false, loadingMore = false))
+                    } ?: states }
+                }
             }
         }
     }
@@ -9483,6 +9615,7 @@ fun openTopicSearch(topicId: Long, title: String) {
         _categories.value = CategoriesUiState(order = store.loadCategoryOrder(), pinnedIds = store.loadPinnedCategoryIds())
         _categoryTopics.value = emptyMap()
         _userTopicStates.value = emptyMap()
+        _bookmarkSearchQueries.value = emptyMap()
         _userRepliesStates.value = emptyMap()
         _search.value = SearchUiState()
         _profile.value = emptyMap()
