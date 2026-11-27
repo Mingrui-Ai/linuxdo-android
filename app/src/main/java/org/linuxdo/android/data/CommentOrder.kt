@@ -7,6 +7,9 @@ enum class CommentOrder(val title: String) {
     TimeAscending("时间正序"),
     TimeDescending("时间倒序"),
     Likes("点赞数"),
+    Replies("回复数");
+
+    val requiresAllPosts: Boolean get() = this == Likes || this == Replies
 }
 
 /** 只计点赞，不把其他表情回应或 Boost 混入点赞数。 */
@@ -21,8 +24,16 @@ fun likedPostRows(posts: List<Post>): List<TreePost> = flatPostRows(posts).sorte
         .thenBy { it.post.id },
 )
 
+/** 按每层收到的直接回复数排序，主帖固定在前，同数按楼层先后。 */
+fun mostRepliedPostRows(posts: List<Post>): List<TreePost> = flatPostRows(posts).sortedWith(
+    compareBy<TreePost> { it.post.postNumber != 1 }
+        .thenByDescending { it.post.replyCount.coerceAtLeast(0) }
+        .thenBy { it.post.postNumber }
+        .thenBy { it.post.id },
+)
+
 /**
- * 点赞数不在 stream ID 列表中。完整补齐快照后才切换排序，避免把分页窗口冒充全帖排名。
+ * 点赞数和回复数不在 stream ID 列表中。完整补齐快照后才切换排序，避免把分页窗口冒充全帖排名。
  * 沿用每批 20 楼与串行请求；异常/取消直接交给调用方，成功但未返回的 ID 视为不可访问。
  */
 internal suspend fun collectCommentPosts(

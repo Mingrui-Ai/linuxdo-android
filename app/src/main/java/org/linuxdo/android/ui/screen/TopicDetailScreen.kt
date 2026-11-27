@@ -242,6 +242,8 @@ import org.linuxdo.android.data.sortedReactions
 import org.linuxdo.android.data.CommentOrder
 import org.linuxdo.android.data.TopicSortOrder
 import org.linuxdo.android.data.likedPostRows
+import org.linuxdo.android.data.mostRepliedPostRows
+import org.linuxdo.android.data.DiscourseUser
 import org.linuxdo.android.data.Category
 import org.linuxdo.android.data.Boost
 import org.linuxdo.android.data.PostFlagReason
@@ -513,7 +515,7 @@ fun TopicDetailScreen(
     onOpenTag: (String) -> Unit = {},
     showTopicScrollbar: Boolean = true,
 ) {
-    val useThreadView = treeView && !state.sortByLikes
+    val useThreadView = treeView && !state.commentOrder.requiresAllPosts
     val list = rememberLazyListState()
     val pullState = rememberPullToRefreshState()
     val scope = rememberCoroutineScope()
@@ -583,7 +585,9 @@ fun TopicDetailScreen(
         } ?: state.posts
     }
     val rows = remember(displayedPosts, useThreadView, collapsed, expanded, state.commentOrder) {
-        if (state.sortByLikes) {
+        if (state.sortByReplies) {
+            mostRepliedPostRows(displayedPosts)
+        } else if (state.sortByLikes) {
             likedPostRows(displayedPosts)
         } else if (useThreadView) {
             threadRows(displayedPosts, collapsed.toSet(), expanded.toSet(), descending = state.descending)
@@ -818,7 +822,7 @@ fun TopicDetailScreen(
         list.scrollToItem(lazyIndexOf(rowIndex), centerOffset)
     }
 
-    val latestEdgeVisible = if (state.sortByLikes) false else if (state.descending) list.firstVisibleItemIndex <= lazyIndexOf(headRows.size)
+    val latestEdgeVisible = if (state.commentOrder.requiresAllPosts) false else if (state.descending) list.firstVisibleItemIndex <= lazyIndexOf(headRows.size)
         else !list.canScrollForward
     LaunchedEffect(active, latestEdgeVisible, list.isScrollInProgress, state.filterUserId) {
         onLiveViewport(active && latestEdgeVisible && state.filterUserId == null, list.isScrollInProgress)
@@ -1495,7 +1499,10 @@ fun TopicDetailScreen(
                                     total = replyTotal,
                                     order = state.commentOrder,
                                     busy = (state.loading || state.refreshing) && state.pendingCommentOrder == null,
-                                    progress = if (state.pendingCommentOrder == CommentOrder.Likes) "正在准备点赞排序 ${state.sortLoaded}/${state.sortTotal}" else null,
+                                    progress = state.pendingCommentOrder?.takeIf { it.requiresAllPosts }?.let {
+                                        "正在准备${it.title}排序 ${state.sortLoaded}/${state.sortTotal}"
+                                    },
+                                    replyingUsers = if (active && signedIn) state.replyingUsers else emptyList(),
                                     onSelect = onSelectOrder,
                                     authorFilterItems = authorFilterItems,
                                     filterUserId = state.filterUserId,
@@ -1873,6 +1880,7 @@ private fun CommentOrderBar(
     onAuthorMenuDismiss: () -> Unit = {},
     onSelectFilterUser: (Long?) -> Unit = {},
     isPinned: Boolean = false,
+    replyingUsers: List<DiscourseUser> = emptyList(),
 ) {
     val isDark = IosTheme.colors.isDark
     val accent = IosTheme.colors.accent
@@ -1880,6 +1888,7 @@ private fun CommentOrderBar(
         CommentOrder.TimeAscending -> TopicSortOrder.Default
         CommentOrder.TimeDescending -> TopicSortOrder.Created
         CommentOrder.Likes -> TopicSortOrder.Likes
+        CommentOrder.Replies -> TopicSortOrder.Default
     }
 
     Column(
@@ -1888,12 +1897,12 @@ private fun CommentOrderBar(
             .then(
                 if (isPinned) Modifier.shadow(elevation = 2.dp, clip = false) else Modifier
             )
-            .background(IosTheme.colors.card)
+            .background(IosTheme.colors.groupedBackground)
     ) {
         Row(
             Modifier
                 .fillMaxWidth()
-                .padding(horizontal = 16.dp, vertical = 7.dp),
+                .padding(start = 16.dp, end = 8.dp, top = 4.dp, bottom = 4.dp),
             horizontalArrangement = Arrangement.SpaceBetween,
             verticalAlignment = Alignment.CenterVertically,
         ) {
@@ -1903,11 +1912,13 @@ private fun CommentOrderBar(
             ) {
                 // 1. 全部回复标签
                 Text(
-                    text = if (total > 0) "全部回复 $total" else "全部回复",
-                    style = IosTheme.type.subheadline,
+                    text = if (total > 0) "回复 $total" else "回复",
+                    style = IosTheme.type.footnote,
                     fontWeight = FontWeight.SemiBold,
                     color = IosTheme.colors.label,
                     maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.widthIn(max = 100.dp),
                 )
 
                 // 2. 筛选发言者胶囊 + 锚定下拉栏
@@ -1928,7 +1939,7 @@ private fun CommentOrderBar(
                     Box {
                         Row(
                             modifier = Modifier
-                                .widthIn(max = 152.dp)
+                                .widthIn(max = if (replyingUsers.isEmpty()) 152.dp else 92.dp)
                                 .height(30.dp)
                                 .clip(filterShape)
                                 .background(pillBg)
@@ -2115,33 +2126,28 @@ private fun CommentOrderBar(
                         }
                     }
                 }
+                if (replyingUsers.isNotEmpty()) {
+                    Spacer(Modifier.width(6.dp))
+                    TopicReplyPresenceIndicator(replyingUsers, Modifier.weight(1f))
+                }
             }
 
-            // 3. 右侧复用主页动态排序按钮 + 锚定下拉栏
+            // 3. 右侧使用与顶栏铃铛相同的 40dp 按钮和 8dp 右边距。
             Row(
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(6.dp),
             ) {
                 var menuExpanded by remember { mutableStateOf(false) }
-                if (order != CommentOrder.TimeAscending) {
-                    Text(
-                        text = order.title,
-                        style = IosTheme.type.caption.copy(fontSize = 11.sp, fontWeight = FontWeight.SemiBold),
-                        color = accent,
-                        maxLines = 1,
-                        modifier = Modifier
-                            .clip(RoundedCornerShape(99.dp))
-                            .background(accent.copy(alpha = 0.12f))
-                            .clickable(enabled = !busy) { menuExpanded = true }
-                            .padding(horizontal = 7.dp, vertical = 2.dp),
-                    )
-                }
                 Box {
-                    TopicSortDynamicButton(
-                        sortOrder = mappedSortOrder,
-                        ascending = false,
-                        onClick = { if (!busy) menuExpanded = true },
-                    )
+                    val tint = if (order == CommentOrder.TimeAscending) IosTheme.colors.label else accent
+                    Box(Modifier.size(40.dp).clip(CircleShape)
+                        .background(if (order == CommentOrder.TimeAscending) Color.Transparent else accent.copy(alpha = 0.12f))
+                        .clickable(enabled = !busy) { menuExpanded = true }
+                        .semantics { contentDescription = "回复排序：${order.title}" },
+                        contentAlignment = Alignment.Center) {
+                        if (order == CommentOrder.Replies) PostActionIcon(PostAction.Reply, selected = false, tint = tint, modifier = Modifier.size(19.dp))
+                        else TopicSortDynamicGlyph(order = mappedSortOrder, tint = tint, modifier = Modifier.size(19.dp))
+                    }
                     DropdownMenu(
                         expanded = menuExpanded,
                         onDismissRequest = { menuExpanded = false },
@@ -2156,11 +2162,13 @@ private fun CommentOrderBar(
                                 CommentOrder.TimeAscending -> TopicSortOrder.Default
                                 CommentOrder.TimeDescending -> TopicSortOrder.Created
                                 CommentOrder.Likes -> TopicSortOrder.Likes
+                                CommentOrder.Replies -> TopicSortOrder.Default
                             }
                             val optionDesc = when (option) {
                                 CommentOrder.TimeAscending -> "按楼层先后浏览"
                                 CommentOrder.TimeDescending -> "最新回复优先"
                                 CommentOrder.Likes -> "全帖按获赞从高到低"
+                                CommentOrder.Replies -> "每层回复数从多到少"
                             }
                             val tint = if (selected) accent else IosTheme.colors.label
                             val iconBg = if (selected) accent.copy(alpha = 0.12f)
@@ -2188,7 +2196,10 @@ private fun CommentOrderBar(
                                         .background(iconBg),
                                     contentAlignment = Alignment.Center,
                                 ) {
-                                    TopicSortDynamicGlyph(
+                                    if (option == CommentOrder.Replies) PostActionIcon(
+                                        action = PostAction.Reply, selected = false,
+                                        tint = tint, modifier = Modifier.size(16.dp),
+                                    ) else TopicSortDynamicGlyph(
                                         order = optionGlyph,
                                         tint = if (selected) accent else IosTheme.colors.secondaryLabel,
                                         modifier = Modifier.size(16.dp),

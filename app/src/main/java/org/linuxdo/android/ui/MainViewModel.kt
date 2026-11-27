@@ -46,6 +46,8 @@ import kotlinx.serialization.json.longOrNull
 import kotlinx.serialization.json.intOrNull
 import kotlinx.serialization.json.booleanOrNull
 import org.linuxdo.android.data.TopicBusMessage
+import org.linuxdo.android.data.TopicReplyPresence
+import org.linuxdo.android.data.DiscourseUser
 import org.linuxdo.android.data.mergeTopicCounters
 import java.util.UUID
 import kotlinx.serialization.json.Json
@@ -96,6 +98,7 @@ import org.linuxdo.android.data.TopicListSort
 import org.linuxdo.android.data.TopicListKey
 import org.linuxdo.android.data.TopicSearchScope
 import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.withTimeoutOrNull
 import org.linuxdo.android.data.TopicSortOrder
 import org.linuxdo.android.data.FloatingAction
 import org.linuxdo.android.data.flattenCategories
@@ -266,8 +269,11 @@ data class DetailUiState(
     val confirmedReadPostNumbers: Set<Int> = emptySet(),
     val failedPostNumber: Int? = null,
     val retryAtElapsedMs: Long = 0L,
+    val sortByReplies: Boolean = false,
+    val replyingUsers: List<DiscourseUser> = emptyList(),
 ) {
     val commentOrder: CommentOrder get() = when {
+        sortByReplies -> CommentOrder.Replies
         sortByLikes -> CommentOrder.Likes
         descending -> CommentOrder.TimeDescending
         else -> CommentOrder.TimeAscending
@@ -280,15 +286,16 @@ data class DetailUiState(
     val remaining: List<Long> get() {
         val stream = topic?.postStream?.stream.orEmpty()
         // 倒序下"加载更多"是往更早的楼层回溯,不受向下窗口起点的约束。
-        return if (descending || sortByLikes) stream.filterNot { it in consumedIds }
+        return if (descending || commentOrder.requiresAllPosts) stream.filterNot { it in consumedIds }
         else stream.drop(windowStart).filterNot { it in consumedIds }
     }
     /** 倒序时不提供"加载之前的楼层"缺口 —— 那和倒序的回溯加载是同一个方向,会互相抢楼。 */
-    val previousIds: List<Long> get() = if (descending || sortByLikes) emptyList()
+    val previousIds: List<Long> get() = if (descending || commentOrder.requiresAllPosts) emptyList()
         else topic?.postStream?.stream.orEmpty().take(windowStart).filterNot { it in consumedIds }
 }
 
 private class TopicLiveSession {
+    val replyPresence = TopicReplyPresence()
     val clientId = UUID.randomUUID().toString().replace("-", "")
     val updates = Channel<Unit>(Channel.CONFLATED)
     val messages = ArrayDeque<TopicBusMessage>()
@@ -343,7 +350,7 @@ internal fun mergeConfirmedDetailRead(current: DetailUiState, postNumbers: Set<I
 }
 
 internal fun canAppendRealtimePosts(detail: DetailUiState, pending: Set<Long>, atLatestEnd: Boolean, scrolling: Boolean): Boolean {
-    if (!atLatestEnd || scrolling || detail.filterUserId != null || detail.sortByLikes) return false
+    if (!atLatestEnd || scrolling || detail.filterUserId != null || detail.commentOrder.requiresAllPosts) return false
     val stream = detail.topic?.postStream?.stream.orEmpty().filterNot { it in pending }
     return if (detail.descending) stream.lastOrNull() in detail.consumedIds
     else detail.remaining.none { it !in pending }
@@ -1661,6 +1668,10 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 topicLiveJob?.cancel()
                 topicLiveId = null
             }
+            topicLiveSessions[topicId]?.replyPresence?.reset()
+            _details.update { states -> states[topicId]?.let {
+                states + (topicId to it.copy(replyingUsers = emptyList()))
+            } ?: states }
             readReportJobs.remove(topicId)?.cancel()
             readTrackers.remove(topicId)?.setActive(false, SystemClock.elapsedRealtime())
         }
@@ -1688,9 +1699,14 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         previous?.cancel()
         topicLiveId = topicId
         val live = topicLiveSessions.getOrPut(topicId) { TopicLiveSession() }
+        live.replyPresence.reset()
+        _details.update { states -> states[topicId]?.let {
+            states + (topicId to it.copy(replyingUsers = emptyList()))
+        } ?: states }
         if (SystemClock.elapsedRealtime() >= live.nextCalibrationAt) live.needsCalibration = true
         val accountGeneration = accountScopeGeneration
         val sessionGeneration = store.sessionGeneration
+        val presenceJson = Json { ignoreUnknownKeys = true }
         fun stillActive() = topicLiveId == topicId && isTopicActive(topicId) &&
             accountGeneration == accountScopeGeneration && sessionGeneration == store.sessionGeneration
         topicLiveJob = viewModelScope.launch {
@@ -1700,6 +1716,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             coroutineScope {
                 launch {
                     var failures = 0
+                    var nextPresenceSnapshotAt = 0L
+                    var presenceUnavailable = false
                     while (isActive && stillActive()) {
                         if (!live.initialized) {
                             val snapshot = _details.value[topicId]?.topic
@@ -1715,6 +1733,10 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                             }
                         }
                         if (repository.isSilentPrefetchBackingOff()) {
+                            live.replyPresence.reset()
+                            _details.update { states -> states[topicId]?.let {
+                                states + (topicId to it.copy(replyingUsers = emptyList()))
+                            } ?: states }
                             delay(60_000L)
                             continue
                         }
@@ -1722,11 +1744,32 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                         if (!stillActive()) break
                         if (!ApiQuotaPool.TOPIC_EVENTS.tryAcquire()) continue
                         try {
-                            val messages = repository.pollTopicMessages(topicId, live.clientId, live.cursor, ++live.sequence)
+                            if (store.currentUserId() > 0 && !presenceUnavailable && live.replyPresence.snapshot == null &&
+                                SystemClock.elapsedRealtime() >= nextPresenceSnapshotAt) {
+                                nextPresenceSnapshotAt = SystemClock.elapsedRealtime() + 60_000L
+                                try {
+                                    val snapshot = withTimeoutOrNull(5_000L) { repository.fetchTopicReplyPresence(topicId) }
+                                    if (!stillActive()) break
+                                    if (snapshot != null) live.replyPresence.replace(snapshot)
+                                    else presenceUnavailable = true
+                                } catch (error: CancellationException) { throw error }
+                                catch (error: Exception) {
+                                    if (!stillActive()) break
+                                    // Presence 不可用时继续接收帖子事件，不让提示影响阅读。
+                                    if (error is HttpStatusException && error.status in setOf(401, 403, 404)) presenceUnavailable = true
+                                    live.replyPresence.reset()
+                                }
+                                _details.update { states -> states[topicId]?.let {
+                                    states + (topicId to it.copy(replyingUsers = live.replyPresence.others(store.currentUserId())))
+                                } ?: states }
+                            }
+                            val messages = repository.pollTopicMessages(topicId, live.clientId, live.cursor, ++live.sequence,
+                                replyPresenceCursor = live.replyPresence.snapshot?.lastMessageId)
                             if (!stillActive()) break
                             failures = 0
                             ApiQuotaPool.TOPIC_EVENTS.onSuccess()
                             for (message in messages) {
+                                live.replyPresence.apply(topicId, message, presenceJson)
                                 if (message.channel == "/__status") {
                                     val cursor = ((message.data as? JsonObject)?.get("/topic/$topicId") as? JsonPrimitive)?.longOrNull
                                     if (cursor != null) {
@@ -1741,12 +1784,19 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                                 }
                             }
                             if (!live.initialized) live.needsCalibration = true
+                            _details.update { states -> states[topicId]?.let {
+                                states + (topicId to it.copy(replyingUsers = live.replyPresence.others(store.currentUserId())))
+                            } ?: states }
                             live.initialized = true
                             live.updates.trySend(Unit)
                         } catch (error: CancellationException) {
                             throw error
                         } catch (error: Exception) {
                             if (!stillActive()) break
+                            live.replyPresence.reset()
+                            _details.update { states -> states[topicId]?.let {
+                                states + (topicId to it.copy(replyingUsers = emptyList()))
+                            } ?: states }
                             failures++
                             repository.enterSilentPrefetchBackoff(error)
                             // 认证/权限错误不持续重试；重新进入页面后才建立新订阅。
@@ -4337,6 +4387,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             flagDialogPost = null,
             flagError = null,
             notificationLevelUpdating = false,
+            replyingUsers = emptyList(),
         ), refreshTtl = refreshTtl)
         if (evicted.isNotEmpty()) {
             _details.update { states -> states.filterKeys { it !in evicted } }
@@ -4421,7 +4472,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                         consumed = consumed + fetchedTail.map { it.id }
                     }
                 }
-                if (latest.sortByLikes) {
+                if (latest.commentOrder.requiresAllPosts) {
                     mergedPosts = collectCommentPosts(freshTopic.postStream.stream,
                         if (silent) mergedPosts else freshTopic.postStream.posts,
                         if (silent) consumed else freshTopic.postStream.posts.map { it.id }.toSet(),
@@ -4492,7 +4543,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         } else {
             _details.value[id] ?: DetailUiState()
         }
-        val current = restoredPosition?.let { base.copy(filterUserId = it.filterUserId, descending = it.descending, sortByLikes = it.sortByLikes) } ?: base
+        val current = restoredPosition?.let { base.copy(filterUserId = it.filterUserId, descending = it.descending,
+            sortByLikes = it.sortByLikes, sortByReplies = it.sortByReplies) } ?: base
         if (restoredPosition != null) _details.update { it + (id to current) }
         val targetPostNumber = effectivePostNumber ?: resumePostNumber
         val requestPostNumber = effectivePostNumber ?: resumePostNumber?.takeIf { it > 20 }
@@ -4522,7 +4574,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
         // 仅在非通知来源、没有已知新回复、且目标楼层已就位时，才直接复用缓存 return
         if (!isNotificationJump && !more && !previous && current.topic != null && !retry && targetLoaded && !hasKnownNewPosts &&
-            (!current.sortByLikes || current.remaining.isEmpty())) {
+            (!current.commentOrder.requiresAllPosts || current.remaining.isEmpty())) {
             if (effectivePostNumber != null) {
                 _details.update { states ->
                     states[id]?.let { states + (id to it.copy(locateVersion = it.locateVersion + 1,
@@ -4563,7 +4615,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                         current.descending -> current.remaining.takeLast(20)
                         else -> current.remaining.take(20)
                     }
-                    val posts = if (current.sortByLikes) {
+                    val posts = if (current.commentOrder.requiresAllPosts) {
                         collectCommentPosts(current.topic?.postStream?.stream.orEmpty(), current.posts, current.consumedIds,
                             fetch = { repository.fetchPosts(id, it) })
                     } else repository.fetchPosts(id, requested,
@@ -4575,7 +4627,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                             posts = (latest.posts + posts).distinctBy { post -> post.id }.sortedBy { post -> post.postNumber },
                             // 成功请求但没有返回的 ID 已删除或不可见，两个方向都标记为已处理，避免原地重试。
                             consumedIds = latest.consumedIds + posts.map { post -> post.id } +
-                                (if (current.sortByLikes) current.topic?.postStream?.stream.orEmpty() else requested),
+                                (if (current.commentOrder.requiresAllPosts) current.topic?.postStream?.stream.orEmpty() else requested),
                             windowStartId = if (previous) requested.first() else current.windowStartId,
                             error = null, failedLoad = DetailLoad.Topic,
                         ))
@@ -4601,7 +4653,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                     val rootPost = current.posts.filter { it.postNumber == 1 }
                     var posts = if (requestPostNumber != null) (rootPost + topic.postStream.posts).distinctBy { it.id }.sortedBy { it.postNumber }
                         else topic.postStream.posts.distinctBy { it.id }
-                    if (current.sortByLikes) {
+                    if (current.commentOrder.requiresAllPosts) {
                         posts = collectCommentPosts(topic.postStream.stream, posts, posts.map { it.id }.toSet(),
                             fetch = { repository.fetchPosts(id, it) })
                     }
@@ -4622,7 +4674,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                     }
                     val newLocateVersion = if (effectiveTargetPostNumber != null) (current.locateVersion + 1) else current.locateVersion
                     _details.update {
-                        it + (id to DetailUiState(topic, posts, if (current.sortByLikes) topic.postStream.stream.toSet() else posts.map { post -> post.id }.toSet(), category,
+                        it + (id to DetailUiState(topic, posts, if (current.commentOrder.requiresAllPosts) topic.postStream.stream.toSet() else posts.map { post -> post.id }.toSet(), category,
                             error = if (requestPostNumber != null && resolvedTarget == null) "当前没有可访问的楼层，请稍后重试" else null,
                             emojiUrls = emojis, windowStartId = topic.postStream.posts.minByOrNull { it.postNumber }?.id,
                             locateVersion = newLocateVersion,
@@ -4630,7 +4682,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                             confirmedReadPostNumbers = container.reading.confirmedPostNumbers(id),
                             filterUserId = restoredPosition?.filterUserId,
                             descending = current.descending,
-                            sortByLikes = current.sortByLikes))
+                            sortByLikes = current.sortByLikes, sortByReplies = current.sortByReplies,
+                            replyingUsers = it[id]?.replyingUsers.orEmpty()))
                     }
                     if (requestPostNumber != null && resolvedTarget != null && resolvedTarget.postNumber != requestPostNumber) {
                         setNoticeMessage(id, "第 $requestPostNumber 楼不可用，已定位到第 ${resolvedTarget.postNumber} 楼")
@@ -4711,7 +4764,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         pageJobs["topic:$id"]?.start()
     }
 
-    /** 时间排序保持分页窗口；点赞排序补齐全部可见回复后原子切换。 */
+    /** 时间排序保持分页窗口；按数量排序补齐全部可见回复后原子切换。 */
     fun setCommentOrder(topicId: Long, target: CommentOrder) {
         var current = _details.value[topicId] ?: return
         if (current.pendingCommentOrder != null) {
@@ -4728,10 +4781,10 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         val stream = current.topic?.postStream?.stream.orEmpty()
         val tail = stream.takeLast(TAIL_WINDOW)
         val tailMissing = tail.filterNot { it in current.consumedIds }
-        if (target != CommentOrder.Likes && (target == CommentOrder.TimeAscending || tailMissing.isEmpty())) {
+        if (!target.requiresAllPosts && (target == CommentOrder.TimeAscending || tailMissing.isEmpty())) {
             _details.update { states ->
                 states[topicId]?.let { states + (topicId to it.copy(
-                    descending = target == CommentOrder.TimeDescending, sortByLikes = false,
+                    descending = target == CommentOrder.TimeDescending, sortByLikes = false, sortByReplies = false,
                     pendingCommentOrder = null, failedCommentOrder = null, error = null, failedLoad = DetailLoad.Topic,
                 )) } ?: states
             }
@@ -4744,7 +4797,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             _details.update { it + (topicId to current.copy(loading = true, error = null,
                 pendingCommentOrder = target, failedCommentOrder = null, sortLoaded = 0, sortTotal = stream.size)) }
             try {
-                val fetched = if (target == CommentOrder.Likes) {
+                val fetched = if (target.requiresAllPosts) {
                     collectCommentPosts(stream, current.posts, current.consumedIds,
                         fetch = { repository.fetchPosts(topicId, it) },
                         onProgress = { done, total ->
@@ -4756,7 +4809,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 if (generation != accountScopeGeneration || pageJobs["topic:$topicId"] !== coroutineContext[Job]) return@launch
                 _details.update { states ->
                     val latest = states[topicId] ?: return@update states
-                    val merged = if (target == CommentOrder.Likes) {
+                    val merged = if (target.requiresAllPosts) {
                         val livePosts = latest.posts.associateBy { it.id }
                         fetched.map { livePosts[it.id] ?: it }
                     } else (latest.posts.filter { it.postNumber == 1 || it.id in tail } + fetched)
@@ -4764,11 +4817,12 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                     val anchor = merged.firstOrNull { it.postNumber > 1 } ?: merged.firstOrNull()
                     states + (topicId to latest.copy(
                         posts = merged,
-                        consumedIds = if (target == CommentOrder.Likes) stream.toSet() else merged.map { it.id }.toSet() + tail,
-                        windowStartId = if (target == CommentOrder.Likes) stream.firstOrNull() else anchor?.id,
+                        consumedIds = if (target.requiresAllPosts) stream.toSet() else merged.map { it.id }.toSet() + tail,
+                        windowStartId = if (target.requiresAllPosts) stream.firstOrNull() else anchor?.id,
                         replyCursors = emptyMap(), completedReplies = emptySet(),
                         descending = target == CommentOrder.TimeDescending,
                         sortByLikes = target == CommentOrder.Likes,
+                        sortByReplies = target == CommentOrder.Replies,
                         pendingCommentOrder = null, failedCommentOrder = null,
                         error = null, failedLoad = DetailLoad.Topic,
                     ))
@@ -6990,6 +7044,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             filterUserId = ready.filterUserId,
             descending = ready.descending,
             sortByLikes = ready.sortByLikes,
+            sortByReplies = ready.sortByReplies,
         ))
     }
 

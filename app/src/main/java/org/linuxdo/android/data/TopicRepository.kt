@@ -1784,8 +1784,19 @@ class TopicRepository(
     }
 
     /** MessageBus 的 Dont-Chunk 长轮询；不占用整个后台 GET 闸门等待服务端消息。 */
-    suspend fun pollTopicMessages(topicId: Long, clientId: String, cursor: Long, sequence: Long): List<TopicBusMessage> =
-        topicPollGate.withLock { pollMessageBus(clientId, mapOf("/topic/$topicId" to cursor), sequence, "/t/$topicId") }
+    suspend fun pollTopicMessages(topicId: Long, clientId: String, cursor: Long, sequence: Long,
+        replyPresenceCursor: Long? = null): List<TopicBusMessage> = topicPollGate.withLock {
+        val channels = mutableMapOf("/topic/$topicId" to cursor)
+        replyPresenceCursor?.let { channels[topicReplyPresenceBusChannel(topicId)] = it }
+        pollMessageBus(clientId, channels, sequence, "/t/$topicId")
+    }
+
+    internal suspend fun fetchTopicReplyPresence(topicId: Long): TopicReplyPresenceSnapshot? {
+        val name = topicReplyPresenceName(topicId)
+        val response = objectRequest("/presence/get.json?channels%5B%5D=${encode(name)}", present = false, retryAllowed = false)
+        val state = response[name] as? JsonObject ?: return null
+        return json.decodeFromJsonElement<TopicReplyPresenceSnapshot>(state)
+    }
 
     // 聊天和话题各自保持一个长连接，不能让聊天等待话题的 70 秒长轮询释放锁。
     private val chatPollGate = Mutex()
