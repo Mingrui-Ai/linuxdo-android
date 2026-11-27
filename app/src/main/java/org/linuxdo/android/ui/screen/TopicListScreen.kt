@@ -106,6 +106,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.zIndex
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.draw.drawWithContent
@@ -3726,6 +3727,8 @@ fun IncomingTopicsBanner(
                     avatars.forEachIndexed { idx, (username, primaryUrl, fallbackUrl) ->
                         Box(
                             modifier = Modifier
+                                // 左侧头像叠在右侧头像上方，包含外圈分隔背景。
+                                .zIndex((avatars.size - idx).toFloat())
                                 .offset(x = avatarStep * idx)
                                 .size(avatarSize)
                                 .clip(CircleShape)
