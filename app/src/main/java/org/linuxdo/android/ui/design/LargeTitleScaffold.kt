@@ -88,6 +88,8 @@ fun IosLargeTitleScaffold(
     trailingWidth: Dp = 0.dp,
     fixedHeader: (@Composable () -> Unit)? = null,
     stickySubHeader: (@Composable () -> Unit)? = null,
+    // 可收起头部的完整内容高度；动画可见高度只用于浮层定位，不能回写列表留白。
+    stickySubHeaderExpandedHeight: Dp? = null,
     stickySubHeaderAlwaysVisible: Boolean = false,
     onVisibleHeaderHeightChanged: ((Dp) -> Unit)? = null,
     customLargeTitle: (@Composable () -> Unit)? = null,
@@ -121,7 +123,7 @@ fun IosLargeTitleScaffold(
     }
 
     val topPadding = when {
-        stickySubHeader != null -> customHeaderHeight
+        stickySubHeader != null -> stickySubHeaderExpandedHeight ?: customHeaderHeight
         showLargeTitle && compactTop -> 0.dp
         else -> navBarHeight
     }
@@ -195,7 +197,7 @@ fun IosLargeTitleScaffold(
                     .onSizeChanged { measured ->
                         val h = with(density) { measured.height.toDp() }
                         onVisibleHeaderHeightChanged?.invoke(h)
-                        if (h > 0.dp && (barsVisible || customHeaderHeight == 0.dp)) {
+                        if (stickySubHeaderExpandedHeight == null && h > 0.dp && (barsVisible || customHeaderHeight == 0.dp)) {
                             customHeaderHeight = h
                         }
                     },

@@ -58,6 +58,8 @@ import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.drawscope.scale
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.platform.LocalHapticFeedback
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
@@ -95,6 +97,7 @@ internal fun HomeTopFilterHeader(
     trustLevel: Int?,
     visibleCategoryIds: Set<Int>,
     onOpenLevelAndCredits: (() -> Unit)?,
+    onExpandedHeightChanged: (Dp) -> Unit,
     sortOrder: TopicSortOrder,
     sortAscending: Boolean,
     categories: List<Category>,
@@ -132,6 +135,8 @@ internal fun HomeTopFilterHeader(
 
     // 激活任一筛选时，即使列表上滑隐藏了主顶栏，二级筛选栏依然保留可见
     val filterRowVisible = topBarVisible || filter.isActive
+    val density = LocalDensity.current
+    val topBarHeight = 48.dp
 
     val selectedCategory = remember(categories, filter.categoryId) {
         val id = filter.categoryId ?: return@remember null
@@ -152,7 +157,7 @@ internal fun HomeTopFilterHeader(
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .height(48.dp)
+                    .height(topBarHeight)
                     .padding(start = 10.dp, end = 6.dp),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
@@ -212,7 +217,10 @@ internal fun HomeTopFilterHeader(
             enter = expandVertically(tween(220), expandFrom = Alignment.Top) + fadeIn(tween(180)),
             exit = shrinkVertically(tween(220), shrinkTowards = Alignment.Top) + fadeOut(tween(160)),
         ) {
-            Column(Modifier.fillMaxWidth()) {
+            // 测量 AnimatedVisibility 内部的完整内容，展开动画期间不把裁切高度当作列表留白。
+            Column(Modifier.fillMaxWidth().onSizeChanged { measured ->
+                onExpandedHeightChanged(topBarHeight + with(density) { measured.height.toDp() })
+            }) {
                 Row(
                     modifier = Modifier
                         .fillMaxWidth()

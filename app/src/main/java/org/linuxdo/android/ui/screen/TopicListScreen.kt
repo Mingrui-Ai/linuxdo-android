@@ -728,6 +728,8 @@ fun TopicListScreen(
         var visibleHeaderHeight by remember(useHomeFilterHeader, inlineSearchEnabled, onBack) {
             mutableStateOf(if (useHomeFilterHeader) 94.dp else if (onBack == null) 54.dp else IosMetrics.navBarHeight)
         }
+        // 首页头部完整高度独立于收起动画，反向滑动恢复上下栏时保持列表锚点稳定。
+        var expandedHomeHeaderHeight by remember { mutableStateOf(94.dp) }
         PullToRefreshBox(
         isRefreshing = effectiveState.refreshing,
         onRefresh = {
@@ -800,6 +802,7 @@ fun TopicListScreen(
                 else -> 0.dp
             },
             onVisibleHeaderHeightChanged = { visibleHeaderHeight = it },
+            stickySubHeaderExpandedHeight = expandedHomeHeaderHeight.takeIf { useHomeFilterHeader },
             trailing = {
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     trailing()
@@ -824,6 +827,7 @@ fun TopicListScreen(
                             trustLevel = homeTrustLevel,
                             visibleCategoryIds = homeVisibleCategoryIds,
                             onOpenLevelAndCredits = onNavigateToConnect,
+                            onExpandedHeightChanged = { expandedHomeHeaderHeight = it },
                             sortOrder = sortOrder,
                             sortAscending = sortAscending,
                             categories = homeCategories,
