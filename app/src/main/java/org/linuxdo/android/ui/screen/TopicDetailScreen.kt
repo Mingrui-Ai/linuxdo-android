@@ -1132,7 +1132,8 @@ fun TopicDetailScreen(
                         )
                     }
                 }
-                if (slice.last && !hasExpandedSubtree) {
+                // 主帖紧接回复栏时不画分隔线，避免栏顶出现随主题反色的细边。
+                if (slice.last && !hasExpandedSubtree && !(post.postNumber == 1 && showOrderBar)) {
                     IosDivider()
                 }
             }
@@ -1490,11 +1491,6 @@ fun TopicDetailScreen(
                             }
                             items(headSlices, key = { it.key }, contentType = { if (it.first) "post" else "post-part" }) { slice -> RenderPostEntry(slice) }
                             if (showOrderBar) stickyHeader(key = "order-bar") {
-                                val isPinned by remember {
-                                    derivedStateOf {
-                                        list.firstVisibleItemIndex >= 1 + topErrorCount + headSlices.size
-                                    }
-                                }
                                 CommentOrderBar(
                                     total = replyTotal,
                                     order = state.commentOrder,
@@ -1516,7 +1512,6 @@ fun TopicDetailScreen(
                                         authorMenuExpanded = false
                                         onSetFilterUser(userId)
                                     },
-                                    isPinned = isPinned,
                                 )
                             }
                             if (showPreviousGap) item("load-previous") {
@@ -1879,7 +1874,6 @@ private fun CommentOrderBar(
     onAuthorMenuClick: () -> Unit = {},
     onAuthorMenuDismiss: () -> Unit = {},
     onSelectFilterUser: (Long?) -> Unit = {},
-    isPinned: Boolean = false,
     replyingUsers: List<DiscourseUser> = emptyList(),
 ) {
     val isDark = IosTheme.colors.isDark
@@ -1894,9 +1888,6 @@ private fun CommentOrderBar(
     Column(
         Modifier
             .fillMaxWidth()
-            .then(
-                if (isPinned) Modifier.shadow(elevation = 2.dp, clip = false) else Modifier
-            )
             .background(IosTheme.colors.groupedBackground)
     ) {
         Row(
@@ -2240,7 +2231,6 @@ private fun CommentOrderBar(
         }
         if (progress != null) Text(progress, style = IosTheme.type.caption,
             color = IosTheme.colors.secondaryLabel, modifier = Modifier.padding(start = 16.dp, end = 16.dp, bottom = 8.dp))
-        IosDivider()
     }
 }
 
