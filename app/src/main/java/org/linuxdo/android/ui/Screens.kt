@@ -49,6 +49,7 @@ import androidx.compose.foundation.layout.safeDrawingPadding
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.offset
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
@@ -140,8 +141,12 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.cancel
 import org.linuxdo.android.data.EditorSuggestion
 import org.linuxdo.android.data.EditorCompletionRequest
+import org.linuxdo.android.ui.design.HeaderActionPill
+import org.linuxdo.android.ui.design.HeaderFilterPill
+import org.linuxdo.android.ui.design.HeaderFilterPillRow
 import org.linuxdo.android.ui.design.IosActivityIndicator
 import org.linuxdo.android.ui.design.ListNavigationHeader
+import org.linuxdo.android.ui.design.boundedTabSwipe
 import org.linuxdo.android.ui.design.scrollListBars
 import org.linuxdo.android.ui.design.MessageFeedRow
 import org.linuxdo.android.ui.design.SectionHeader
@@ -5159,6 +5164,10 @@ fun IosTextAction(text: String, color: Color = IosTheme.colors.accent,
     }
 }
 
+private enum class DraftFilter(val label: String) {
+    All("全部"), Topic("新话题"), Reply("回复")
+}
+
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalLayoutApi::class)
 @Composable
 fun DraftsScreen(
@@ -5172,8 +5181,19 @@ fun DraftsScreen(
 ) {
     val categoryById = remember(categories) { categories.associateBy { it.id.toInt() } }
     var draftPendingDelete by remember { mutableStateOf<DraftItem?>(null) }
+    var filter by rememberSaveable { mutableStateOf(DraftFilter.All) }
     val pullState = rememberPullToRefreshState()
     val list = rememberLazyListState()
+
+    val topicDraftCount = remember(state.items) { state.items.count { it.isNewTopic } }
+    val replyDraftCount = remember(state.items, topicDraftCount) { state.items.size - topicDraftCount }
+    val filteredItems = remember(state.items, filter) {
+        when (filter) {
+            DraftFilter.All -> state.items
+            DraftFilter.Topic -> state.items.filter { it.isNewTopic }
+            DraftFilter.Reply -> state.items.filter { !it.isNewTopic }
+        }
+    }
 
     Column(
         Modifier
@@ -5184,8 +5204,33 @@ fun DraftsScreen(
             IosNavBar(
                 title = "草稿箱",
                 onBack = onBack,
-                trailing = { IosTextAction("新建帖子", onClick = onCreateTopic) },
+                backLabel = "",
+                background = IosTheme.colors.groupedBackground,
+                showDivider = false,
+                trailingWidth = 76.dp,
+                trailing = {
+                    HeaderActionPill(
+                        text = "新建",
+                        onClick = onCreateTopic,
+                        modifier = Modifier.padding(end = 8.dp),
+                    )
+                },
             )
+            HeaderFilterPillRow {
+                DraftFilter.entries.forEach { option ->
+                    val count = if (!state.loaded && state.items.isEmpty()) null else when (option) {
+                        DraftFilter.All -> state.items.size
+                        DraftFilter.Topic -> topicDraftCount
+                        DraftFilter.Reply -> replyDraftCount
+                    }
+                    HeaderFilterPill(
+                        label = option.label,
+                        count = count,
+                        selected = filter == option,
+                        onClick = { filter = option },
+                    )
+                }
+            }
         }
 
         PullToRefreshBox(
@@ -5194,7 +5239,13 @@ fun DraftsScreen(
             state = pullState,
             modifier = Modifier
                 .weight(1f)
-                .fillMaxWidth(),
+                .fillMaxWidth()
+                .boundedTabSwipe(
+                    selected = filter.ordinal,
+                    count = DraftFilter.entries.size,
+                    enabled = draftPendingDelete == null,
+                    onSelect = { filter = DraftFilter.entries[it] },
+                ),
             indicator = {
                 val fraction = pullState.distanceFraction
                 if ((state.loading && state.loaded) || fraction > 0f) {
@@ -5214,6 +5265,7 @@ fun DraftsScreen(
             LazyColumn(
                 state = list,
                 modifier = Modifier.fillMaxSize().scrollListBars(list),
+                contentPadding = PaddingValues(top = 8.dp, bottom = 28.dp),
             ) {
                 if (state.loading && !state.loaded) {
                     item("loading") { IosLoadingBox() }
@@ -5225,7 +5277,7 @@ fun DraftsScreen(
                     }
                 }
 
-                if (state.loaded && state.items.isEmpty() && state.error == null) {
+                if (state.loaded && filteredItems.isEmpty() && state.error == null) {
                     item("empty") {
                         Box(
                             Modifier
@@ -5235,22 +5287,28 @@ fun DraftsScreen(
                         ) {
                             Column(horizontalAlignment = Alignment.CenterHorizontally) {
                                 Text(
-                                    text = "暂无保存的草稿",
+                                    text = when (filter) {
+                                        DraftFilter.All -> "暂无保存的草稿"
+                                        DraftFilter.Topic -> "暂无新话题草稿"
+                                        DraftFilter.Reply -> "暂无回复草稿"
+                                    },
                                     style = IosTheme.type.headline,
                                     color = IosTheme.colors.secondaryLabel,
                                 )
-                                Spacer(Modifier.height(6.dp))
-                                Text(
-                                    text = "点击右上角新建帖子，内容会自动保存并同步",
-                                    style = IosTheme.type.footnote,
-                                    color = IosTheme.colors.tertiaryLabel,
-                                )
+                                if (filter == DraftFilter.All) {
+                                    Spacer(Modifier.height(6.dp))
+                                    Text(
+                                        text = "点击右上角新建，内容会自动保存并同步",
+                                        style = IosTheme.type.footnote,
+                                        color = IosTheme.colors.tertiaryLabel,
+                                    )
+                                }
                             }
                         }
                     }
                 }
 
-                items(state.items, key = { it.draftKey }) { draft ->
+                items(filteredItems, key = { it.draftKey }) { draft ->
                     val category = draft.categoryId?.let { categoryById[it] }
                     val isDeleting = draft.draftKey in state.deletingKeys
                     DraftCard(
@@ -5260,10 +5318,6 @@ fun DraftsScreen(
                         onEdit = { onEditDraft(draft) },
                         onDelete = { draftPendingDelete = draft },
                     )
-                }
-
-                item("bottom-spacer") {
-                    Spacer(Modifier.height(28.dp))
                 }
             }
         }
@@ -8876,7 +8930,7 @@ internal fun DiscourseBadgeIcon(
     val iconColor = if (isEarned) {
         if (badgeTypeId == 2) Color(0xFF455A64) else Color.White
     } else {
-        Color.White.copy(alpha = 0.45f)
+        if (IosTheme.colors.isDark) Color.White.copy(alpha = 0.45f) else Color(0xFF6B7280).copy(alpha = 0.72f)
     }
 
     val name = iconName?.lowercase(Locale.ROOT)?.removePrefix("fa-")?.removePrefix("fab-")?.removePrefix("far-").orEmpty()
@@ -9012,7 +9066,8 @@ internal fun BadgeDetailDialog(
             // 徽章大圆盘 (72dp)
             val diskGradient = when {
                 !badge.isEarned -> Brush.verticalGradient(
-                    listOf(Color(0xFF2C2D32), Color(0xFF1E1F24))
+                    if (isDark) listOf(Color(0xFF2C2D32), Color(0xFF1E1F24))
+                    else listOf(Color(0xFFE9ECF2), Color(0xFFD8DDE6))
                 )
                 badge.badgeTypeId == 1 -> Brush.linearGradient(
                     listOf(Color(0xFFFFDF00), Color(0xFFFFA000), Color(0xFFFF6F00))

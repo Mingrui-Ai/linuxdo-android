@@ -82,6 +82,7 @@ fun IosLargeTitleScaffold(
     showLargeTitle: Boolean = true,
     bottomPadding: Dp = 64.dp,
     backLabel: String = "返回",
+    navBarBackground: Color? = null,
     scrollToTopRequest: Int = 0,
     trailing: @Composable () -> Unit = {},
     trailingWidth: Dp = 0.dp,
@@ -233,7 +234,7 @@ fun IosLargeTitleScaffold(
                         showDivider = if (!showLargeTitle) true else collapse > 0.01f,
                         backLabel = backLabel,
                         // 顶部时与大标题区同色、看起来融为一体,折叠后过渡成实色条。
-                        background = if (!showLargeTitle) IosTheme.colors.card else lerp(
+                        background = navBarBackground ?: if (!showLargeTitle) IosTheme.colors.card else lerp(
                             IosTheme.colors.groupedBackground,
                             IosTheme.colors.card,
                             collapse,
@@ -295,6 +296,7 @@ fun IosNavBar(
                     customTitle()
                 }
             } else {
+                val symmetricSidePadding = maxOf(backPadding, maxOf(56.dp, trailingWidth))
                 Text(
                     text = title,
                     style = IosTheme.type.subheadline.copy(fontWeight = FontWeight.SemiBold),
@@ -304,7 +306,7 @@ fun IosNavBar(
                     textAlign = TextAlign.Center,
                     modifier = Modifier
                         .alpha(titleAlpha)
-                        .padding(start = backPadding, end = maxOf(56.dp, trailingWidth)),
+                        .padding(horizontal = symmetricSidePadding),
                 )
             }
             if (onBack != null) {

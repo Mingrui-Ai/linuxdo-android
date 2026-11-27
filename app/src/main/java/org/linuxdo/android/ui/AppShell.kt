@@ -745,6 +745,7 @@ private fun MainNavigation(state: UiState, viewModel: MainViewModel, lifecycle: 
     }
     val skinPreset by viewModel.skinPreset.collectAsStateWithLifecycle()
     val userRepliesStates by viewModel.userRepliesStates.collectAsStateWithLifecycle()
+    val bookmarkSearchQueries by viewModel.bookmarkSearchQueries.collectAsStateWithLifecycle()
     val homeFilter by viewModel.homeFilter.collectAsStateWithLifecycle()
     val topicListSorts by viewModel.topicListSorts.collectAsStateWithLifecycle()
     val floatingBallEnabled by viewModel.floatingBallEnabled.collectAsStateWithLifecycle()
@@ -1670,6 +1671,12 @@ private fun MainNavigation(state: UiState, viewModel: MainViewModel, lifecycle: 
                                     },
                                     onBack = { stack.pop() },
                                     showLargeTitle = false,
+                                    unifiedSecondaryHeader = true,
+                                    inlineSearchQuery = if (route.isBookmark) bookmarkSearchQueries[route.username].orEmpty() else null,
+                                    inlineSearchPlaceholder = "搜索收藏的标题或内容",
+                                    onInlineSearchQueryChange = if (route.isBookmark) ({ query ->
+                                        viewModel.updateBookmarkSearchQuery(route.username, query)
+                                    }) else null,
                                     active = active,
                                     trailing = {},
                                     onSetNotificationLevel = { topic, level ->
