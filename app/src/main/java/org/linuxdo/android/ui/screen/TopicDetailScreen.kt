@@ -5057,7 +5057,7 @@ private fun TiebaPostActionButton(
         else -> IosTheme.colors.accent
     }
     val buttonTint = if (selected) activeTint else color
-    val buttonBg = if (selected) activeTint.copy(alpha = 0.12f) else Color.Transparent
+    val buttonBg = if (selected && action != PostAction.Like) activeTint.copy(alpha = 0.12f) else Color.Transparent
 
     Box(
         modifier = Modifier
