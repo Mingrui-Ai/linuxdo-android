@@ -3036,6 +3036,13 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         diagnostics.log(if (enabled) "已开启阅读进度同步(低频 timings 上报)" else "已关闭阅读进度同步(仅本地标记已读)")
     }
 
+    fun hasViewedFloor(accountId: Long, topicId: Long, floor: Int) =
+        container.reading.hasViewedFloor(accountId, topicId, floor)
+
+    fun markViewedFloor(accountId: Long, topicId: Long, floor: Int) {
+        if (isTopicActive(topicId)) container.reading.markViewedFloor(accountId, topicId, floor)
+    }
+
     /** 记录用户在屏幕上实际浏览到的楼层号 */
     fun onPostsVisible(topicId: Long, postNumbers: List<Int>) {
         if (topicId <= 0L) return

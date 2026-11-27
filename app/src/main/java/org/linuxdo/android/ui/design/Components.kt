@@ -168,6 +168,7 @@ fun UserAvatar(
     val shape = avatarShape(username, avatarUrl ?: staticBaseUrl, cornerRadius)
 
     var baseReady by remember(staticBaseUrl) { mutableStateOf(false) }
+    var baseMissing by remember(staticBaseUrl) { mutableStateOf(false) }
     var baseFailed by remember(staticBaseUrl) { mutableStateOf(false) }
     var basePendingRetry by remember(staticBaseUrl) { mutableStateOf(false) }
     var baseRetryAttempt by remember(staticBaseUrl) { mutableIntStateOf(0) }
@@ -215,6 +216,7 @@ fun UserAvatar(
                     onImageLoaded?.invoke(it.result.memoryCacheKey)
                 },
                 onError = { state ->
+                    baseMissing = (state.result.throwable as? coil.network.HttpException)?.response?.code in setOf(404, 410)
                     if (isTransientImageError(state.result.throwable) && baseRetryAttempt < IMAGE_AUTO_RETRY_LIMIT) {
                         baseRetryAttempt++
                         baseFailed = true
@@ -227,7 +229,7 @@ fun UserAvatar(
         }
 
         // 2. 动图 Overlay 层：仅在存在独立动图且静态底图已结束首轮请求后挂载，避免单卡双请求齐发
-        if (!animatedOverlayUrl.isNullOrBlank() && !animFailed && (baseReady || (baseFailed && !basePendingRetry))) {
+        if (!animatedOverlayUrl.isNullOrBlank() && !animFailed && (baseReady || baseMissing)) {
             val animRequest = rememberAnimatedImageRequest(animatedOverlayUrl)
             AsyncImage(
                 model = animRequest ?: animatedOverlayUrl,

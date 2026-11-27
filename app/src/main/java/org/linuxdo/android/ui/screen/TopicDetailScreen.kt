@@ -494,7 +494,8 @@ fun TopicDetailScreen(
     initialPostNumber: Int? = null,
     onPostsVisible: (List<Int>) -> Unit = {},
     onLiveViewport: (Boolean, Boolean) -> Unit = { _, _ -> },
-    syncReadProgress: Boolean = true,
+    hasViewedFloor: (Int) -> Boolean = { false },
+    onFloorViewed: (Int) -> Unit = {},
     onScrolled: () -> Unit = {},
     onOverlayActive: (Boolean) -> Unit = {},
     onToggleBookmark: (Post) -> Unit = {},
@@ -699,15 +700,20 @@ fun TopicDetailScreen(
         if (active) snapshotFlow { list.firstVisibleItemIndex to list.firstVisibleItemScrollOffset }
             .drop(1).collect { currentOnScrolled() }
     }
-    // 关闭同步时按本地停留淡出；开启同步时只接受上报成功回执或服务端已读字段。
-    var sessionReadPosts by remember(topicId) { mutableStateOf(emptySet<Int>()) }
-    LaunchedEffect(visiblePostNumbers, active, showUnreadDot, syncReadProgress) {
-        if (!active || !showUnreadDot || syncReadProgress) return@LaunchedEffect
-        val pending = visiblePostNumbers.filter { it !in sessionReadPosts }
-        if (pending.isEmpty()) return@LaunchedEffect
-        // 停留一小会儿才算读过,避免飞速滑过时蓝点一闪而没、用户根本没看清。
-        delay(UNREAD_DOT_DWELL_MS)
-        sessionReadPosts = sessionReadPosts + pending
+    val sessionReadPosts = remember(topicId) { mutableStateMapOf<Int, Boolean>() }
+    if (active && signedIn && showUnreadDot) {
+        visiblePostNumbers.forEach { floor ->
+            key(topicId, floor) {
+                if (sessionReadPosts[floor] != true && floor !in state.confirmedReadPostNumbers &&
+                    !remember { hasViewedFloor(floor) }) {
+                    LaunchedEffect(Unit) {
+                        delay(UNREAD_DOT_DWELL_MS)
+                        onFloorViewed(floor)
+                        sessionReadPosts[floor] = true
+                    }
+                }
+            }
+        }
     }
     val totalPosts = maxOf(state.topic?.postsCount ?: 0, state.topic?.postStream?.stream?.size ?: 0)
     val highestFloor = maxOf(totalPosts, state.topic?.highestPostNumber ?: 0, state.posts.maxOfOrNull { it.postNumber } ?: 1)
@@ -1043,7 +1049,8 @@ fun TopicDetailScreen(
         val isTopicAuthor = topicAuthorUsername != null && post.username == topicAuthorUsername
         val unreadDotVisible = showUnreadDot && signedIn && !post.yours && !post.read &&
             post.postNumber !in state.confirmedReadPostNumbers &&
-            (syncReadProgress || post.postNumber !in sessionReadPosts)
+            sessionReadPosts[post.postNumber] != true &&
+            !remember(topicId, post.postNumber) { hasViewedFloor(post.postNumber) }
         if (!useThreadView || row.depth == 0) {
             val hasExpandedSubtree = useThreadView && row.subtreeSize > 0 && post.id !in collapsed
             val unloadedTargetId = row.unloadedCandidateIds.firstOrNull { it !in state.completedReplies }
@@ -3527,6 +3534,7 @@ private fun UnreadDot(visible: Boolean) {
     ) {
         Box(
             Modifier
+                .semantics { contentDescription = "未读" }
                 .padding(start = 4.dp)
                 .size(6.dp)
                 .clip(CircleShape)
@@ -3612,6 +3620,7 @@ private fun PostRow(
                 if (unreadDotVisible && unreadDotPosition == UnreadDotPosition.Avatar) {
                     Box(
                         Modifier
+                            .semantics { contentDescription = "未读" }
                             .size(7.dp)
                             .align(Alignment.TopEnd)
                             .offset(x = 1.dp, y = (-1).dp)
@@ -3804,6 +3813,7 @@ private fun SubReplyRow(
                 if (unreadDotVisible && unreadDotPosition == UnreadDotPosition.Avatar) {
                     Box(
                         Modifier
+                            .semantics { contentDescription = "未读" }
                             .size(6.dp)
                             .align(Alignment.TopEnd)
                             .offset(x = 1.dp, y = (-1).dp)
@@ -5422,8 +5432,9 @@ internal fun CookedContent(
                                     if (isTransientImageError(err) && autoRetryCount < IMAGE_AUTO_RETRY_LIMIT) {
                                         // 门禁冷却 / 429 / 网络抖动：换原图只会再撞一次，原地等冷却结束后重试同一地址
                                         pendingAutoRetry = true
-                                    } else if (currentUrl == block.url && block.url != block.originalUrl) {
-                                        // 缩略图拉取失败（如 Discourse 未生成或 404/超时），自动透明降级尝试原图！
+                                    } else if (currentUrl == block.url && block.url != block.originalUrl &&
+                                        (err as? coil.network.HttpException)?.response?.code in setOf(404, 410)) {
+                                        // 缩略图不存在时才回退原图。
                                         currentUrl = block.originalUrl
                                         isLoading = true
                                     } else if (inlineSvgContent == null) {

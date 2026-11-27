@@ -464,13 +464,17 @@ fun isTransientImageError(error: Throwable?): Boolean = when (error) {
 suspend fun awaitImageRetrySlot(attempt: Int) {
     SiteImageGateInterceptor.awaitClearanceRecovery()
     val backoffMs = 2_000L shl attempt.coerceIn(0, 3)
-    val jitterMs = kotlin.random.Random.nextLong(400L, 1_800L)
-    kotlinx.coroutines.delay(maxOf(SiteImageGateInterceptor.cooldownRemainingMs(), backoffMs) + jitterMs)
+    kotlinx.coroutines.delay(backoffMs)
     while (true) {
         SiteImageGateInterceptor.awaitClearanceRecovery()
         val remaining = SiteImageGateInterceptor.cooldownRemainingMs()
-        if (remaining <= 0L) return
-        kotlinx.coroutines.delay(minOf(remaining, 1_000L))
+        if (remaining > 0L) {
+            kotlinx.coroutines.delay(remaining.coerceAtMost(1_000L))
+        } else {
+            // 冷却可能延长。把错峰放在真正放行之后，再确认一次，避免一屏头像同时重试。
+            kotlinx.coroutines.delay(kotlin.random.Random.nextLong(400L, 1_800L))
+            if (SiteImageGateInterceptor.cooldownRemainingMs() == 0L) return
+        }
     }
 }
 
