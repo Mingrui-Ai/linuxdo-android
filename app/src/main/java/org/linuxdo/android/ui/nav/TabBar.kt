@@ -5,7 +5,6 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.selection.selectable
-import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -20,10 +19,11 @@ import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.StrokeJoin
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import org.linuxdo.android.ui.design.IosFullDivider
 import org.linuxdo.android.ui.design.IosTheme
 
 enum class MainTab(val label: String, val root: Route) {
@@ -76,9 +76,9 @@ fun TabBar(
             BottomBarItem.entries.forEach { item ->
                 val tab = item.tab
                 val isSelected = tab == selected
-                val color = if (isSelected) activeTint else inactiveTint
+                val color = if (isSelected || item == BottomBarItem.CreateTopic) activeTint else inactiveTint
                 val label = item.label
-                Column(
+                Box(
                     Modifier
                         .weight(1f)
                         .fillMaxHeight()
@@ -87,9 +87,9 @@ fun TabBar(
                             role = Role.Tab,
                             onClick = { onSelect(tab) },
                         ) else Modifier.clickable(role = Role.Button, onClick = onCreateTopic))
+                        .semantics { contentDescription = label }
                         .padding(vertical = 4.dp),
-                    horizontalAlignment = Alignment.CenterHorizontally,
-                    verticalArrangement = Arrangement.Center
+                    contentAlignment = Alignment.Center,
                 ) {
                     Box(contentAlignment = Alignment.TopEnd) {
                         Canvas(Modifier.size(24.dp)) {
@@ -128,19 +128,11 @@ fun TabBar(
                                     }
                                 }
                                 BottomBarItem.CreateTopic -> {
-                                    val pen = Path().apply {
-                                        moveTo(size.width * 0.17f, size.height * 0.83f)
-                                        lineTo(size.width * 0.35f, size.height * 0.79f)
-                                        lineTo(size.width * 0.81f, size.height * 0.33f)
-                                        lineTo(size.width * 0.67f, size.height * 0.19f)
-                                        lineTo(size.width * 0.21f, size.height * 0.65f)
-                                        close()
-                                    }
-                                    drawPath(pen, color, style = Stroke(stroke, cap = StrokeCap.Round, join = StrokeJoin.Round))
-                                    drawLine(color, Offset(size.width * 0.56f, size.height * 0.29f),
-                                        Offset(size.width * 0.71f, size.height * 0.44f), stroke, StrokeCap.Round)
-                                    drawLine(color, Offset(size.width * 0.52f, size.height * 0.83f),
-                                        Offset(size.width * 0.83f, size.height * 0.83f), stroke, StrokeCap.Round)
+                                    val plusStroke = 2.dp.toPx()
+                                    drawLine(color, Offset(size.width * 0.18f, size.height * 0.5f),
+                                        Offset(size.width * 0.82f, size.height * 0.5f), plusStroke, StrokeCap.Round)
+                                    drawLine(color, Offset(size.width * 0.5f, size.height * 0.18f),
+                                        Offset(size.width * 0.5f, size.height * 0.82f), plusStroke, StrokeCap.Round)
                                 }
                                 BottomBarItem.Messages -> {
                                     val envLeft = size.width * 0.08f
@@ -192,16 +184,6 @@ fun TabBar(
                             }
                         }
                     }
-                    Spacer(Modifier.height(3.dp))
-                    Text(
-                        text = label,
-                        color = color,
-                        fontSize = 10.sp,
-                        fontWeight = if (isSelected) FontWeight.SemiBold else FontWeight.Normal,
-                        lineHeight = 12.sp,
-                        maxLines = 1,
-                        overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
-                    )
                 }
             }
         }
