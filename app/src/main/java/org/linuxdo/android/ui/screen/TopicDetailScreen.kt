@@ -1476,7 +1476,7 @@ fun TopicDetailScreen(
                                 }
                             }
                             if (showTopError) state.error?.let { message ->
-                                item("top-error") { ErrorNotice(message, onRetry) }
+                                item("top-error") { ErrorNotice(message, state.retryAtElapsedMs, onRetry) }
                             }
                             items(headSlices, key = { it.key }, contentType = { if (it.first) "post" else "post-part" }) { slice -> RenderPostEntry(slice) }
                             if (showOrderBar) stickyHeader(key = "order-bar") {
@@ -1517,7 +1517,7 @@ fun TopicDetailScreen(
                             if (state.loading && (state.posts.isEmpty() || state.remaining.isNotEmpty())) {
                                 item("loading") { IosLoadingBox() }
                             }
-                            if (!showTopError) state.error?.let { message -> item("error") { ErrorNotice(message, onRetry) } }
+                            if (!showTopError) state.error?.let { message -> item("error") { ErrorNotice(message, state.retryAtElapsedMs, onRetry) } }
                             if (!state.loading && state.topic != null && state.posts.isEmpty() && state.error == null) {
                                 item("empty") { EmptyNotice() }
                             }

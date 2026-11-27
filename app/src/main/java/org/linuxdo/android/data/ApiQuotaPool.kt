@@ -1,6 +1,32 @@
 package org.linuxdo.android.data
 
 import android.os.SystemClock
+import android.content.SharedPreferences
+
+/** 后台轮询和阅读补传共享静默期。前台正文仍服从站点给出的等待时间。 */
+internal class AutomaticRequestBackoff {
+    private var until = 0L
+    private var lastDelay = 0L
+
+    @Synchronized
+    fun record(now: Long, serverWaitMs: Long) {
+        // 同一批并发响应只延长服务端期限，不重复翻倍。
+        if (now >= until) {
+            lastDelay = if (lastDelay == 0L || now - until >= 15 * 60_000L) 120_000L
+                else (lastDelay * 2).coerceAtMost(15 * 60_000L)
+            until = now + lastDelay
+        }
+        until = maxOf(until, now + serverWaitMs.coerceAtLeast(0L))
+    }
+
+    @Synchronized
+    fun remaining(now: Long): Long = (until - now).coerceAtLeast(0L)
+
+    @Synchronized
+    fun restore(now: Long, remainingMs: Long) {
+        if (remainingMs > 0L) until = maxOf(until, now + remainingMs)
+    }
+}
 
 internal enum class ExcerptFetchOutcome {
     COMPLETE, EMPTY, TRANSIENT_FAILURE, BLOCKED, PERMANENT_FAILURE, DEFERRED;
@@ -136,13 +162,13 @@ enum class ApiQuotaPool(
      * [force] 只跳过最小间隔与前台让行（用户主动触发），惩罚期与全局冷却仍然生效。
      */
     fun tryAcquire(force: Boolean = false): Boolean {
-        if (TopicRepository.isRateLimitCoolingDown()) return false
+        if (TopicRepository.isRateLimitCoolingDown() || automaticBackoffMs() > 0L) return false
         val now = SystemClock.elapsedRealtime()
         synchronized(this) {
             if (now < penaltyUntil) return false
             if (!force) {
                 if (minIntervalMs > 0L && now - lastAcquiredAt < minIntervalMs) return false
-                if (yieldToForeground && now - lastActivityAt() < FOREGROUND_QUIET_MS) return false
+                if (yieldToForeground && (foregroundReads.get() > 0 || now - lastActivityAt() < FOREGROUND_QUIET_MS)) return false
             }
             lastAcquiredAt = now
             return true
@@ -161,7 +187,7 @@ enum class ApiQuotaPool(
             maxOf(penaltyUntil - now, lastAcquiredAt + minIntervalMs - now)
         }
         val foregroundWait = if (yieldToForeground) lastActivityAt() + FOREGROUND_QUIET_MS - now else 0L
-        return maxOf(poolWait, TopicRepository.rateLimitRemainingMs(), foregroundWait, 0L)
+        return maxOf(poolWait, TopicRepository.rateLimitRemainingMs(), foregroundWait, automaticBackoffMs(), 0L)
     }
 
     private fun penalize(globalCooldownMs: Long, cfChallenge: Boolean) {
@@ -184,6 +210,33 @@ enum class ApiQuotaPool(
     }
 
     companion object {
+        private val automaticBackoff = AutomaticRequestBackoff()
+        private var backoffPreferences: SharedPreferences? = null
+        private const val AUTOMATIC_DEADLINE = "automatic_read_resume_at"
+
+        @Synchronized
+        fun restoreAutomaticBackoff(preferences: SharedPreferences) {
+            backoffPreferences = preferences
+            val remaining = (preferences.getLong(AUTOMATIC_DEADLINE, 0L) - System.currentTimeMillis()).coerceIn(0L, 86_400_000L)
+            automaticBackoff.restore(SystemClock.elapsedRealtime(), remaining)
+        }
+        fun automaticBackoffMs(): Long = automaticBackoff.remaining(SystemClock.elapsedRealtime())
+        private val foregroundReads = java.util.concurrent.atomic.AtomicInteger()
+        fun automaticReadDelayMs(): Long {
+            val quietMs = if (foregroundReads.get() > 0) FOREGROUND_QUIET_MS
+                else lastForegroundAt + FOREGROUND_QUIET_MS - SystemClock.elapsedRealtime()
+            return maxOf(automaticBackoffMs(), quietMs)
+        }
+
+        suspend fun <T> duringForegroundRead(block: suspend () -> T): T {
+            foregroundReads.incrementAndGet()
+            try {
+                return block()
+            } finally {
+                markForeground()
+                foregroundReads.decrementAndGet()
+            }
+        }
         /** 前台请求 / 写请求之后，后台池需要让出的静默窗口。 */
         const val FOREGROUND_QUIET_MS = 3_000L
         private const val MAX_STRIKE_SHIFT = 3
@@ -202,7 +255,10 @@ enum class ApiQuotaPool(
          * 服务端任意一次 429 都会进到这里：服务端是全局计数的，撞墙说明总量超了，
          * 所有后台池都要退让；被 CF 质询页拦下（cf-mitigated=challenge）时惩罚加倍。
          */
+        @Synchronized
         fun onServerRateLimited(globalCooldownMs: Long, cfChallenge: Boolean) {
+            automaticBackoff.record(SystemClock.elapsedRealtime(), globalCooldownMs)
+            backoffPreferences?.edit()?.putLong(AUTOMATIC_DEADLINE, System.currentTimeMillis() + automaticBackoffMs())?.apply()
             entries.forEach { it.penalize(globalCooldownMs, cfChallenge) }
         }
     }

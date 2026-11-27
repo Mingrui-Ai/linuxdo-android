@@ -196,7 +196,7 @@ private fun AppShellContent(viewModel: MainViewModel, browser: BrowserSession, s
 
     LaunchedEffect(lifecycle, state.screen, state.latest.initialLoading, notificationPollInterval, customRealtimeSeconds) {
         if (state.screen == Screen.List && !state.latest.initialLoading) lifecycle.repeatOnLifecycle(Lifecycle.State.STARTED) {
-            viewModel.refreshUnread(force = true)
+            viewModel.refreshUnread()
             // 前台未读角标与后台通知设置解耦：可见时始终按 10 秒基线轮询，
             // 只有“实时”且自定义间隔更短时才加快，下限 5 秒避免触发限频。
             val pollDelayMs = when (notificationPollInterval) {
@@ -1092,7 +1092,10 @@ private fun MainNavigation(state: UiState, viewModel: MainViewModel, lifecycle: 
                                     }
                                 }
                                 Route.CategoryList -> viewModel.loadCategories()
-                                Route.TopicList -> if (state.latest.needsRefresh) viewModel.refreshLatest()
+                                Route.TopicList -> if (pendingNotificationTarget == null) {
+                                    if (state.latest.needsRefresh) viewModel.refreshLatest()
+                                    else if (state.latest.initialLoading) viewModel.retryLatest()
+                                }
                                 is Route.Search -> {
                                     viewModel.prepareSearch(route.scope)
                                     if (search.scope == route.scope && search.results.needsRefresh) viewModel.updateSearch(search.query)

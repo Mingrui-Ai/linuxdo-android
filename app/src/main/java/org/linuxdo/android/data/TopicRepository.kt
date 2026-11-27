@@ -383,7 +383,7 @@ class TopicRepository(
         )
     }
 
-    /** 主站速率型 429 挑战：递增冷却 + 轻提示，凭据保留；连续超档触发换线时保留健康凭据并解除静默补签冷却。 */
+    /** 主站速率型 429 挑战：递增冷却 + 轻提示，凭据保留。 */
     private fun enterChallenge429Cooldown(
         path: String,
         retryAfterSeconds: Long?,
@@ -402,8 +402,7 @@ class TopicRepository(
                 receivedAtElapsedMs = receivedAtElapsedMs,
             )
         }
-        val (remaining, streak, rotated) = Companion.enterChallenge429Cooldown(
-            path = path,
+        val (remaining, streak) = Companion.enterChallenge429Cooldown(
             retryAfterSeconds = retryAfterSeconds,
             sessionStore = sessionStore,
             requestRound = requestRound,
@@ -412,11 +411,6 @@ class TopicRepository(
         )
         if (remaining <= 0L) {
             diagnostics.log("429 速率挑战迟到旧响应: $path，已恢复或跨会话，不重开冷却")
-        } else if (rotated) {
-            // 仅轮换 Anycast 接入节点并不会改变客户端出口 IP，保留 cf_clearance 避免自毁进入 0 凭据裸奔死循环；
-            // 同时清除旧的静默补签冷却锁，允许新节点下必要时即时补签。
-            getRevalidateBlockedUntil = 0L
-            diagnostics.log("429 速率挑战(第 $streak 次): $path，已触发换线降温并保留 cf_clearance，过渡冷却 ${(remaining + 999L) / 1_000L}s")
         } else {
             diagnostics.log("429 速率挑战(第 $streak 次): $path，保留 cf_clearance，递增冷却 ${(remaining + 999L) / 1_000L}s 后自愈")
         }
@@ -896,16 +890,9 @@ class TopicRepository(
                     if (tag == null) {
                         filterEndpointUnsupported = true
                     }
-                } catch (error: CancellationException) {
-                    throw error
-                } catch (error: NeedsInteractiveVerification) {
-                    throw error
                 } catch (error: HttpStatusException) {
-                    if (error.status in setOf(400, 403, 404, 422)) {
-                        filterEndpointUnsupported = true
-                    }
-                } catch (_: Exception) {
-                    // 回退到多子版块并发聚合
+                    if (error.status !in setOf(400, 404, 422)) throw error
+                    filterEndpointUnsupported = true
                 }
             }
         }
@@ -946,6 +933,8 @@ class TopicRepository(
                     } catch (error: CancellationException) {
                         throw error
                     } catch (error: NeedsInteractiveVerification) {
+                        throw error
+                    } catch (error: RateLimitException) {
                         throw error
                     } catch (_: Exception) {
                         null
@@ -1188,10 +1177,10 @@ class TopicRepository(
      * 走全局 gate 串行节流。此为可丢弃的统计请求，遇 Cloudflare 挑战或服务异常直接返回 false，
      * 绝不抛异常打断用户正常阅读。
      */
-    private var timingsCooldownUntil = 0L
+    @Volatile private var timingsCooldownUntil = 0L
 
     fun readTimingsCooldownRemainingMs(): Long = maxOf(
-        rateLimitRemainingMs(), timingsCooldownUntil - SystemClock.elapsedRealtime(), 0L,
+        mainSiteGateWaitMs(), timingsCooldownUntil - SystemClock.elapsedRealtime(), ApiQuotaPool.automaticReadDelayMs(),
     )
 
     /**
@@ -1226,8 +1215,9 @@ class TopicRepository(
         val retryAfterMs = result.retryAfterSeconds?.takeIf { it > 0L }?.coerceAtMost(86_400L)?.times(1_000L) ?: 0L
         val fuseMs = maxOf(retryAfterMs, if (cfChallenge) TIMINGS_CHALLENGE_429_FUSE_MS else TIMINGS_RATE_LIMIT_FUSE_MS)
         timingsCooldownUntil = maxOf(timingsCooldownUntil, SystemClock.elapsedRealtime() + fuseMs)
+        ApiQuotaPool.onServerRateLimited(fuseMs, cfChallenge)
         diagnostics.log(
-            "阅读进度上报遇 429(${if (cfChallenge) "CF速率挑战" else "限流"}, $stage)，仅熔断阅读同步 ${fuseMs / 1_000L}s，主站请求不受影响",
+            "阅读进度上报遇 429($stage)，暂缓自动请求 ${ApiQuotaPool.automaticBackoffMs() / 1_000L}s",
         )
     }
 
@@ -1800,6 +1790,7 @@ class TopicRepository(
         chatPollGate.withLock { pollMessageBus(clientId, cursors, sequence, "/chat") }
 
     private suspend fun pollMessageBus(clientId: String, cursors: Map<String, Long>, sequence: Long, referer: String): List<TopicBusMessage> {
+            throwIfAutomaticReadsPaused()
             val generation = sessionStore?.sessionGeneration ?: return emptyList()
             val path = "/message-bus/$clientId/poll"
             val config = getPollingConfiguration(generation)
@@ -1848,6 +1839,7 @@ class TopicRepository(
                     .add("__seq", sequence.toString()).build())
                 .build()
             val result = suspendCancellableCoroutine<TransportResult> { continuation ->
+                throwIfAutomaticReadsPaused()
                 val call = client.newCall(request)
                 continuation.invokeOnCancellation { call.cancel() }
                 call.enqueue(object : Callback {
@@ -1863,6 +1855,7 @@ class TopicRepository(
                                     status = incoming.code,
                                     body = body,
                                     challenged = ChallengeDetector.isChallenge(incoming.code, incoming.header("cf-mitigated"), body),
+                                    cfMitigated = incoming.header("cf-mitigated"),
                                     retryAfterSeconds = HttpHeaderUtils.extractRetryAfterSeconds(
                                         incoming.header("Retry-After"), incoming.header("x-ratelimit-reset"), body),
                                     receivedAtElapsedMs = SystemClock.elapsedRealtime(),
@@ -1884,11 +1877,11 @@ class TopicRepository(
             }
             return when {
                 result.status == 429 -> {
-                    if (result.challenged) enterSilentPrefetchBackoff(NeedsInteractiveVerification("话题订阅被挑战拦截"))
+                    val challenge = ChallengeDetector.isChallenge429(result.status, result.cfMitigated, result.body)
                     throw enterRateLimitCooldown(
                         path = path,
-                        retryAfterSeconds = maxOf(if (result.challenged) 120L else 15L, result.retryAfterSeconds ?: 0L),
-                        cfChallenge = result.challenged,
+                        retryAfterSeconds = maxOf(if (challenge) 120L else 15L, result.retryAfterSeconds ?: 0L),
+                        cfChallenge = challenge,
                         requestRound = pollRound,
                         requestGeneration = generation,
                         receivedAtElapsedMs = result.receivedAtElapsedMs,
@@ -2496,7 +2489,9 @@ class TopicRepository(
     }
 
     suspend fun fetchChatChannels(silent: Boolean = false): List<ChatChannelSummary> {
-        val root = objectRequest("/chat/api/me/channels", present = !silent, retryAllowed = !silent)
+        if (silent) throwIfAutomaticReadsPaused()
+        val root = objectRequest("/chat/api/me/channels", present = !silent, retryAllowed = !silent,
+            beforeDispatch = if (silent) ::throwIfAutomaticReadsPaused else null)
         val tracking = ((root["tracking"] as? JsonObject)?.get("channel_tracking") as? JsonObject)
             ?: JsonObject(emptyMap())
         return (root.objects("public_channels") + root.objects("direct_message_channels"))
@@ -4188,13 +4183,19 @@ class TopicRepository(
         )
     }
 
+    private fun throwIfAutomaticReadsPaused() {
+        val remaining = ApiQuotaPool.automaticReadDelayMs()
+        if (remaining > 0L) throw RateLimitException(remaining)
+    }
+
     private suspend fun objectRequest(
         path: String,
         burst: Boolean = false,
         present: Boolean = true,
         retryAllowed: Boolean = true,
+        beforeDispatch: (() -> Unit)? = null,
     ): JsonObject {
-        val body = request(path, burst = burst, present = present, retryAllowed = retryAllowed)
+        val body = request(path, burst = burst, present = present, retryAllowed = retryAllowed, beforeDispatch = beforeDispatch)
         return withContext(Dispatchers.Default) { json.parseToJsonElement(body).jsonObject }
     }
     private fun JsonObject.text(key: String): String = (get(key) as? JsonPrimitive)?.contentOrNull.orEmpty()
@@ -5578,7 +5579,7 @@ class TopicRepository(
         beforeDispatch: (() -> Unit)? = null,
     ): String {
         try {
-            return pacedGet(path, burst, present, allow429Challenge = retryAllowed, retryAllowed = retryAllowed, beforeDispatch = beforeDispatch)
+            return pacedGet(path, burst, present, retryAllowed = retryAllowed, beforeDispatch = beforeDispatch)
         } catch (challenge: NeedsInteractiveVerification) {
             if (!retryAllowed || !present || requestHost(path) != Config.HOST) {
                 if (challenge.isFrom429 && requestHost(path) == Config.HOST) {
@@ -5623,7 +5624,7 @@ class TopicRepository(
                 releaseGetProbeForRound(challenge.requestRound)
                 probeHandedOff = true
                 return try {
-                    pacedGet(path, burst, present, allow429Challenge = false, beforeDispatch = beforeDispatch)
+                    pacedGet(path, burst, present, beforeDispatch = beforeDispatch)
                 } catch (retryChallenge: NeedsInteractiveVerification) {
                     releaseGetProbeForRound(retryChallenge.requestRound)
                     // P0-4: CLEARED 后重放立撞 403/503 交互挑战 -> 判定为 cf_clearance 对 OkHttp 通道无效（典型：分应用代理/双栈出口不一致）
@@ -5704,16 +5705,15 @@ class TopicRepository(
         path: String,
         burst: Boolean,
         present: Boolean,
-        allow429Challenge: Boolean = true,
         retryAllowed: Boolean = true,
         beforeDispatch: (() -> Unit)? = null,
     ): String {
-        if (present) return dispatchGet(path, burst, present, allow429Challenge, retryAllowed, beforeDispatch)
+        if (present) return ApiQuotaPool.duringForegroundRead { dispatchGet(path, burst, present, retryAllowed, beforeDispatch) }
         return backgroundGetGate.withLock {
             val wait = Config.MIN_REQUEST_INTERVAL_MS - (SystemClock.elapsedRealtime() - lastBackgroundGetAt)
             if (wait > 0) delay(wait)
             try {
-                dispatchGet(path, burst, present, allow429Challenge, retryAllowed, beforeDispatch)
+                dispatchGet(path, burst, present, retryAllowed, beforeDispatch)
             } finally {
                 lastBackgroundGetAt = SystemClock.elapsedRealtime()
             }
@@ -5797,7 +5797,6 @@ class TopicRepository(
         path: String,
         burst: Boolean,
         present: Boolean,
-        allow429Challenge: Boolean = true,
         retryAllowed: Boolean = true,
         beforeDispatch: (() -> Unit)? = null,
     ): String {
@@ -5805,15 +5804,16 @@ class TopicRepository(
         val isMainSite = host == Config.HOST
         ensureRequestAllowed()
         throwIfSiteCoolingDown(host)
-        awaitGetCooldownOrProbeGate(isMainSite = isMainSite, present = present)
+        awaitGetCooldownOrProbeGate(isMainSite = isMainSite, present = present,
+            allowClaimProbe = present || ApiQuotaPool.automaticReadDelayMs() == 0L)
         return getSemaphore.withPermit {
             ensureRequestAllowed()
             throwIfSiteCoolingDown(host)
-            awaitGetCooldownOrProbeGate(isMainSite = isMainSite, present = present)
             var attempt = 0
             var staleReplayed = false
             while (true) {
-                val ticket = acquireGetSlot(isMainSite = isMainSite, present = present) {
+                val ticket = acquireGetSlot(isMainSite = isMainSite, present = present,
+                    allowClaimProbe = present || ApiQuotaPool.automaticReadDelayMs() == 0L) {
                     sessionStore?.sessionGeneration ?: -1L
                 }
                 var probeSettled = false
@@ -5850,8 +5850,21 @@ class TopicRepository(
                         throw HttpStatusException(result.status, "子站安全验证未通过，请稍后重试", result.retryAfterSeconds)
                     }
                     when {
+                        result.status == 429 -> {
+                            probeSettled = true
+                            val cfChallenge = ChallengeDetector.isChallenge429(result.status, result.cfMitigated, result.body) ||
+                                isCfChallengeBody(result.body)
+                            throw if (cfChallenge) enterChallenge429Cooldown(
+                                path, result.retryAfterSeconds, result.sentClearanceFp, ticket.round, ticket.sessionGeneration, receivedAt,
+                            ) else enterRateLimitCooldown(
+                                path, result.retryAfterSeconds, requestRound = ticket.round,
+                                requestGeneration = ticket.sessionGeneration, receivedAtElapsedMs = receivedAt,
+                            )
+                        }
                         result.challenged -> {
-                            if (retryAllowed && !staleReplayed && isCarriedClearanceStale(result.sentClearanceFp)) {
+                            if (!present) ApiQuotaPool.onServerRateLimited(
+                                HttpHeaderUtils.rateLimitCooldownMs(result.retryAfterSeconds, 60_000L), cfChallenge = true)
+                            if (present && retryAllowed && !staleReplayed && isCarriedClearanceStale(result.sentClearanceFp)) {
                                 staleReplayed = true
                                 diagnostics.log("检测到携带过期 cf_clearance 撞盾(sent=${result.sentClearanceFp})，跳过 WebView 直接换新值重放: $path")
                                 continue
@@ -5867,71 +5880,6 @@ class TopicRepository(
                                 requestGeneration = ticket.sessionGeneration,
                                 receivedAtElapsedMs = receivedAt,
                             )
-                        }
-                        result.status == 429 -> {
-                            val cfChallenge = ChallengeDetector.isChallenge429(result.status, result.cfMitigated, result.body) ||
-                                isCfChallengeBody(result.body)
-                            if (cfChallenge) {
-                                if (retryAllowed && !staleReplayed && isCarriedClearanceStale(result.sentClearanceFp)) {
-                                    staleReplayed = true
-                                    diagnostics.log("429 CF 挑战携带过期凭据(sent=${result.sentClearanceFp})，换新值直接重放: $path")
-                                    continue
-                                }
-                                if (allow429Challenge && retryAllowed && present && result.sentClearanceFp == "-") {
-                                    diagnostics.log("429 CF 挑战当前无有效 cf_clearance(sent=-)，先尝试一次静默补签: $path")
-                                    if (ticket.isProbe) probeSettled = true
-                                    throw NeedsInteractiveVerification(
-                                        "请求 $path 遇到 Cloudflare 速率验证",
-                                        failedClearanceFp = "-",
-                                        isFrom429 = true,
-                                        readProbePath = path,
-                                        requestRound = ticket.round,
-                                        requestGeneration = ticket.sessionGeneration,
-                                        receivedAtElapsedMs = receivedAt,
-                                        retryAfterSeconds = result.retryAfterSeconds,
-                                    )
-                                }
-                                // 速率型挑战：短冷却并在第 2 次命中时立即换线降温；前台请求在阈值内无感退避重放，避免连续弹错。
-                                probeSettled = true
-                                val cooldownEx = enterChallenge429Cooldown(
-                                    path = path,
-                                    retryAfterSeconds = result.retryAfterSeconds,
-                                    sentClearanceFp = result.sentClearanceFp,
-                                    requestRound = ticket.round,
-                                    requestGeneration = ticket.sessionGeneration,
-                                    receivedAtElapsedMs = receivedAt,
-                                )
-                                val waitMs = cooldownEx.retryAfterMs
-                                if (retryAllowed && present && attempt < MAX_RETRIES &&
-                                    waitMs in 1L..(AUTO_RETRY_MAX_WAIT_SECONDS * 1_000L)
-                                ) {
-                                    val jitterMs = (200L..600L).random()
-                                    val totalWaitMs = waitMs + jitterMs
-                                    diagnostics.log("前台请求 429 挑战自动退避 ${totalWaitMs}ms 后无感重试(${attempt + 1}/$MAX_RETRIES): $path")
-                                    delay(totalWaitMs)
-                                    attempt++
-                                    continue
-                                }
-                                throw cooldownEx
-                            }
-                            probeSettled = true
-                            val cooldownEx = enterRateLimitCooldown(
-                                path = path,
-                                retryAfterSeconds = result.retryAfterSeconds,
-                                requestRound = ticket.round,
-                                requestGeneration = ticket.sessionGeneration,
-                                receivedAtElapsedMs = receivedAt,
-                            )
-                            val waitSec = result.retryAfterSeconds ?: ((attempt + 1) * 2L)
-                            if (retryAllowed && present && attempt < MAX_RETRIES && waitSec in 1L..AUTO_RETRY_MAX_WAIT_SECONDS) {
-                                val jitterMs = (200L..800L).random()
-                                val totalWaitMs = (waitSec * 1_000L) + jitterMs
-                                diagnostics.log("前台请求 429 自动等待 ${totalWaitMs}ms (含抖动 ${jitterMs}ms) 后重试(${attempt + 1}/$MAX_RETRIES): $path")
-                                delay(totalWaitMs)
-                                attempt++
-                            } else {
-                                throw cooldownEx
-                            }
                         }
                         result.status == 403 -> {
                             if (isMainSite) notify403OrChallenged("request $path 403")
@@ -6228,29 +6176,21 @@ class TopicRepository(
         private var challenge429Streak = 0
         private var lastChallenge429At = 0L
         private var lastChallenge429StepDownAt = 0L
-        private var lastChallenge429RotateAt = 0L
 
-        /** 递增冷却连续撞满最高档后的有限度换线（由 AppContainer 注入，轮换 Anycast 优选节点并回收连接）。 */
-        @Volatile var onChallenge429Persistent: ((reason: String) -> Unit)? = null
-
-        /**
-         * 速率型 429 挑战进入递增冷却（12s → 24s → 40s），不判废凭据、不弹验证页。
-         * 同轮次并发/重复处理合并计为一次且不重算倒计时；返回冷却毫秒、当前档位与是否需要触发换线。
-         */
-        fun enterChallenge429Cooldown(
-            path: String,
+        /** 同一轮只计一次，服务端更长的等待时间始终优先。 */
+        private fun enterChallenge429Cooldown(
             retryAfterSeconds: Long?,
             sessionStore: SessionStore?,
             requestRound: Long = -1L,
             requestGeneration: Long = -1L,
             receivedAtElapsedMs: Long = 0L,
-        ): Triple<Long, Int, Boolean> {
+        ): Pair<Long, Int> {
             val nowElapsed = SystemClock.elapsedRealtime()
             val originElapsed = if (receivedAtElapsedMs in 1L..nowElapsed) receivedAtElapsedMs else nowElapsed
             val nowWall = System.currentTimeMillis()
             val retryAfterMs = retryAfterSeconds?.takeIf { it > 0L }?.coerceAtMost(86_400L)?.times(1_000L) ?: 0L
             var shouldNotifyQuota = false
-            val (remaining, streak, rotate) = synchronized(rateLimitLock) {
+            val (remaining, streak) = synchronized(rateLimitLock) {
                 val serverUntil = if (retryAfterMs > 0L) originElapsed + retryAfterMs else 0L
                 when (classifyCooldownDecisionLocked(nowElapsed, requestRound, requestGeneration, sessionStore)) {
                     CooldownSlotDecision.StaleRound,
@@ -6259,24 +6199,15 @@ class TopicRepository(
                             shouldNotifyQuota = true
                         }
                         releaseProbeOwnerLocked(requestRound)
-                        Triple((rateLimitedUntil - nowElapsed).coerceAtLeast(0L), activeCooldownStreak.coerceAtLeast(1), false)
+                        (rateLimitedUntil - nowElapsed).coerceAtLeast(0L) to activeCooldownStreak.coerceAtLeast(1)
                     }
                     CooldownSlotDecision.NewRound -> {
                         if (nowElapsed - lastChallenge429At > CHALLENGE_429_STREAK_RESET_MS) challenge429Streak = 0
                         lastChallenge429At = nowElapsed
-                        val rawStep = CHALLENGE_429_STEPS_MS[challenge429Streak.coerceAtMost(CHALLENGE_429_STEPS_MS.lastIndex)]
-                        challenge429Streak++
-                        val shouldRotate = challenge429Streak >= CHALLENGE_429_STEPS_MS.size &&
-                            nowElapsed - lastChallenge429RotateAt > CHALLENGE_429_ROTATE_INTERVAL_MS
-                        val step = if (shouldRotate) {
-                            lastChallenge429RotateAt = nowElapsed
-                            challenge429Streak = 0
-                            2_500L
-                        } else {
-                            rawStep
-                        }
+                        challenge429Streak = (challenge429Streak + 1).coerceAtMost(CHALLENGE_429_STEPS_MS.size)
+                        val step = CHALLENGE_429_STEPS_MS[challenge429Streak - 1]
                         activeCooldownRound = if (requestRound >= 0L) requestRound else rateLimitRound
-                        activeCooldownStreak = if (shouldRotate) CHALLENGE_429_STEPS_MS.size else challenge429Streak
+                        activeCooldownStreak = challenge429Streak
 
                         val wasActive = rateLimitedUntil > nowElapsed
                         rateLimitedByCfChallenge = if (wasActive) rateLimitedByCfChallenge else true
@@ -6289,17 +6220,14 @@ class TopicRepository(
                         val rem = (rateLimitedUntil - nowElapsed).coerceAtLeast(0L)
                         sessionStore?.setRateLimitedUntil(nowWall + rem)
                         shouldNotifyQuota = rem > 0L
-                        Triple(rem, activeCooldownStreak, shouldRotate)
+                        rem to activeCooldownStreak
                     }
                 }
             }
             if (shouldNotifyQuota && remaining > 0L) {
                 ApiQuotaPool.onServerRateLimited(remaining, cfChallenge = true)
             }
-            if (rotate) {
-                runCatching { onChallenge429Persistent?.invoke("连续 $streak 次 429 速率挑战: $path") }
-            }
-            return Triple(remaining, streak, rotate)
+            return remaining to streak
         }
 
         private fun onMainSiteGetSucceeded(ticket: GetSlotTicket, sessionStore: SessionStore?) {
@@ -6424,8 +6352,8 @@ class TopicRepository(
         const val RATE_LIMIT_COOLDOWN_MS = 10_000L
         /** 进程重启后恢复已持久化的服务端 Retry-After 冷却上限（24 小时），避免截断长冷却。 */
         private const val MAX_PERSISTED_COOLDOWN_MS = 86_400_000L
-        /** 速率型 429 挑战的递增冷却档位（第 2 次即切线降温，不在同一差节点死扛）。 */
-        private val CHALLENGE_429_STEPS_MS = longArrayOf(6_000L, 12_000L)
+        /** 重复受限时逐步延长等待；保留用户选择的线路。 */
+        private val CHALLENGE_429_STEPS_MS = longArrayOf(12_000L, 24_000L, 60_000L)
         /** 超过该时长无新的 429 挑战，档位从头计。 */
         private const val CHALLENGE_429_STREAK_RESET_MS = 3 * 60_000L
         /** 连续 429 档位成功恢复时，每级至少间隔该时长后再向下退档，避免并发 2xx 瞬间清零。 */
@@ -6438,8 +6366,6 @@ class TopicRepository(
         private const val PROBE_WAIT_POLL_MS = 150L
         /** 到期探针或静默补签在途时，后台请求的轻退避提示。 */
         private const val PROBE_WAIT_BACKOFF_MS = 2_000L
-        /** 换线降温的最小间隔，避免短时间抖动；同时防止被差节点卡死。 */
-        private const val CHALLENGE_429_ROTATE_INTERVAL_MS = 30_000L
         /** timings 遇 429 挑战时仅自身熔断的时长（不写主站全局冷却）。 */
         private const val TIMINGS_CHALLENGE_429_FUSE_MS = 60_000L
         /** timings 遇普通 429 且无 Retry-After 时的自身熔断时长。 */

@@ -48,6 +48,7 @@ class MainActivity : ComponentActivity() {
 
     override fun onResume() {
         super.onResume()
+        org.linuxdo.android.data.ApiQuotaPool.markForeground()
         clipboardResumed = true
         // 先回收后台久置的旧连接，再放行下面的未读刷新等首批请求。
         (application as App).container.onAppForeground()
@@ -64,7 +65,7 @@ class MainActivity : ComponentActivity() {
                 org.linuxdo.android.service.NotificationHelper.promptIgnoreBatteryOptimizationsIfNeeded(this)
             }
         }
-        viewModel.refreshUnread(force = true)
+        viewModel.refreshUnread()
         window.decorView.postDelayed({
             if (!isFinishing && !isDestroyed) {
                 viewModel.checkClipboard(this)

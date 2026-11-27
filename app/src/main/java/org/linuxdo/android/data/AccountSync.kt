@@ -121,6 +121,25 @@ class AccountDraftStore(context: Context) {
 @Serializable
 data class PendingRead(val id: String, val topicId: Long, val topicTimeMs: Long, val postTimesMs: Map<Int, Long>)
 
+internal data class ReadUpload(val ids: Set<String>, val topicId: Long, val topicTimeMs: Long, val postTimesMs: Map<Int, Long>)
+
+internal fun nextReadUpload(entries: List<PendingRead>, maxFloors: Int): ReadUpload? {
+    val first = entries.firstOrNull() ?: return null
+    val ids = mutableSetOf(first.id)
+    val floors = first.postTimesMs.toMutableMap()
+    var total = first.topicTimeMs
+    for (item in entries.drop(1)) {
+        if (item.topicId != first.topicId) continue
+        if (item.topicTimeMs > TopicRepository.MAX_TOPIC_TIME_MS - total ||
+            floors.size + item.postTimesMs.keys.count { it !in floors } > maxFloors ||
+            item.postTimesMs.any { (floor, time) -> time > TopicRepository.MAX_POST_TIME_MS - (floors[floor] ?: 0L) }) break
+        total += item.topicTimeMs
+        ids.add(item.id)
+        item.postTimesMs.forEach { (floor, time) -> floors[floor] = (floors[floor] ?: 0L) + time }
+    }
+    return ReadUpload(ids, first.topicId, total, floors)
+}
+
 /** 每批有独立 ID；成功只移除本批，不误删请求期间新增的阅读。 */
 class ReadSyncOutbox(context: Context) {
     private val prefs = context.getSharedPreferences("read_sync_outbox", Context.MODE_PRIVATE)
@@ -137,7 +156,7 @@ class ReadSyncOutbox(context: Context) {
     }
 
     @Synchronized
-    fun acknowledge(userId: Long, id: String) = write(userId, entries(userId).filterNot { it.id == id })
+    fun acknowledge(userId: Long, ids: Set<String>) = write(userId, entries(userId).filterNot { it.id in ids })
 
     @Synchronized
     fun clear(userId: Long) = write(userId, emptyList())

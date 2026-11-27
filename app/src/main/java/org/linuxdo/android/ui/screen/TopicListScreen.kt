@@ -189,6 +189,8 @@ data class TopicListUiState(
     val incomingTopicIds: Set<Long> = emptySet(),
     val highlightedTopicIds: Set<Long> = emptySet(),
     val needsRefresh: Boolean = false,
+    val pageLoadFailed: Boolean = false,
+    val retryAtElapsedMs: Long = 0L,
 )
 
 /** "最新"与"某分类下的帖子"用同一个列表页,只是标题与数据源不同。 */
@@ -580,8 +582,8 @@ fun TopicListScreen(
         pagePlainItems: List<TopicListItem>,
         keyPrefix: String,
     ) {
-        pageState.error?.let { message ->
-            item(key = "${keyPrefix}_error") { ErrorNotice(message, onRefresh) }
+        pageState.error?.takeUnless { pageState.pageLoadFailed }?.let { message ->
+            item(key = "${keyPrefix}_error") { ErrorNotice(message, pageState.retryAtElapsedMs, onRefresh) }
         }
         if (pageState.initialLoading && pageState.items.isEmpty()) {
             item(key = "${keyPrefix}_loading") { IosLoadingBox() }
@@ -673,6 +675,9 @@ fun TopicListScreen(
             }
         }
 
+        if (pageState.pageLoadFailed) pageState.error?.let { message ->
+            item(key = "${keyPrefix}_page_error") { ErrorNotice(message, pageState.retryAtElapsedMs, onLoadMore) }
+        }
         if (pageState.loadingMore) {
             item(key = "${keyPrefix}_load_more") { IosLoadingBox() }
         }
@@ -3233,6 +3238,19 @@ internal fun CategoryTag(category: Category, prominent: Boolean = false, onClick
 
 @Composable
 internal fun ErrorNotice(message: String, onRetry: () -> Unit) {
+    ErrorNotice(message, 0L, onRetry)
+}
+
+@Composable
+internal fun ErrorNotice(message: String, retryAtElapsedMs: Long, onRetry: () -> Unit) {
+    fun remainingSeconds() = ((retryAtElapsedMs - android.os.SystemClock.elapsedRealtime() + 999L) / 1000L).coerceAtLeast(0L)
+    var seconds by remember(retryAtElapsedMs) { mutableStateOf(remainingSeconds()) }
+    LaunchedEffect(retryAtElapsedMs) {
+        while (seconds > 0L) {
+            kotlinx.coroutines.delay(1_000L)
+            seconds = remainingSeconds()
+        }
+    }
     Column(
         Modifier
             .fillMaxWidth()
@@ -3241,7 +3259,11 @@ internal fun ErrorNotice(message: String, onRetry: () -> Unit) {
         verticalArrangement = Arrangement.spacedBy(10.dp),
     ) {
         Text(
-            text = message,
+            text = when {
+                retryAtElapsedMs == 0L -> message
+                seconds > 0L -> "站点限制了请求，${seconds} 秒后可重试"
+                else -> "等待时间已到，可以重试"
+            },
             style = IosTheme.type.subheadline,
             color = IosTheme.colors.secondaryLabel,
         )
@@ -3249,13 +3271,13 @@ internal fun ErrorNotice(message: String, onRetry: () -> Unit) {
             Text(
                 text = "重试",
                 style = IosTheme.type.body,
-                color = IosTheme.colors.accent,
+                color = if (seconds > 0L) IosTheme.colors.tertiaryLabel else IosTheme.colors.accent,
                 modifier = Modifier
                     .clip(RoundedCornerShape(8.dp))
-                    .clickable(onClick = onRetry)
+                    .clickable(enabled = seconds == 0L, onClick = onRetry)
                     .padding(horizontal = 16.dp, vertical = 12.dp),
             )
-            org.linuxdo.android.ui.design.NetworkSettingsLink()
+            if (retryAtElapsedMs == 0L) org.linuxdo.android.ui.design.NetworkSettingsLink()
         }
     }
 }

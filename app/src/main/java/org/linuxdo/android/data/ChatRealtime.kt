@@ -95,7 +95,7 @@ class ChatRealtime(
         reconcile()
         if (refreshJob?.isActive == true || !current(store.sessionGeneration)) return
         refreshJob = scope.launch {
-            try { refreshSnapshot(store.sessionGeneration) }
+            try { refreshSnapshot(store.sessionGeneration, explicit = true) }
             catch (cancelled: CancellationException) { throw cancelled }
             catch (error: Exception) { _state.update { it.copy(error = error.message ?: "聊天列表刷新失败") } }
         }
@@ -103,7 +103,8 @@ class ChatRealtime(
 
     /** 息屏后沿用已有系统唤醒检查，不另起高频后台计时器。 */
     suspend fun pollWhenDisconnected() = withContext(Dispatchers.Main.immediate) {
-        if (job?.isActive == true || !store.isBackgroundNotificationEnabled() || !store.hasSession()) return@withContext
+        if (job?.isActive == true || !store.isBackgroundNotificationEnabled() || !store.hasSession() ||
+            ApiQuotaPool.automaticReadDelayMs() > 0L) return@withContext
         if (_state.value.generation != store.sessionGeneration) reset()
         if (lastRefresh > 0L && SystemClock.elapsedRealtime() - lastRefresh < 30_000) return@withContext
         try { refreshSnapshot(store.sessionGeneration) }
@@ -111,12 +112,12 @@ class ChatRealtime(
         catch (_: Exception) { /* 由现有后台轮询和网络退避安排下一次检查。 */ }
     }
 
-    private suspend fun refreshSnapshot(generation: Long) = refreshGate.withLock {
+    private suspend fun refreshSnapshot(generation: Long, explicit: Boolean = false) = refreshGate.withLock {
         if (!current(generation)) return@withLock
         val startedRevision = revision
         _state.update { it.copy(loading = true) }
         try {
-            val channels = repository.fetchChatChannels(silent = true)
+            val channels = repository.fetchChatChannels(silent = !explicit)
             if (!current(generation)) return@withLock
             val existing = _state.value.channels.associateBy { it.id }
             // 请求期间新到的消息/已读确认优先，旧快照不能覆盖刚刚更新的角标。
@@ -163,7 +164,12 @@ class ChatRealtime(
                     delay(1_000)
                     continue
                 }
-                if (SystemClock.elapsedRealtime() - lastRefresh >= 30_000 || lastRefresh == 0L) {
+                val waitMs = ApiQuotaPool.automaticReadDelayMs()
+                if (waitMs > 0L) {
+                    delay(waitMs)
+                    continue
+                }
+                if (lastRefresh == 0L || SystemClock.elapsedRealtime() - lastRefresh >= 5 * 60_000L) {
                     refreshSnapshot(generation)
                     _events.emit(ChatLiveEvent(generation, resync = true))
                 }
@@ -176,11 +182,10 @@ class ChatRealtime(
                 }
                 cursors.keys.retainAll(names)
                 names.forEach { cursors.putIfAbsent(it, -1L) }
-                val batch = withTimeoutOrNull(35_000) {
-                    repository.pollChatMessages(clientId, cursors.toMap(), ++sequence)
-                }
+                val pollStarted = SystemClock.elapsedRealtime()
+                val batch = repository.pollChatMessages(clientId, cursors.toMap(), ++sequence)
                 if (!current(generation)) continue
-                batch.orEmpty().forEach { event ->
+                batch.forEach { event ->
                     if (event.channel == "/__status") {
                         (event.data as? JsonObject)?.forEach { (name, value) ->
                             if (name in cursors) (value as? JsonPrimitive)?.longOrNull?.let { cursors[name] = it }
@@ -191,20 +196,22 @@ class ChatRealtime(
                     }
                 }
                 // 首次订阅建立游标后再读一次快照，补上初始化期间的消息。
-                if (!subscribed && batch != null) {
+                if (!subscribed) {
                     subscribed = true
                     refreshSnapshot(generation)
                     _events.emit(ChatLiveEvent(generation, resync = true))
                 }
                 retryMs = 5_000L
-                delay(250)
+                // 有些服务端会立即返回空批次，给无事件的轮询保留最小周期。
+                val idleGap = if (batch.isEmpty()) 5_000L - (SystemClock.elapsedRealtime() - pollStarted) else 0L
+                delay(maxOf(250L, idleGap))
             } catch (cancelled: CancellationException) {
                 currentCoroutineContext().ensureActive()
                 delay(1_000) // 会话代次变化由下一轮重新建立订阅。
             } catch (error: Exception) {
                 if (current(generation)) _state.update { it.copy(error = "聊天连接暂时中断，正在重连") }
-                lastRefresh = 0L
-                delay(maxOf(retryMs, TopicRepository.mainSiteGateWaitMs()))
+                subscribed = false
+                delay(maxOf(retryMs, TopicRepository.mainSiteGateWaitMs(), ApiQuotaPool.automaticBackoffMs()))
                 retryMs = (retryMs * 2).coerceAtMost(60_000L)
             }
         }
