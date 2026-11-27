@@ -122,6 +122,25 @@ class ReadingStore(context: Context) {
     fun isSeen(topicId: Long): Boolean = if (syncReadProgress) confirmedReads.posts(topicId).isNotEmpty()
         else synchronized(seen) { topicId in seen }
 
+    // 每 64 层共用一个位图。只影响本机的楼层蓝点，远端确认与补传仍独立。
+    private fun viewedFloorsKey(accountId: Long, topicId: Long, floor: Int) =
+        "viewed_${accountId}_${topicId}_${floor / Long.SIZE_BITS}"
+
+    fun hasViewedFloor(accountId: Long, topicId: Long, floor: Int): Boolean {
+        if (accountId <= 0 || accountId != currentUserId || topicId <= 0 || floor <= 0) return false
+        val bits = prefs.getLong(viewedFloorsKey(accountId, topicId, floor), 0L)
+        return bits and (1L shl (floor % Long.SIZE_BITS)) != 0L
+    }
+
+    @Synchronized
+    fun markViewedFloor(accountId: Long, topicId: Long, floor: Int) {
+        if (accountId <= 0 || accountId != currentUserId || topicId <= 0 || floor <= 0) return
+        val key = viewedFloorsKey(accountId, topicId, floor)
+        val bits = prefs.getLong(key, 0L)
+        val next = bits or (1L shl (floor % Long.SIZE_BITS))
+        if (next != bits) prefs.edit { putLong(key, next) }
+    }
+
     fun confirmedPostNumbers(topicId: Long): Set<Int> = confirmedReads.posts(topicId)
 
     fun confirmPosts(userId: Long, topicId: Long, postNumbers: Set<Int>): Set<Int> =

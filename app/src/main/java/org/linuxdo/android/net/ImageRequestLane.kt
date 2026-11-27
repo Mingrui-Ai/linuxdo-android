@@ -24,3 +24,22 @@ internal fun siteImageLane(url: HttpUrl, isSignature: Boolean = false): ImageReq
 }
 
 private val imageExtensions = listOf(".png", ".jpg", ".jpeg", ".webp", ".gif", ".avif", ".svg", ".ico")
+
+/** 小头像即使几毫秒就返回，下一张主站图片也要错开发送；限流恢复后逐张加载。 */
+internal class ImageSendPacer {
+    private var lastSend: Long? = null
+    private var recoveryUntil = 0L
+
+    @Synchronized
+    fun recoverAfter(cooldownUntil: Long) {
+        recoveryUntil = maxOf(recoveryUntil, cooldownUntil + 60_000L)
+    }
+
+    @Synchronized
+    fun reserveOrWait(now: Long): Long {
+        val spacing = if (now < recoveryUntil) 750L else 200L
+        val wait = (lastSend?.let { it + spacing - now } ?: 0L).coerceAtLeast(0L)
+        if (wait == 0L) lastSend = now
+        return wait
+    }
+}

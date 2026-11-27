@@ -133,6 +133,7 @@ class RateLimitException(
     val sessionGeneration: Long = -1L,
     val receivedAtElapsedMs: Long = 0L,
     val alreadyRecorded: Boolean = false,
+    val canRetryPageRead: Boolean = false,
 ) : Exception("请求过于频繁，请在 ${((retryAfterMs + 999L) / 1_000L).coerceAtLeast(1L)} 秒后重试")
 
 object ChallengeDetector {

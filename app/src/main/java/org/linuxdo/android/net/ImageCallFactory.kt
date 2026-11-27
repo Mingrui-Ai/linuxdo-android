@@ -1,5 +1,10 @@
 package org.linuxdo.android.net
 
+import coil.intercept.Interceptor
+import coil.request.ImageResult
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
+import okhttp3.HttpUrl.Companion.toHttpUrlOrNull
 import okhttp3.Call
 import okhttp3.Dispatcher
 import okhttp3.OkHttpClient
@@ -30,5 +35,27 @@ internal class ImageCallFactory(private val currentClient: () -> OkHttpClient) :
         }
         val lane = siteImageLane(request.url) ?: ImageRequestLane.MEDIA
         return clients.getValue(lane).newCall(request)
+    }
+}
+
+/** 相同站内图片只让一项先填充 Coil 缓存，后续请求仍按自己的尺寸、缓存策略解码。 */
+internal class SiteImageCacheInterceptor : Interceptor {
+    private class Entry(val mutex: Mutex = Mutex(), var users: Int = 0)
+    private val active = mutableMapOf<String, Entry>()
+
+    override suspend fun intercept(chain: Interceptor.Chain): ImageResult {
+        val request = chain.request
+        val url = (request.data as? String)?.toHttpUrlOrNull()
+        if (url == null || siteImageLane(url) == null || !request.diskCachePolicy.readEnabled ||
+            !request.diskCachePolicy.writeEnabled) return chain.proceed(request)
+        val key = request.diskCacheKey ?: url.toString()
+        val entry = synchronized(active) { active.getOrPut(key) { Entry() }.also { it.users++ } }
+        try {
+            return entry.mutex.withLock { chain.proceed(request) }
+        } finally {
+            synchronized(active) {
+                if (--entry.users == 0) active.remove(key)
+            }
+        }
     }
 }

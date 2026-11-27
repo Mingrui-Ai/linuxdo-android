@@ -322,6 +322,11 @@ private class SessionHeaderInterceptor(
                 ?.backgroundRequestDelayMs() ?: 0L) > 0L) {
             throw IOException("后台通知请求暂缓，等待验证或限流结束")
         }
+        if (host == Config.HOST && original.tag(SiteImageGateInterceptor.ExplicitDownloadRequest::class.java) == null &&
+            siteImageLane(original.url, original.tag(SiteImageGateInterceptor.SignatureRequest::class.java) != null) != null) {
+            SiteImageGateInterceptor.awaitImageSend(chain.call())
+            checkSession()
+        }
         val response = chain.proceed(outgoing)
         val responseMatchesUserAgent = runCatching {
             requestUserAgent == (store.userAgentOrNull() ?: userAgent)
@@ -464,13 +469,17 @@ fun isTransientImageError(error: Throwable?): Boolean = when (error) {
 suspend fun awaitImageRetrySlot(attempt: Int) {
     SiteImageGateInterceptor.awaitClearanceRecovery()
     val backoffMs = 2_000L shl attempt.coerceIn(0, 3)
-    val jitterMs = kotlin.random.Random.nextLong(400L, 1_800L)
-    kotlinx.coroutines.delay(maxOf(SiteImageGateInterceptor.cooldownRemainingMs(), backoffMs) + jitterMs)
+    kotlinx.coroutines.delay(backoffMs)
     while (true) {
         SiteImageGateInterceptor.awaitClearanceRecovery()
         val remaining = SiteImageGateInterceptor.cooldownRemainingMs()
-        if (remaining <= 0L) return
-        kotlinx.coroutines.delay(minOf(remaining, 1_000L))
+        if (remaining > 0L) {
+            kotlinx.coroutines.delay(remaining.coerceAtMost(1_000L))
+        } else {
+            // 冷却可能延长。把错峰放在真正放行之后，再确认一次，避免一屏头像同时重试。
+            kotlinx.coroutines.delay(kotlin.random.Random.nextLong(400L, 1_800L))
+            if (SiteImageGateInterceptor.cooldownRemainingMs() == 0L) return
+        }
     }
 }
 
@@ -501,6 +510,7 @@ internal object SiteImageGateInterceptor {
     private const val DEFAULT_COOLDOWN_MS = 4_000L
 
     private val permits = ImageRequestLane.entries.associateWith { java.util.concurrent.Semaphore(it.concurrency, true) }
+    private val sends = ImageSendPacer()
     @Volatile private var cooldownUntil = 0L
     @Volatile private var recoveryStore: SessionStore? = null
 
@@ -559,6 +569,22 @@ internal object SiteImageGateInterceptor {
         org.linuxdo.android.data.TopicRepository.mainSiteGateWaitMs(),
     )
 
+    /** 只在真正发送主站图片前排队，磁盘与内存命中直接显示。 */
+    fun awaitImageSend(call: okhttp3.Call) {
+        while (true) {
+            if (call.isCanceled()) throw IOException("Canceled")
+            checkCooldown()
+            val wait = sends.reserveOrWait(android.os.SystemClock.elapsedRealtime())
+            if (wait == 0L) return
+            try {
+                Thread.sleep(minOf(wait, 100L))
+            } catch (error: InterruptedException) {
+                Thread.currentThread().interrupt()
+                throw java.io.InterruptedIOException("Image request interrupted").apply { initCause(error) }
+            }
+        }
+    }
+
     private fun checkCooldown() {
         val remaining = cooldownRemainingMs()
         if (remaining > 0L) throw ThrottledException("站内图片限流冷却中，还剩 ${remaining / 1_000L}s")
@@ -568,7 +594,7 @@ internal object SiteImageGateInterceptor {
         val cfChallenge = response.header("cf-mitigated")?.contains("challenge", ignoreCase = true) == true
         return HttpHeaderUtils.rateLimitCooldownMs(
             HttpHeaderUtils.parseRetryAfter(response.header("Retry-After")),
-            if (cfChallenge) DEFAULT_COOLDOWN_MS * 2 else DEFAULT_COOLDOWN_MS,
+            if (cfChallenge) 30_000L else DEFAULT_COOLDOWN_MS,
         )
     }
 
@@ -576,6 +602,10 @@ internal object SiteImageGateInterceptor {
         val cfChallenge = response.header("cf-mitigated")?.contains("challenge", ignoreCase = true) == true
         val cooldownMs = responseCooldownMs(response)
         val now = android.os.SystemClock.elapsedRealtime()
+        if (response.request.url.host == Config.HOST) {
+            sends.recoverAfter(now + cooldownMs)
+            org.linuxdo.android.data.ApiQuotaPool.onServerRateLimited(cooldownMs, cfChallenge)
+        }
         val first = synchronized(this) {
             val wasCooling = now < cooldownUntil
             cooldownUntil = maxOf(cooldownUntil, now + cooldownMs)

@@ -91,6 +91,7 @@ class App : Application(), ImageLoaderFactory {
                         override fun hasSession(): Boolean = store.hasSession()
                         override fun isBackgroundNotificationEnabled(): Boolean = store.isBackgroundNotificationEnabled()
                         override fun backgroundRequestDelayMs(): Long = maxOf(
+                            org.linuxdo.android.data.ApiQuotaPool.automaticReadDelayMs(),
                             org.linuxdo.android.data.TopicRepository.mainSiteGateWaitMs(),
                             org.linuxdo.android.data.ApiQuotaPool.UNREAD_POLL.penaltyRemainingMs(),
                             if (org.linuxdo.android.data.TopicRepository.isSilentRevalidating() ||
@@ -177,6 +178,7 @@ class AppContainer(context: Context) {
 
     init {
         installCrashHandler(context, diagnostics)
+        org.linuxdo.android.data.ApiQuotaPool.restoreAutomaticBackoff(preferences)
     }
     private val appContext = context.applicationContext
     val sessionStore = SessionStore(context)
@@ -280,6 +282,7 @@ class AppContainer(context: Context) {
     val imageLoader: ImageLoader = ImageLoader.Builder(context)
         .callFactory(org.linuxdo.android.net.ImageCallFactory { dohCoordinator.currentClient })
         .components {
+            add(org.linuxdo.android.net.SiteImageCacheInterceptor())
             if (Build.VERSION.SDK_INT >= 28) {
                 add(ImageDecoderDecoder.Factory(enforceMinimumFrameDelay = true))
             } else {
@@ -325,16 +328,6 @@ class AppContainer(context: Context) {
             diagnostics.log("网络链路: 默认网络已切换，回收连接")
             dohCoordinator.recycleConnections("默认网络切换")
             updateWebViewProxyState()
-        }
-        // 递增冷却撞满仍持续 429 速率挑战：有限度换一个 Anycast 节点降温（间隔由 TopicRepository 限定为 10 分钟）。
-        org.linuxdo.android.data.TopicRepository.onChallenge429Persistent = { reason ->
-            val next = anycastPool.rotateWinner()
-            if (next != null) {
-                dohCoordinator.recycleConnections("429 速率挑战换线")
-                diagnostics.log("网络链路: $reason，轮换优选节点降温")
-            } else {
-                diagnostics.log("网络链路: $reason，无可用备选节点，维持当前线路")
-            }
         }
         updateWebViewProxyState()
         dohCoordinator.warmUpAnycastIfNeeded()
