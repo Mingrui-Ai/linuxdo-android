@@ -46,6 +46,8 @@ internal fun ProfileHeader(
     onEditProfile: (() -> Unit)?,
     onOpenDisplaySettings: () -> Unit,
     onChat: (() -> Unit)?,
+    followAction: ProfileMenuAction?,
+    notificationController: org.linuxdo.android.ui.UserNotificationController?,
     onPrivateMessage: (() -> Unit)?,
     menuActions: List<ProfileMenuAction>,
     communityScore: Int?,
@@ -122,28 +124,32 @@ internal fun ProfileHeader(
                 IosNavBar(
                     title = "", onBack = onBack, background = Color.Transparent, showDivider = false,
                     trailing = {
-                        Box {
-                            TextButton(onClick = { showMenu = true },
-                                modifier = Modifier.width(44.dp).semantics { contentDescription = "个人主页菜单" }) {
-                                Text("⋯", color = colors.accent, fontSize = 22.sp)
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            IconButton(onClick = {
+                                context.startActivity(Intent.createChooser(Intent(Intent.ACTION_SEND).apply {
+                                    type = "text/plain"
+                                    putExtra(Intent.EXTRA_TEXT, "${Config.BASE_URL}/u/${android.net.Uri.encode(username)}")
+                                }, "分享个人主页"))
+                            }, modifier = Modifier.size(44.dp)) {
+                                Icon(Icons.Default.Share, "分享个人主页", tint = colors.accent)
                             }
-                            ProfileMenu(
-                                expanded = showMenu,
-                                actions = menuActions + listOfNotNull(
-                                    onSwitchAccount?.let { ProfileMenuAction("切换账号", Icons.Default.Person, it) },
-                                    onEditProfile?.let { ProfileMenuAction("编辑个人资料", Icons.Default.Edit, it) },
-                                    ProfileMenuAction("主页显示设置", Icons.Default.Settings, onOpenDisplaySettings),
-                                    onPrivateMessage?.let { ProfileMenuAction("私信", Icons.Default.Email, it) },
-                                    onChat?.let { ProfileMenuAction("私聊", Icons.Default.Send, it) },
-                                    ProfileMenuAction("分享个人主页", Icons.Default.Share, onClick = {
-                                        context.startActivity(Intent.createChooser(Intent(Intent.ACTION_SEND).apply {
-                                            type = "text/plain"
-                                            putExtra(Intent.EXTRA_TEXT, "${Config.BASE_URL}/u/${android.net.Uri.encode(username)}")
-                                        }, "分享个人主页"))
-                                    }),
-                                ),
-                                onDismiss = { showMenu = false },
-                            )
+                            notificationController?.let { ProfileNotificationButton(it) }
+                            Box {
+                                TextButton(onClick = { showMenu = true },
+                                    modifier = Modifier.width(44.dp).semantics { contentDescription = "个人主页菜单" }) {
+                                    Text("⋯", color = colors.accent, fontSize = 22.sp)
+                                }
+                                ProfileMenu(
+                                    expanded = showMenu,
+                                    actions = menuActions + listOfNotNull(
+                                        onSwitchAccount?.let { ProfileMenuAction("切换账号", Icons.Default.Person, it) },
+                                        onEditProfile?.let { ProfileMenuAction("编辑个人资料", Icons.Default.Edit, it) },
+                                        ProfileMenuAction("主页显示设置", Icons.Default.Settings, onOpenDisplaySettings),
+                                        onPrivateMessage?.let { ProfileMenuAction("私信", Icons.Default.Email, it) },
+                                    ),
+                                    onDismiss = { showMenu = false },
+                                )
+                            }
                         }
                     },
                 )
@@ -157,6 +163,15 @@ internal fun ProfileHeader(
                         } },
                         avatarClickLabel = "查看 @$username 的头像大图",
                         onImageLoaded = { avatarPreviewKey = it })
+                    Spacer(Modifier.weight(1f))
+                    if (followAction != null || onChat != null) {
+                        Column(verticalArrangement = Arrangement.spacedBy(6.dp), horizontalAlignment = Alignment.End) {
+                            followAction?.let { action ->
+                                ProfileQuickAction(action.label, action.icon, action.enabled, action.onClick)
+                            }
+                            onChat?.let { ProfileQuickAction("聊天", Icons.Default.Send, true, it) }
+                        }
+                    }
                 }
             }
         }
@@ -197,6 +212,21 @@ internal fun ProfileHeader(
     }
     previewImage?.let { image ->
         ImageViewer(images = listOf(image)) { previewImage = null }
+    }
+}
+
+@Composable
+private fun ProfileQuickAction(label: String, icon: ImageVector, enabled: Boolean, onClick: () -> Unit) {
+    val colors = IosTheme.colors
+    Surface(onClick = onClick, enabled = enabled, shape = androidx.compose.foundation.shape.RoundedCornerShape(12.dp),
+        color = colors.card.copy(alpha = .94f), contentColor = if (enabled) colors.accent else colors.secondaryLabel,
+        border = androidx.compose.foundation.BorderStroke(1.dp, colors.accent.copy(alpha = .16f))) {
+        Row(Modifier.widthIn(min = 100.dp).heightIn(min = 44.dp).padding(horizontal = 12.dp, vertical = 6.dp),
+            horizontalArrangement = Arrangement.spacedBy(7.dp, Alignment.CenterHorizontally),
+            verticalAlignment = Alignment.CenterVertically) {
+            Icon(icon, null, modifier = Modifier.size(18.dp))
+            Text(label, fontSize = 13.sp, maxLines = 1)
+        }
     }
 }
 

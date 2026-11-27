@@ -32,7 +32,6 @@ sealed interface Route : Serializable {
     data class FollowList(val username: String) : Route
     data class ProfileNetwork(val username: String, val followers: Boolean) : Route
     data class UserBadges(val username: String) : Route
-    data object Blacklist : Route
     data class UserProfile(
         val username: String,
         val initialAvatarUrl: String? = null,

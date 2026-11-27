@@ -152,7 +152,6 @@ import org.linuxdo.android.ui.screen.InAppBrowserSheet
 import org.linuxdo.android.ui.screen.openExternal
 import org.linuxdo.android.ui.screen.ChatRoomScreen
 import org.linuxdo.android.ui.screen.FollowListScreen
-import org.linuxdo.android.ui.screen.BlacklistScreen
 import org.linuxdo.android.ui.screen.UserCardBottomSheet
 import org.linuxdo.android.ui.screen.UserProfileScreen
 import org.linuxdo.android.ui.screen.ProfileBadgesScreen
@@ -799,8 +798,6 @@ private fun MainNavigation(state: UiState, viewModel: MainViewModel, lifecycle: 
     val isSelfHealing by viewModel.isSelfHealing.collectAsStateWithLifecycle()
     val feedGraphicMode by viewModel.feedGraphicMode.collectAsStateWithLifecycle()
     val feedDisplayMode by viewModel.feedDisplayMode.collectAsStateWithLifecycle()
-    val blockedUsers by viewModel.blockedUsers.collectAsStateWithLifecycle()
-    val blockedUsernameSet = remember(blockedUsers) { blockedUsers.map { it.username.lowercase() }.toSet() }
 
     LaunchedEffect(pendingNotificationTarget) {
         val target = pendingNotificationTarget ?: return@LaunchedEffect
@@ -1000,7 +997,6 @@ private fun MainNavigation(state: UiState, viewModel: MainViewModel, lifecycle: 
                 PersonalDrawerAction.Level -> showConnectSheet = true
                 PersonalDrawerAction.Categories -> { viewModel.setCategorySubTab(CategorySectionTab.CATEGORIES); openCategories() }
                 PersonalDrawerAction.Tags -> { viewModel.setCategorySubTab(CategorySectionTab.TAGS); openCategories() }
-                PersonalDrawerAction.Blacklist -> stack.push(Route.Blacklist)
                 PersonalDrawerAction.Settings -> stack.push(Route.Settings)
                 PersonalDrawerAction.Share -> if (username != null) context.startActivity(Intent.createChooser(Intent(Intent.ACTION_SEND).apply {
                     type = "text/plain"
@@ -1135,7 +1131,6 @@ private fun MainNavigation(state: UiState, viewModel: MainViewModel, lifecycle: 
                                 feedDisplayMode = feedDisplayMode,
                                 showTopicUnreadDot = showTopicUnreadDot,
                                 topicUnreadDotPosition = topicUnreadDotPosition,
-                                blockedUsernameSet = blockedUsernameSet,
                                 miniAppHomePullEnabled = miniAppHomePullEnabled,
                                 floatingBallEnabled = floatingBallEnabled,
                                 floatingBallActions = floatingBallActions,
@@ -1289,7 +1284,6 @@ private fun MainNavigation(state: UiState, viewModel: MainViewModel, lifecycle: 
                                     onSubmitFlag = { postId, reasonId, message ->
                                         viewModel.submitFlag(route.topicId, postId, reasonId, message)
                                     },
-                                    blockedUsernames = blockedUsernameSet,
                                 )
                             }
                             Route.CategoryList -> {
@@ -1337,7 +1331,6 @@ private fun MainNavigation(state: UiState, viewModel: MainViewModel, lifecycle: 
                                     feedDisplayMode = feedDisplayMode,
                                     showTopicUnreadDot = showTopicUnreadDot,
                                     topicUnreadDotPosition = topicUnreadDotPosition,
-                                    blockedUsernames = blockedUsernameSet,
                                     onRefresh = { viewModel.loadTagTopics(route.tag, refresh = true) },
                                     onLoadMore = { viewModel.loadTagTopics(route.tag, more = true) },
                                     onOpenTopic = {
@@ -1414,7 +1407,6 @@ private fun MainNavigation(state: UiState, viewModel: MainViewModel, lifecycle: 
                                     feedDisplayMode = feedDisplayMode,
                                     showTopicUnreadDot = showTopicUnreadDot,
                                     topicUnreadDotPosition = topicUnreadDotPosition,
-                                    blockedUsernames = blockedUsernameSet,
                                     onRefresh = { viewModel.loadCategory(route.categoryId, route.slug, refresh = true) },
                                     onLoadMore = { viewModel.loadCategory(route.categoryId, route.slug, more = true) },
                                     onOpenTopic = {
@@ -1554,9 +1546,8 @@ private fun MainNavigation(state: UiState, viewModel: MainViewModel, lifecycle: 
                                         onChat = { target -> viewModel.openChatWithUser(target) { stack.push(it) } },
                                         onComposePrivateMessage = { privateMessageRecipient = it },
                                         onSetFollowing = viewModel::setProfileFollowing,
+                                        onNotificationSettingsObserved = viewModel::onUserNotificationSettingsObserved,
                                         onOpenDisplaySettings = { stack.push(Route.SettingsDetail(org.linuxdo.android.ui.nav.SettingsPage.ProfileDisplay)) },
-                                        isBlocked = profileRoute.username.lowercase() in blockedUsernameSet,
-                                        onToggleBlock = viewModel::toggleProfileBlacklist,
                                         onBack = { stack.pop() },
                                     )
                                 }
@@ -1649,14 +1640,6 @@ private fun MainNavigation(state: UiState, viewModel: MainViewModel, lifecycle: 
                                 onUnfollowBatch = viewModel::unfollowBatch,
                             )
 
-                            Route.Blacklist -> BlacklistScreen(
-                                users = blockedUsers,
-                                onBack = { stack.pop() },
-                                onOpenUser = viewModel::openUserCard,
-                                onRemove = viewModel::removeFromBlacklist,
-                                onRemoveBatch = viewModel::removeBatchFromBlacklist,
-                            )
-
                             is Route.UserTopics -> {
                                 val key = "${if (route.isBookmark) "bookmark" else "created"}:${route.username}"
                                 TopicListScreen(
@@ -1666,7 +1649,6 @@ private fun MainNavigation(state: UiState, viewModel: MainViewModel, lifecycle: 
                                     feedDisplayMode = feedDisplayMode,
                                     showTopicUnreadDot = showTopicUnreadDot,
                                     topicUnreadDotPosition = topicUnreadDotPosition,
-                                    blockedUsernames = blockedUsernameSet,
                                     onRefresh = { viewModel.loadUserTopics(route.username, route.isBookmark, refresh = true) },
                                     onLoadMore = { viewModel.loadUserTopics(route.username, route.isBookmark, more = true) },
                                     onOpenTopic = {
@@ -2701,7 +2683,6 @@ private fun HomeTopicListRoute(
     feedDisplayMode: String,
     showTopicUnreadDot: Boolean,
     topicUnreadDotPosition: TopicUnreadDotPosition,
-    blockedUsernameSet: Set<String>,
     miniAppHomePullEnabled: Boolean,
     floatingBallEnabled: Boolean,
     floatingBallActions: List<org.linuxdo.android.data.FloatingAction>,
@@ -2724,7 +2705,6 @@ private fun HomeTopicListRoute(
         feedDisplayMode = feedDisplayMode,
         showTopicUnreadDot = showTopicUnreadDot,
         topicUnreadDotPosition = topicUnreadDotPosition,
-        blockedUsernames = blockedUsernameSet,
         onRefresh = viewModel::refreshLatest,
         onLoadMore = viewModel::loadMoreLatest,
         onOpenTopic = { topic ->

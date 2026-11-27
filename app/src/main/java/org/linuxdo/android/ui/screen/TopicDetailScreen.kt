@@ -506,7 +506,6 @@ fun TopicDetailScreen(
     onVotePoll: (Long, String, List<String>) -> Unit = { _, _, _ -> },
     onOpenExternalLink: (String) -> Unit = {},
     trailing: @Composable () -> Unit = {},
-    blockedUsernames: Set<String> = emptySet(),
     onOpenTag: (String) -> Unit = {},
     showTopicScrollbar: Boolean = true,
 ) {
@@ -574,14 +573,10 @@ fun TopicDetailScreen(
         state.posts.firstOrNull { it.postNumber == 1 }
     }
     val topicAuthorUsername = topicAuthor?.username
-    val displayedPosts = remember(state.posts, state.filterUserId, blockedUsernames) {
-        val filtered = state.filterUserId?.let { userId ->
+    val displayedPosts = remember(state.posts, state.filterUserId) {
+        state.filterUserId?.let { userId ->
             state.posts.filter { it.postNumber == 1 || it.userId == userId }
         } ?: state.posts
-        if (blockedUsernames.isEmpty()) filtered
-        else filtered.filterNot { post ->
-            post.postNumber > 1 && post.username.lowercase() in blockedUsernames
-        }
     }
     val rows = remember(displayedPosts, useThreadView, collapsed, expanded, state.commentOrder) {
         if (state.sortByLikes) {

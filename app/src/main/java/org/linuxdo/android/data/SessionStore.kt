@@ -1201,6 +1201,9 @@ class SessionStore(context: Context) : org.linuxdo.android.net.DohConfigProvider
     private val plainPrefs: SharedPreferences = context.getSharedPreferences(PREFS_PLAIN_NAME, Context.MODE_PRIVATE)
     init {
         NoExcerptModeMigration.applyTo(plainPrefs)
+        // Retire the old device-only lists for every account; never convert them to server ignores.
+        val obsolete = plainPrefs.all.keys.filter { it.matches(Regex("local_blocked_users_json(?:_[0-9]+)?")) }
+        if (obsolete.isNotEmpty()) plainPrefs.edit().also { editor -> obsolete.forEach { editor.remove(it) } }.apply()
     }
     private val json = Json { ignoreUnknownKeys = true }
 

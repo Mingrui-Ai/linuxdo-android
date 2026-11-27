@@ -1226,15 +1226,6 @@ data class FollowUser(
 )
 
 @Serializable
-data class BlockedUser(
-    val username: String,
-    val name: String? = null,
-    @SerialName("avatar_template") val avatarTemplate: String? = null,
-    @SerialName("trust_level") val trustLevel: Int? = null,
-    @SerialName("blocked_at") val blockedAt: Long = System.currentTimeMillis(),
-)
-
-@Serializable
 data class ChatChannelSummary(
     val id: Long,
     val title: String? = null,

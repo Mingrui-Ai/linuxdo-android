@@ -281,7 +281,6 @@ fun TopicListScreen(
     topicUnreadDotPosition: TopicUnreadDotPosition = TopicUnreadDotPosition.Avatar,
     onPrefetchExcerpt: ((Any, List<Long>, () -> Set<Long>) -> Unit)? = null,
     onScrollBusyChanged: ((Any, Boolean) -> Unit)? = null,
-    blockedUsernames: Set<String> = emptySet(),
 ) {
     // 每个 feed 的滚动位置用 rememberLazyListState（内部走 rememberSaveable），
     // 确保在 recomposition 或临时移出组合树后仍能还原 firstVisibleItemIndex + scrollOffset。
@@ -389,10 +388,7 @@ fun TopicListScreen(
     }
 
 
-    val filteredItems = remember(effectiveState.items, blockedUsernames) {
-        if (blockedUsernames.isEmpty()) effectiveState.items
-        else effectiveState.items.filterNot { it.authorUsername?.lowercase() in blockedUsernames }
-    }
+    val filteredItems = effectiveState.items
 
     val (pinnedGroups, plainItems) = remember(filteredItems) { pinnedPrefixGroups(filteredItems) }
     val previewKeyPrefix = effectiveFeed?.name ?: currentCategoryId ?: "topic"
@@ -485,11 +481,7 @@ fun TopicListScreen(
     val previewFeed = incomingFeed
     val secondaryListState = previewFeed?.let { feedListStates[it] ?: feedStateLatest }
     val incomingFeedState = incomingFeed?.let { feedStates[it] ?: TopicListUiState(initialLoading = true) }
-    val incomingFilteredItems = remember(incomingFeedState?.items, blockedUsernames) {
-        val raw = incomingFeedState?.items.orEmpty()
-        if (blockedUsernames.isEmpty()) raw
-        else raw.filterNot { it.authorUsername?.lowercase() in blockedUsernames }
-    }
+    val incomingFilteredItems = incomingFeedState?.items.orEmpty()
     val (incomingPinnedGroups, incomingPlainItems) = remember(incomingFilteredItems) {
         pinnedPrefixGroups(incomingFilteredItems)
     }

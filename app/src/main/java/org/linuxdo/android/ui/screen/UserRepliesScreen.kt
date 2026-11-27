@@ -350,8 +350,7 @@ fun UserProfileScreen(
     onChat: ((String) -> Unit)? = null,
     onComposePrivateMessage: ((String) -> Unit)? = null,
     onSetFollowing: (suspend (UserCardData, Boolean) -> Unit)? = null,
-    isBlocked: Boolean = false,
-    onToggleBlock: ((UserCardData, Boolean) -> Unit)? = null,
+    onNotificationSettingsObserved: ((org.linuxdo.android.data.UserNotificationSettings) -> Unit)? = null,
     onBack: (() -> Unit)? = null,
     onSwitchAccount: (() -> Unit)? = null,
     onEditProfile: (() -> Unit)? = null,
@@ -367,6 +366,17 @@ fun UserProfileScreen(
     val context = LocalContext.current
     val coroutineScope = rememberCoroutineScope()
     val repo = (context.applicationContext as? App)?.container?.topicRepository
+    val session = (context.applicationContext as? App)?.container?.sessionStore
+    val accountId = session?.currentUserId() ?: 0L
+    val accountGeneration = session?.sessionGeneration ?: 0L
+    val observedCallback = androidx.compose.runtime.rememberUpdatedState(onNotificationSettingsObserved)
+    val notificationController = remember(username, accountId, accountGeneration, repo, onSetFollowing != null) {
+        if (repo != null && accountId > 0 && onSetFollowing != null) org.linuxdo.android.ui.UserNotificationController(
+            read = { repo.fetchUserNotificationSettings(username, accountId, accountGeneration) },
+            write = { settings, level, expiry -> repo.setUserNotificationLevel(settings, level, expiry, accountId, accountGeneration) },
+            onObserved = { observedCallback.value?.invoke(it) },
+        ) else null
+    }
     var userCard by remember(username) { mutableStateOf<UserCardData?>(repo?.getCachedUserCard(username)) }
     val profileEditRevision by org.linuxdo.android.ui.ProfileEditorUpdates.revision.collectAsState()
     LaunchedEffect(username, profileEditRevision) {
@@ -592,35 +602,28 @@ fun UserProfileScreen(
     LaunchedEffect(refreshComplete) {
         if (refreshComplete >= refreshGeneration) finishedRefresh = refreshGeneration
     }
-    val relationshipActions = listOfNotNull(
-        onSetFollowing?.let { setFollowing ->
-            val following = userCard?.following == true
-            ProfileMenuAction(if (followUpdating) "正在更新关注…" else if (following) "取消关注" else "关注",
-                if (following) Icons.Default.Check else Icons.Default.Person,
-                enabled = !followUpdating && userCard?.let { it.canFollow || following } == true,
-                onClick = {
-                    val target = userCard
-                    if (target != null && !followUpdating) {
-                        followUpdating = true
-                        coroutineScope.launch {
-                            try {
-                                setFollowing(target, !following)
-                                userCard = userCard?.copy(following = !following)
-                            } catch (cancelled: kotlinx.coroutines.CancellationException) {
-                                throw cancelled
-                            } catch (failure: Exception) {
-                                Toast.makeText(context, failure.message ?: "关注操作失败", Toast.LENGTH_SHORT).show()
-                            } finally { followUpdating = false }
-                        }
+    val followAction = onSetFollowing?.takeIf { accountId > 0 }?.let { setFollowing ->
+        val following = userCard?.following == true
+        ProfileMenuAction(if (followUpdating) "更新中…" else if (following) "已关注" else "关注",
+            if (following) Icons.Default.Check else Icons.Default.Person,
+            enabled = profileCompleted == refreshGeneration && profileError == null && !followUpdating && userCard?.let { it.canFollow || following } == true,
+            onClick = {
+                val target = userCard
+                if (target != null && !followUpdating) {
+                    followUpdating = true
+                    coroutineScope.launch {
+                        try {
+                            setFollowing(target, !following)
+                            userCard = userCard?.copy(following = !following)
+                        } catch (cancelled: kotlinx.coroutines.CancellationException) {
+                            throw cancelled
+                        } catch (failure: Exception) {
+                            Toast.makeText(context, failure.message ?: "关注操作失败", Toast.LENGTH_SHORT).show()
+                        } finally { followUpdating = false }
                     }
-                })
-        },
-        onToggleBlock?.let { toggle ->
-            ProfileMenuAction(if (isBlocked) "移出本地黑名单" else "加入本地黑名单", Icons.Default.Close,
-                enabled = userCard != null && !followUpdating,
-                onClick = { userCard?.let { toggle(it, it.following) } })
-        },
-    )
+                }
+            })
+    }
     val pullState = rememberPullToRefreshState()
     val topPadding = WindowInsets.systemBars.union(WindowInsets.displayCutout).only(WindowInsetsSides.Top)
         .asPaddingValues().calculateTopPadding()
@@ -628,7 +631,7 @@ fun UserProfileScreen(
         onRefresh = {
             val atTop = if (selectedProfileTab == UserProfileTab.Summary) !aboutScroll.canScrollBackward
                 else !listState.canScrollBackward
-            if (!refreshing && atTop && headerState.offset == 0f) refreshGeneration++
+            if (!refreshing && !followUpdating && atTop && headerState.offset == 0f) refreshGeneration++
         }, modifier = Modifier.fillMaxSize(),
         indicator = {
             if (refreshing || pullState.distanceFraction > 0f) {
@@ -652,9 +655,11 @@ fun UserProfileScreen(
                     initialAvatarUrl = initialAvatarUrl, initialStaticAvatarUrl = initialStaticAvatarUrl,
                     onBack = onBack, onSwitchAccount = onSwitchAccount, onEditProfile = onEditProfile,
                     onOpenDisplaySettings = onOpenDisplaySettings,
-                    onChat = onChat?.let { callback -> { callback(username) } },
+                    onChat = onChat?.takeIf { accountId > 0 }?.let { callback -> { callback(username) } },
                     onPrivateMessage = onComposePrivateMessage?.let { callback -> { callback(username) } },
-                    menuActions = relationshipActions + menuActions,
+                    menuActions = menuActions,
+                    followAction = followAction,
+                    notificationController = notificationController,
                     communityScore = communityScore, onOpenCommunityScore = onOpenCommunityScore,
                     communityScoreLoading = communityScoreLoading, needsAuthorization = communityScoreNeedsAuthorization,
                     onOpenLevel = onOpenLevel,

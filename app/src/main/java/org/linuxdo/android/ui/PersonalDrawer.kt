@@ -69,7 +69,6 @@ internal sealed interface PersonalDrawerAction {
     data object Level : PersonalDrawerAction
     data object Categories : PersonalDrawerAction
     data object Tags : PersonalDrawerAction
-    data object Blacklist : PersonalDrawerAction
     data object Settings : PersonalDrawerAction
     data object Share : PersonalDrawerAction
     data class Network(val followers: Boolean) : PersonalDrawerAction
@@ -322,7 +321,6 @@ internal fun PersonalDrawerContent(
                     DrawerDisclosure("账号工具", Icons.Default.Person) {
                         DrawerWebRow("编辑个人资料", Icons.Default.Edit, "${Config.BASE_URL}/my/preferences/profile", onAction)
                         DrawerSubRow("分享个人主页", Icons.Default.Share) { onAction(PersonalDrawerAction.Share) }
-                        DrawerSubRow("本地黑名单", Icons.Default.Lock) { onAction(PersonalDrawerAction.Blacklist) }
                         DrawerSubRow("管理账号", Icons.Default.AccountCircle, onClick = onAccounts)
                     }
                 }

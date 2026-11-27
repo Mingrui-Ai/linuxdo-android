@@ -2260,6 +2260,29 @@ class TopicRepository(
         mutate("/follow/${encode(username)}", method)
     }
 
+    suspend fun fetchUserNotificationSettings(username: String, userId: Long, generation: Long): UserNotificationSettings {
+        require(userId > 0) { "请先登录" }
+        val root = profileEditorRead("/u/${encode(username)}.json", userId, generation)
+        val settings = json.decodeFromJsonElement<UserNotificationSettings>(root.getValue("user"))
+        require(settings.username.equals(username, ignoreCase = true) && settings.id != userId) { "用户资料不匹配" }
+        return settings
+    }
+
+    suspend fun setUserNotificationLevel(
+        settings: UserNotificationSettings, level: UserNotificationLevel, expiringAt: String?,
+        userId: Long, generation: Long,
+    ): UserNotificationSettings {
+        checkWriteSession(userId, generation)
+        val payload = userNotificationPayload(settings, level, expiringAt, userId)
+        val response = json.parseToJsonElement(mutate(
+            "/u/${encode(settings.username)}/notification_level.json", "PUT", payload.toString(),
+            beforeAttempt = { checkWriteSession(userId, generation) },
+        )).jsonObject
+        checkWriteSession(userId, generation)
+        require(response["success"]?.jsonPrimitive?.contentOrNull in setOf("OK", "true")) { "通知设置未保存，请重试" }
+        return settings.withLevel(level)
+    }
+
     private val followingCache = java.util.concurrent.ConcurrentHashMap<String, List<FollowUser>>()
 
     fun getCachedFollowing(username: String): List<FollowUser>? {
@@ -2294,30 +2317,6 @@ class TopicRepository(
         return result.mapNotNull { element ->
             runCatching { json.decodeFromJsonElement<FollowUser>(element) }.getOrNull()
         }
-    }
-
-    fun getBlockedUsers(userId: Long = sessionStore?.currentUserId() ?: 0L): List<BlockedUser> {
-        val store = sessionStore ?: return emptyList()
-        val key = blockedUsersKey(userId)
-        val raw = store.getString(key) ?: migrateLegacyBlockedUsers(store, userId) ?: return emptyList()
-        return runCatching { json.decodeFromString<List<BlockedUser>>(raw) }.getOrDefault(emptyList())
-    }
-
-    fun saveBlockedUsers(users: List<BlockedUser>, userId: Long = sessionStore?.currentUserId() ?: 0L) {
-        runCatching {
-            sessionStore?.putString(blockedUsersKey(userId), json.encodeToString(users))
-        }
-    }
-
-    private fun blockedUsersKey(userId: Long): String =
-        if (userId > 0L) "${KEY_BLOCKED_USERS}_$userId" else KEY_BLOCKED_USERS
-
-    private fun migrateLegacyBlockedUsers(store: SessionStore, userId: Long): String? {
-        if (userId <= 0L) return null
-        val legacy = store.getString(KEY_BLOCKED_USERS)?.takeIf { it.isNotBlank() } ?: return null
-        store.putString(blockedUsersKey(userId), legacy)
-        store.removeString(KEY_BLOCKED_USERS)
-        return legacy
     }
 
     private val userBadgesCache = java.util.concurrent.ConcurrentHashMap<String, List<UserBadgeItem>>()
@@ -6445,7 +6444,6 @@ class TopicRepository(
         /** timings 遇普通 429 且无 Retry-After 时的自身熔断时长。 */
         private const val TIMINGS_RATE_LIMIT_FUSE_MS = 30_000L
 
-        const val KEY_BLOCKED_USERS = "local_blocked_users_json"
 
         /** 通知分区一次加载的目标条数。 */
         const val PAGE_TARGET = 20

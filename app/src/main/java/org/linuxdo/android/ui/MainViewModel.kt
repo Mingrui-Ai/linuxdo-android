@@ -85,7 +85,6 @@ import org.linuxdo.android.data.mergeChatMessages
 import org.linuxdo.android.data.TrustReport
 import org.linuxdo.android.data.LdcUserInfo
 import org.linuxdo.android.data.FollowUser
-import org.linuxdo.android.data.BlockedUser
 import org.linuxdo.android.data.DiscourseTagInfo
 import org.linuxdo.android.data.DiscourseTagSearchResult
 import org.linuxdo.android.data.Category
@@ -589,14 +588,8 @@ data class UserCardUiState(
     val loading: Boolean = false,
     val following: Boolean = false,
     val followUpdating: Boolean = false,
-    val isBlocked: Boolean = false,
-    val blockUpdating: Boolean = false,
     val isSelf: Boolean = false,
     val error: String? = null,
-)
-
-data class BlacklistUiState(
-    val users: List<BlockedUser> = emptyList(),
 )
 
 data class FollowUiState(
@@ -811,6 +804,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     private val _details = MutableStateFlow<Map<Long, DetailUiState>>(emptyMap())
     val details = _details.asStateFlow()
     private val topicDetailCache = TopicDetailCache(TOPIC_DETAIL_CACHE_CAPACITY, TOPIC_DETAIL_CACHE_TTL_MS)
+    private val observedUserIgnores = mutableMapOf<String, Boolean>()
     private val topicLiveSessions = mutableMapOf<Long, TopicLiveSession>()
     private var topicLiveJob: Job? = null
     private var topicLiveId: Long? = null
@@ -883,9 +877,6 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     val userCard: StateFlow<UserCardUiState> = _userCard.asStateFlow()
     private val _followList = MutableStateFlow(FollowUiState())
     val followList: StateFlow<FollowUiState> = _followList.asStateFlow()
-    private val _blockedUsers = MutableStateFlow<List<BlockedUser>>(repository.getBlockedUsers())
-    val blockedUsers: StateFlow<List<BlockedUser>> = _blockedUsers.asStateFlow()
-    val blockedUsernames = MutableStateFlow<Set<String>>(_blockedUsers.value.map { it.username.lowercase() }.toSet())
     val followedUsernames = MutableStateFlow<Set<String>>(emptySet())
     private val _trustReport = MutableStateFlow(TrustReportUiState())
     val trustReport: StateFlow<TrustReportUiState> = _trustReport.asStateFlow()
@@ -3360,7 +3351,6 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             }
         }
         val isFollowed = target.lowercase() in followedUsernames.value
-        val isBlocked = target.lowercase() in blockedUsernames.value
 
         val cached = repository.getCachedUserCard(target)
         if (cached != null) {
@@ -3370,7 +3360,6 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             _userCard.value = UserCardUiState(
                 user = effectiveCached,
                 following = isFollowed || effectiveCached.following,
-                isBlocked = isBlocked,
                 isSelf = isSelf,
                 // 缓存先展示；关注按钮等本次资料刷新完成后再启用，避免迟到数据覆盖操作结果。
                 loading = true,
@@ -3387,7 +3376,6 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             _userCard.value = UserCardUiState(
                 user = placeholder,
                 following = isFollowed,
-                isBlocked = isBlocked,
                 isSelf = isSelf,
                 loading = true,
             )
@@ -3401,11 +3389,9 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                     animatedAvatar = user.animatedAvatar ?: knownAvatar,
                 )
                 val curFollowed = isFollowed || target.lowercase() in followedUsernames.value || effectiveUser.following
-                val curBlocked = isBlocked || target.lowercase() in blockedUsernames.value
                 _userCard.value = UserCardUiState(
                     user = effectiveUser,
                     following = curFollowed,
-                    isBlocked = curBlocked,
                     isSelf = isSelf,
                     loading = false,
                 )
@@ -3529,68 +3515,6 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             usernames.forEach { u ->
                 runCatching { repository.setFollow(u, false) }
             }
-        }
-    }
-
-    fun addToBlacklist(
-        username: String,
-        name: String? = null,
-        avatarTemplate: String? = null,
-        trustLevel: Int? = null,
-    ) {
-        val target = username.trim().removePrefix("@")
-        if (target.isBlank()) return
-        val lower = target.lowercase()
-        if (lower in blockedUsernames.value) return
-        val newEntry = BlockedUser(
-            username = target,
-            name = name,
-            avatarTemplate = avatarTemplate,
-            trustLevel = trustLevel,
-        )
-        val nextList = _blockedUsers.value.filterNot { it.username.equals(target, ignoreCase = true) } + newEntry
-        _blockedUsers.value = nextList
-        blockedUsernames.value = nextList.map { it.username.lowercase() }.toSet()
-        repository.saveBlockedUsers(nextList)
-        if (_userCard.value.user?.username?.equals(target, ignoreCase = true) == true) {
-            _userCard.update { it.copy(isBlocked = true) }
-        }
-    }
-
-    fun removeFromBlacklist(username: String) {
-        val target = username.trim().removePrefix("@")
-        val nextList = _blockedUsers.value.filterNot { it.username.equals(target, ignoreCase = true) }
-        _blockedUsers.value = nextList
-        blockedUsernames.value = nextList.map { it.username.lowercase() }.toSet()
-        repository.saveBlockedUsers(nextList)
-        if (_userCard.value.user?.username?.equals(target, ignoreCase = true) == true) {
-            _userCard.update { it.copy(isBlocked = false) }
-        }
-    }
-
-    fun removeBatchFromBlacklist(usernames: List<String>) {
-        val targetSet = usernames.map { it.lowercase().trim().removePrefix("@") }.toSet()
-        val nextList = _blockedUsers.value.filterNot { it.username.lowercase() in targetSet }
-        _blockedUsers.value = nextList
-        blockedUsernames.value = nextList.map { it.username.lowercase() }.toSet()
-        repository.saveBlockedUsers(nextList)
-        val curCard = _userCard.value.user?.username?.lowercase()
-        if (curCard != null && curCard in targetSet) {
-            _userCard.update { it.copy(isBlocked = false) }
-        }
-    }
-
-    fun toggleProfileBlacklist(user: org.linuxdo.android.data.UserCardData, following: Boolean) {
-        if (user.username.equals(_state.value.username, ignoreCase = true)) return
-        val target = user.username.lowercase()
-        if (following || target in followedUsernames.value) {
-            android.widget.Toast.makeText(getApplication(), "已关注用户不能拉黑，请先取消关注", android.widget.Toast.LENGTH_SHORT).show()
-            return
-        }
-        if (target in blockedUsernames.value) {
-            removeFromBlacklist(user.username)
-        } else {
-            addToBlacklist(user.username, user.cleanDisplayName, user.avatarTemplate, user.trustLevel)
         }
     }
 
@@ -4383,6 +4307,23 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     fun refreshTopic(id: Long, silent: Boolean = false) {
         refreshTopic(id, silent, includeLatestPosts = false)
+    }
+
+    fun onUserNotificationSettingsObserved(settings: org.linuxdo.android.data.UserNotificationSettings) {
+        val previous = observedUserIgnores.put(settings.username.lowercase(), settings.ignored)
+        if (previous == settings.ignored) return
+        // A cached stream can contain now-ignored replies or miss newly unignored replies.
+        // Drop it and let returning detail routes reload the server-filtered stream.
+        // Do not translate account settings into another local username filter.
+        pageJobs.keys.filter { it.startsWith("topic:") || it.startsWith("replies:") || it.startsWith("read-state:") }
+            .toList().forEach { pageJobs.remove(it)?.cancel() }
+        topicLiveJob?.cancel()
+        topicLiveJob = null
+        topicLiveId = null
+        topicLiveSessions.values.forEach { it.updates.close() }
+        topicLiveSessions.clear()
+        topicDetailCache.clear()
+        _details.value = emptyMap()
     }
 
     private fun refreshTopic(id: Long, silent: Boolean, includeLatestPosts: Boolean) {
@@ -9404,15 +9345,13 @@ fun openTopicSearch(topicId: Long, title: String) {
 
     private fun restoreAccountScopedLocalState(userId: Long) {
         _history.value = HistoryUiState(entries = container.historyStore.syncedEntries())
-        val blocked = repository.getBlockedUsers(userId)
-        _blockedUsers.value = blocked
-        blockedUsernames.value = blocked.map { it.username.lowercase() }.toSet()
         _seeSignatures.value = store.isSeeSignaturesEnabled(userId)
         _signatureSyncNotice.value = null
         lastSignatureSyncAttemptElapsed = 0L
     }
 
     private fun clearAccountScopedState() {
+        observedUserIgnores.clear()
         container.chatRealtime.reset()
         chatSyncedMessageIds.clear()
         _pendingChatChannel.value = null
@@ -9502,8 +9441,6 @@ fun openTopicSearch(topicId: Long, title: String) {
         _homeFilter.value = org.linuxdo.android.data.HomeFilterState()
         _chat.value = ChatUiState()
         _followList.value = FollowUiState()
-        _blockedUsers.value = emptyList()
-        blockedUsernames.value = emptySet()
         followedUsernames.value = emptySet()
         _trustReport.value = TrustReportUiState()
         _ldcState.value = LdcUiState()
