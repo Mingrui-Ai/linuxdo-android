@@ -10,7 +10,10 @@ data class TopicListSort(
     fun select(selected: TopicSortOrder) = TopicListSort(
         selected, selected.supportsAscending && selected == order && !ascending,
     )
-    val apiAscending: Boolean? get() = ascending.takeIf { order.supportsAscending && order.apiValue != null }
+    val apiAscending: Boolean? get() = when (order) {
+        TopicSortOrder.Activity -> false
+        else -> ascending.takeIf { order.supportsAscending && order.apiValue != null }
+    }
 }
 
 /** 首页筛选条件：支持类别、LV 等级、标签三维度自由组合，均可独立选择或清除。 */
@@ -251,7 +254,7 @@ fun mergeAggregatedTopicPages(pages: List<TopicPage>, sort: TopicListSort): List
             compareByDescending<TopicListItem> { it.topic.likeCount * 3 + it.topic.replyCount * 2 + it.topic.views / 100 }
                 .thenByDescending { it.topic.bumpedAt ?: it.topic.lastPostedAt ?: "" },
         )
-        TopicSortOrder.Default -> deduped.sortedByDescending {
+        TopicSortOrder.Default, TopicSortOrder.Activity -> deduped.sortedByDescending {
             it.topic.bumpedAt ?: it.topic.lastPostedAt ?: it.topic.createdAt ?: ""
         }
     }

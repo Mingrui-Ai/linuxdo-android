@@ -580,7 +580,7 @@ internal fun TopicSortDynamicButton(
     }
 }
 
-/** 5 项排序对应的语义图标：最新(双箭头) / 最新发布(时钟) / 热门(火焰) / 点赞最多(爱心) / 浏览最多(眼睛)。 */
+/** 排序语义图标：网站默认、最新动态、最新发布、热门、点赞和浏览。 */
 @Composable
 internal fun TopicSortDynamicGlyph(
     order: TopicSortOrder,
@@ -603,6 +603,18 @@ internal fun TopicSortDynamicGlyph(
                         moveTo(12.5f, 14.5f); lineTo(16f, 18.5f); lineTo(19.5f, 14.5f)
                     }
                     drawPath(down, tint, style = stroke)
+                }
+                TopicSortOrder.Activity -> {
+                    // 动态脉冲，区别于发帖时间的时钟。
+                    val activity = Path().apply {
+                        moveTo(2.5f, 12f)
+                        lineTo(6.5f, 12f)
+                        lineTo(9.2f, 5f)
+                        lineTo(14f, 19f)
+                        lineTo(17f, 12f)
+                        lineTo(21.5f, 12f)
+                    }
+                    drawPath(activity, tint, style = stroke)
                 }
                 TopicSortOrder.Created -> {
                     // 时钟图标
@@ -656,7 +668,7 @@ internal fun TopicSortDynamicGlyph(
     }
 }
 
-/** 锚定右上角的 5 项排序下拉菜单：支持再次点击切换升序/降序。 */
+/** 锚定右上角的排序菜单；支持双向排序的项目可再次点击切换方向。 */
 @Composable
 internal fun TopicSortDropdownMenu(
     expanded: Boolean,
@@ -670,7 +682,7 @@ internal fun TopicSortDropdownMenu(
         onDismissRequest = onDismiss,
         containerColor = IosTheme.colors.card,
         shape = RoundedCornerShape(16.dp),
-        modifier = Modifier.width(196.dp),
+        modifier = Modifier.width(276.dp),
     ) {
         TopicSortOrder.entries.forEachIndexed { idx, order ->
             val selected = order == currentOrder
@@ -716,7 +728,7 @@ internal fun TopicSortDropdownMenu(
                         text = order.description,
                         style = IosTheme.type.caption.copy(fontSize = 11.sp),
                         color = if (selected) IosTheme.colors.accent.copy(alpha = 0.8f) else IosTheme.colors.tertiaryLabel,
-                        maxLines = 1,
+                        maxLines = 3,
                         overflow = TextOverflow.Ellipsis,
                     )
                 }

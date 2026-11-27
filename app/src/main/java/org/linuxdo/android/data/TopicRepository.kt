@@ -867,6 +867,7 @@ class TopicRepository(
                 val qParts = mutableListOf("category:${idList.joinToString(",")}")
                 if (tag != null) qParts.add("tag:$tag")
                 when (sort.order) {
+                    TopicSortOrder.Activity -> qParts.add("order:activity")
                     TopicSortOrder.Created -> qParts.add(if (sort.ascending) "order:created-asc" else "order:created")
                     TopicSortOrder.Likes -> qParts.add(if (sort.ascending) "order:likes-asc" else "order:likes")
                     TopicSortOrder.Views -> qParts.add(if (sort.ascending) "order:views-asc" else "order:views")
