@@ -87,6 +87,7 @@ import androidx.compose.ui.semantics.semantics
 import org.linuxdo.android.ui.screen.PostAction
 import org.linuxdo.android.ui.screen.PostActionIcon
 import androidx.activity.compose.BackHandler
+import org.linuxdo.android.ui.screen.TopicCreatorSheet
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
@@ -1905,25 +1906,28 @@ private fun MainNavigation(state: UiState, viewModel: MainViewModel, lifecycle: 
             }
 
             if (topicCreator.open) {
-                TopicCreatorSheet(
-                    state = topicCreator,
-                    categories = categories.items,
-                    onTitleChange = viewModel::updateTopicCreatorTitle,
-                    onRawChange = viewModel::updateTopicCreatorRaw,
-                    onCategoryChange = viewModel::updateTopicCreatorCategory,
-                    onTagsChange = viewModel::updateTopicCreatorTags,
-                    onSearchTags = viewModel::searchTopicCreatorTags,
-                    onAttach = viewModel::attachToTopicCreator,
-                    onRemoveAttachment = viewModel::removeTopicCreatorAttachment,
-                    onSaveDraft = viewModel::saveTopicDraft,
-                    onSubmit = {
-                        viewModel.submitTopicCreator { topicId, title, postNumber ->
-                            stack.push(Route.TopicDetail(topicId, title, postNumber))
-                        }
-                    },
-                    onClose = viewModel::closeTopicCreator,
-                    onClearNotice = viewModel::clearTopicCreatorNotice,
-                )
+                key(topicCreator.draftKey) {
+                    TopicCreatorSheet(
+                        state = topicCreator,
+                        categories = categories,
+                        onTogglePinCategory = viewModel::togglePinCategory,
+                        onTitleChange = viewModel::updateTopicCreatorTitle,
+                        onRawChange = viewModel::updateTopicCreatorRaw,
+                        onCategoryChange = viewModel::updateTopicCreatorCategory,
+                        onTagsChange = viewModel::updateTopicCreatorTags,
+                        onSearchTags = viewModel::searchTopicCreatorTags,
+                        onAttach = viewModel::attachToTopicCreator,
+                        onRemoveAttachment = viewModel::removeTopicCreatorAttachment,
+                        onSaveDraft = viewModel::saveTopicDraft,
+                        onSubmit = {
+                            viewModel.submitTopicCreator { topicId, title, postNumber ->
+                                stack.push(Route.TopicDetail(topicId, title, postNumber))
+                            }
+                        },
+                        onClose = viewModel::closeTopicCreator,
+                        onClearNotice = viewModel::clearTopicCreatorNotice,
+                    )
+                }
             }
         }
         val shouldShowTabBar = browsing && isMainTabRoot && listBars.value && !contentObscured && !isKeyboardOpen

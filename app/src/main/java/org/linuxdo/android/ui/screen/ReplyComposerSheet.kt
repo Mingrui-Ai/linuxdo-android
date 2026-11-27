@@ -99,9 +99,9 @@ import org.linuxdo.android.ui.html.CookedBlock
 import org.linuxdo.android.ui.html.replyMarkdownPreview
 import org.linuxdo.android.ui.nextAvailablePollName
 
-private enum class ComposerExpandedTab { Edit, Preview }
+internal enum class ComposerExpandedTab { Edit, Preview }
 
-private enum class ComposerSubToolbar { Heading, Quote, Code, List, More }
+internal enum class ComposerSubToolbar { Heading, Quote, Code, List, More }
 
 /**
  * 回复 / 编辑共用的 Markdown 输入弹层。
@@ -445,7 +445,7 @@ internal fun ReplyComposerSheet(
                     )
 
                     if (isPreview) {
-                        ReplyMarkdownPreviewPane(
+                        ComposerMarkdownPreviewPane(
                             raw = composer.draft,
                             emojiUrls = emojiUrls,
                             attachments = composer.attachments,
@@ -624,19 +624,8 @@ internal fun ReplyComposerSheet(
                     openSub = openSubToolbar,
                     onToggleSub = ::toggleSub,
                     onCloseSub = { openSubToolbar = null },
-                    onWrap = { prefix, suffix, placeholder ->
-                        editorView?.applyMarkdownWrap(prefix, suffix, placeholder)
-                    },
-                    onLinePrefix = { prefix, placeholder ->
-                        editorView?.applyMarkdownLinePrefix(prefix, placeholder)
-                    },
-                    onBlock = { prefix, suffix, placeholder ->
-                        editorView?.applyMarkdownBlock(prefix, suffix, placeholder)
-                    },
+                    editor = editorView,
                     onLink = ::openLinkInsert,
-                    onTable = { editorView?.applyMarkdownTable() },
-                    onDivider = { editorView?.applyMarkdownDivider() },
-                    onFootnote = { editorView?.applyMarkdownFootnote() },
                     onPickImage = ::triggerPickImage,
                     onPickFile = ::triggerPickFile,
                     onOpenPoll = ::openPollInsert,
@@ -690,7 +679,7 @@ internal fun ReplyComposerSheet(
 }
 
 @Composable
-private fun ComposerModeSegmentedControl(
+internal fun ComposerModeSegmentedControl(
     selectedTab: ComposerExpandedTab,
     onSelect: (ComposerExpandedTab) -> Unit,
 ) {
@@ -728,7 +717,7 @@ private fun ComposerModeSegmentedControl(
 }
 
 @Composable
-private fun ComposerSendPill(
+internal fun ComposerSendPill(
     label: String,
     enabled: Boolean,
     submitting: Boolean,
@@ -758,7 +747,7 @@ private fun ComposerSendPill(
 }
 
 @Composable
-private fun ComposerHeaderIconButton(
+internal fun ComposerHeaderIconButton(
     contentDescription: String,
     onClick: () -> Unit,
     content: @Composable () -> Unit,
@@ -884,18 +873,13 @@ private fun QuickMdChip(
 }
 
 @Composable
-private fun ExpandedMarkdownToolbar(
+internal fun ExpandedMarkdownToolbar(
     enabled: Boolean,
     openSub: ComposerSubToolbar?,
     onToggleSub: (ComposerSubToolbar) -> Unit,
     onCloseSub: () -> Unit,
-    onWrap: (prefix: String, suffix: String, placeholder: String) -> Unit,
-    onLinePrefix: (prefix: String, placeholder: String) -> Unit,
-    onBlock: (prefix: String, suffix: String, placeholder: String) -> Unit,
+    editor: RichMarkdownEditorView?,
     onLink: () -> Unit,
-    onTable: () -> Unit,
-    onDivider: () -> Unit,
-    onFootnote: () -> Unit,
     onPickImage: () -> Unit,
     onPickFile: () -> Unit,
     onOpenPoll: () -> Unit,
@@ -925,48 +909,48 @@ private fun ExpandedMarkdownToolbar(
                     ) {
                         when (sub) {
                             ComposerSubToolbar.Heading -> {
-                                SubToolbarPill("标题 1", enabled) { onLinePrefix("# ", "标题 1"); onCloseSub() }
-                                SubToolbarPill("标题 2", enabled) { onLinePrefix("## ", "标题 2"); onCloseSub() }
-                                SubToolbarPill("标题 3", enabled) { onLinePrefix("### ", "标题 3"); onCloseSub() }
-                                SubToolbarPill("标题 4", enabled) { onLinePrefix("#### ", "标题 4"); onCloseSub() }
-                                SubToolbarPill("小", enabled) { onWrap("<small>", "</small>", "小号文字"); onCloseSub() }
-                                SubToolbarPill("删除线", enabled) { onWrap("~~", "~~", "删除文字"); onCloseSub() }
+                                SubToolbarPill("标题 1", enabled) { editor?.applyMarkdownLinePrefix("# ", "标题 1"); onCloseSub() }
+                                SubToolbarPill("标题 2", enabled) { editor?.applyMarkdownLinePrefix("## ", "标题 2"); onCloseSub() }
+                                SubToolbarPill("标题 3", enabled) { editor?.applyMarkdownLinePrefix("### ", "标题 3"); onCloseSub() }
+                                SubToolbarPill("标题 4", enabled) { editor?.applyMarkdownLinePrefix("#### ", "标题 4"); onCloseSub() }
+                                SubToolbarPill("小", enabled) { editor?.applyMarkdownWrap("<small>", "</small>", "小号文字"); onCloseSub() }
+                                SubToolbarPill("删除线", enabled) { editor?.applyMarkdownWrap("~~", "~~", "删除文字"); onCloseSub() }
                             }
                             ComposerSubToolbar.Quote -> {
                                 SubToolbarPill("❝ 块引用", enabled) {
-                                    onLinePrefix("> ", "块引用")
+                                    editor?.applyMarkdownLinePrefix("> ", "块引用")
                                     onCloseSub()
                                 }
                                 SubToolbarPill("▸ 隐藏详细信息", enabled) {
-                                    onBlock("[details=\"总结\"]\n", "\n[/details]", "此文本将被隐藏")
+                                    editor?.applyMarkdownBlock("[details=\"总结\"]\n", "\n[/details]", "此文本将被隐藏")
                                     onCloseSub()
                                 }
                             }
                             ComposerSubToolbar.Code -> {
-                                SubToolbarPill("`行内代码`", enabled) { onWrap("`", "`", "行内代码"); onCloseSub() }
+                                SubToolbarPill("`行内代码`", enabled) { editor?.applyMarkdownWrap("`", "`", "行内代码"); onCloseSub() }
                                 SubToolbarPill("```代码块```", enabled) {
-                                    onBlock("```\n", "\n```", "// 代码内容")
+                                    editor?.applyMarkdownBlock("```\n", "\n```", "// 代码内容")
                                     onCloseSub()
                                 }
                             }
                             ComposerSubToolbar.List -> {
-                                SubToolbarPill("• 项目符号列表", enabled) { onLinePrefix("- ", "列表项"); onCloseSub() }
-                                SubToolbarPill("1. 编号列表", enabled) { onLinePrefix("1. ", "列表项"); onCloseSub() }
-                                SubToolbarPill("☑ 待办清单", enabled) { onLinePrefix("- [ ] ", "待办事项"); onCloseSub() }
+                                SubToolbarPill("• 项目符号列表", enabled) { editor?.applyMarkdownLinePrefix("- ", "列表项"); onCloseSub() }
+                                SubToolbarPill("1. 编号列表", enabled) { editor?.applyMarkdownLinePrefix("1. ", "列表项"); onCloseSub() }
+                                SubToolbarPill("☑ 待办清单", enabled) { editor?.applyMarkdownLinePrefix("- [ ] ", "待办事项"); onCloseSub() }
                             }
                             ComposerSubToolbar.More -> {
                                 SubToolbarPill("▸ 隐藏详细信息", enabled) {
-                                    onBlock("[details=\"总结\"]\n", "\n[/details]", "此文本将被隐藏")
+                                    editor?.applyMarkdownBlock("[details=\"总结\"]\n", "\n[/details]", "此文本将被隐藏")
                                     onCloseSub()
                                 }
                                 SubToolbarPill("◐ 模糊剧透", enabled) {
-                                    onWrap("[spoiler]", "[/spoiler]", "此文本将被模糊处理")
+                                    editor?.applyMarkdownWrap("[spoiler]", "[/spoiler]", "此文本将被模糊处理")
                                     onCloseSub()
                                 }
-                                SubToolbarPill("▦ 插入表格", enabled) { onTable(); onCloseSub() }
-                                SubToolbarPill("— 分割线", enabled) { onDivider(); onCloseSub() }
+                                SubToolbarPill("▦ 插入表格", enabled) { editor?.applyMarkdownTable(); onCloseSub() }
+                                SubToolbarPill("— 分割线", enabled) { editor?.applyMarkdownDivider(); onCloseSub() }
                                 SubToolbarPill("构建投票", enabled) { onCloseSub(); onOpenPoll() }
-                                SubToolbarPill("¹ 添加脚注", enabled) { onFootnote(); onCloseSub() }
+                                SubToolbarPill("¹ 添加脚注", enabled) { editor?.applyMarkdownFootnote(); onCloseSub() }
                             }
                         }
                     }
@@ -990,14 +974,14 @@ private fun ExpandedMarkdownToolbar(
             ExpandedToolButton(
                 contentDescription = "粗体",
                 enabled = enabled,
-                onClick = { onCloseSub(); onWrap("**", "**", "粗体文字") },
+                onClick = { onCloseSub(); editor?.applyMarkdownWrap("**", "**", "粗体文字") },
             ) {
                 Text("B", fontSize = 14.5.sp, fontWeight = FontWeight.ExtraBold, color = it)
             }
             ExpandedToolButton(
                 contentDescription = "强调",
                 enabled = enabled,
-                onClick = { onCloseSub(); onWrap("*", "*", "斜体文字") },
+                onClick = { onCloseSub(); editor?.applyMarkdownWrap("*", "*", "斜体文字") },
             ) {
                 Text("I", fontSize = 14.5.sp, fontWeight = FontWeight.SemiBold, fontStyle = FontStyle.Italic, color = it)
             }
@@ -1135,7 +1119,7 @@ private fun SubToolbarPill(
 }
 
 @Composable
-private fun ReplyMarkdownPreviewPane(
+internal fun ComposerMarkdownPreviewPane(
     raw: String,
     emojiUrls: Map<String, String>,
     attachments: List<org.linuxdo.android.data.AttachedMedia>,
@@ -1212,7 +1196,7 @@ private fun ReplyMarkdownPreviewPane(
 }
 
 @Composable
-private fun MarkdownLinkInsertDialog(
+internal fun MarkdownLinkInsertDialog(
     initialLabel: String,
     onDismiss: () -> Unit,
     onConfirm: (label: String, url: String) -> Unit,
