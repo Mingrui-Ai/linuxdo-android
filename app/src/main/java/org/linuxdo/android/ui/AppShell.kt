@@ -1280,6 +1280,7 @@ private fun MainNavigation(state: UiState, viewModel: MainViewModel, lifecycle: 
                                     onLiveViewport = { atEnd, scrolling -> viewModel.onTopicViewport(route.topicId, atEnd, scrolling) },
                                     hasViewedFloor = { viewModel.hasViewedFloor(accountState.activeUserId, route.topicId, it) },
                                     onFloorViewed = { viewModel.markViewedFloor(accountState.activeUserId, route.topicId, it) },
+                                    onTopicViewed = { viewModel.onTopicViewed(accountState.activeUserId, route.topicId) },
                                     onScrolled = { viewModel.onTopicScrolled(route.topicId) },
                                     onOverlayActive = { detailOverlay = it },
                                     onSetFilterUser = { viewModel.setTopicAuthorFilter(route.topicId, it) },

@@ -6,7 +6,7 @@ import androidx.core.content.edit
 /**
  * 阅读状态的本地持久化:已读话题集合 + 是否同步阅读进度到服务端。
  *
- * 关闭同步时只在本地标记已读；开启时仅同步前台实际阅读的楼层与时间。
+ * 话题是否看过与服务端确认的已读楼层分开保存；只同步前台实际阅读的楼层与时间。
  */
 class ReadingStore(context: Context) {
     private val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
@@ -23,7 +23,10 @@ class ReadingStore(context: Context) {
     private fun lastPostsKey(userId: Long = currentUserId) =
         if (userId > 0L) "${KEY_LAST_SEEN_POSTS}_$userId" else KEY_LAST_SEEN_POSTS
 
+    private fun viewedTopicsKey(userId: Long = currentUserId) = "viewed_topic_ids_$userId"
+
     private val seen: LinkedHashSet<Long> = linkedSetOf()
+    private val viewedTopics: LinkedHashSet<Long> = linkedSetOf()
     private val seenPostsCount: LinkedHashMap<Long, Int> = linkedMapOf()
     private val lastSeenPostNumbers: LinkedHashMap<Long, Int> = linkedMapOf()
     private val confirmedReads = ConfirmedReadPosts()
@@ -95,6 +98,28 @@ class ReadingStore(context: Context) {
             }
     }
 
+    private fun loadViewedTopics(userId: Long) {
+        viewedTopics.clear()
+        val viewedRaw = prefs.getString(viewedTopicsKey(userId), null)
+        if (viewedRaw != null) {
+            viewedRaw.split(',').mapNotNull { it.toLongOrNull()?.takeIf { id -> id > 0L } }.let(viewedTopics::addAll)
+        } else if (userId > 0L) {
+            // 沿用旧版已实际停留过的楼层记录，升级后不要求重新打开每篇帖子。
+            val prefix = "viewed_${userId}_"
+            prefs.all.forEach { (key, value) ->
+                if (key.startsWith(prefix) && value is Long && value != 0L) {
+                    key.removePrefix(prefix).substringBefore('_').toLongOrNull()
+                        ?.takeIf { it > 0L }?.let(viewedTopics::add)
+                }
+            }
+            viewedTopics.addAll(lastSeenPostNumbers.keys)
+        }
+        while (viewedTopics.size > MAX_SEEN_TOPICS) viewedTopics.remove(viewedTopics.first())
+        if (viewedRaw == null && userId > 0L) {
+            prefs.edit { putString(viewedTopicsKey(userId), viewedTopics.joinToString(",")) }
+        }
+    }
+
     fun switchUser(userId: Long) {
         val targetId = maxOf(0L, userId)
         if (currentUserId == targetId) return
@@ -103,6 +128,7 @@ class ReadingStore(context: Context) {
                 currentUserId = targetId
                 confirmedReads.switchUser(targetId)
                 loadForUser(targetId)
+                loadViewedTopics(targetId)
             }
         }
     }
@@ -141,16 +167,36 @@ class ReadingStore(context: Context) {
         if (next != bits) prefs.edit { putLong(key, next) }
     }
 
+    /** 仅消除“从未看过”蓝点，不确认任何未读回复，也不推进服务端已读游标。 */
+    fun markViewedTopic(accountId: Long, topicId: Long): Boolean = synchronized(seen) {
+        if (accountId <= 0L || accountId != currentUserId || topicId <= 0L) return@synchronized false
+        if (!viewedTopics.add(topicId)) return@synchronized false
+        while (viewedTopics.size > MAX_SEEN_TOPICS) viewedTopics.remove(viewedTopics.first())
+        prefs.edit { putString(viewedTopicsKey(), viewedTopics.joinToString(",")) }
+        true
+    }
+
+    fun mergeSeenState(topic: Topic): Topic {
+        val viewed = (topic.lastReadPostNumber ?: 0) > 0 || synchronized(seen) { topic.id in viewedTopics }
+        return if (topic.unseen && viewed) topic.copy(unseen = false) else topic
+    }
+
     fun confirmedPostNumbers(topicId: Long): Set<Int> = confirmedReads.posts(topicId)
 
-    fun confirmPosts(userId: Long, topicId: Long, postNumbers: Set<Int>): Set<Int> =
-        confirmedReads.confirm(userId, topicId, postNumbers)
+    fun confirmPosts(userId: Long, topicId: Long, postNumbers: Set<Int>): Set<Int> {
+        val confirmed = confirmedReads.confirm(userId, topicId, postNumbers)
+        if (confirmed.isNotEmpty()) markViewedTopic(userId, topicId)
+        return confirmed
+    }
 
-    fun mergeReadState(topic: Topic): Topic = if (syncReadProgress) {
-        mergeConfirmedTopicRead(topic, confirmedReads.posts(topic.id))
-    } else if (topic.unseen && isUnreadExcluded(topic.id, topic.postsCount)) {
-        topic.copy(unseen = false)
-    } else topic
+    fun mergeReadState(topic: Topic): Topic {
+        val merged = if (syncReadProgress) {
+            mergeConfirmedTopicRead(topic, confirmedReads.posts(topic.id))
+        } else if (topic.unseen && isUnreadExcluded(topic.id, topic.postsCount)) {
+            topic.copy(unseen = false)
+        } else topic
+        return mergeSeenState(merged)
+    }
 
     fun getLastSeenPost(topicId: Long): Int? = synchronized(lastSeenPostNumbers) {
         lastSeenPostNumbers[topicId]

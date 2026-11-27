@@ -1427,7 +1427,7 @@ fun SettingsScreen(
                     Column(Modifier.weight(1f)) {
                         Text("显示话题未读蓝点", style = IosTheme.type.body.copy(fontSize = 14.5.sp), fontWeight = FontWeight.Normal)
                         Text(
-                            "列表未读话题阅读后自动淡出",
+                            "正文阅读后消除，未读回复另用 +N 提示",
                             style = IosTheme.type.footnote.copy(fontSize = 12.sp),
                             color = IosTheme.colors.secondaryLabel,
                             modifier = Modifier.padding(top = 3.dp),

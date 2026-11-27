@@ -496,6 +496,7 @@ fun TopicDetailScreen(
     onLiveViewport: (Boolean, Boolean) -> Unit = { _, _ -> },
     hasViewedFloor: (Int) -> Boolean = { false },
     onFloorViewed: (Int) -> Unit = {},
+    onTopicViewed: () -> Unit = {},
     onScrolled: () -> Unit = {},
     onOverlayActive: (Boolean) -> Unit = {},
     onToggleBookmark: (Post) -> Unit = {},
@@ -689,6 +690,14 @@ fun TopicDetailScreen(
     }
     LaunchedEffect(visiblePostNumbers, active) {
         onPostsVisible(if (active) visiblePostNumbers else emptyList())
+    }
+    // 话题“看过”与每层已读、远端同步分开；不受两处蓝点显示开关影响。
+    val hasVisiblePosts = visiblePostNumbers.isNotEmpty()
+    LaunchedEffect(topicId, active, signedIn, hasVisiblePosts) {
+        if (active && signedIn && hasVisiblePosts) {
+            delay(UNREAD_DOT_DWELL_MS)
+            onTopicViewed()
+        }
     }
     val currentOnScrolled by rememberUpdatedState(onScrolled)
     LaunchedEffect(topicId, active) {

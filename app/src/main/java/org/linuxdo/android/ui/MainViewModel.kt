@@ -3060,6 +3060,21 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         if (isTopicActive(topicId)) container.reading.markViewedFloor(accountId, topicId, floor)
     }
 
+    fun onTopicViewed(accountId: Long, topicId: Long) {
+        if (accountId <= 0L || accountId != store.currentUserId() || !isTopicActive(topicId) ||
+            currentVisiblePostsByTopic[topicId].isNullOrEmpty() || _details.value[topicId]?.topic == null) return
+        container.reading.markViewedTopic(accountId, topicId)
+        fun clearSeen(list: TopicListUiState): TopicListUiState {
+            fun update(items: List<TopicListItem>) = items.map { item ->
+                if (item.topic.id == topicId) item.copy(topic = container.reading.mergeSeenState(item.topic)) else item
+            }
+            return list.copy(items = update(list.items),
+                pendingPage = list.pendingPage?.let { it.copy(items = update(it.items)) })
+        }
+        mapTopicLists(::clearSeen)
+        homeFilterCache.entries.forEach { entry -> entry.setValue(clearSeen(entry.value.first) to entry.value.second) }
+    }
+
     /** 记录用户在屏幕上实际浏览到的楼层号 */
     fun onPostsVisible(topicId: Long, postNumbers: List<Int>) {
         if (topicId <= 0L) return
@@ -3343,7 +3358,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 val byId = result.items.associate { it.topic.id to it.topic }
                 mapTopicLists { list -> list.copy(items = list.items.map { item ->
                     byId[item.topic.id]?.let { remote -> item.copy(topic = item.topic.copy(
-                        unseen = remote.unseen, lastReadPostNumber = maxOf(item.topic.lastReadPostNumber ?: 0, remote.lastReadPostNumber ?: 0))) } ?: item
+                        unseen = container.reading.mergeSeenState(remote).unseen,
+                        lastReadPostNumber = maxOf(item.topic.lastReadPostNumber ?: 0, remote.lastReadPostNumber ?: 0))) } ?: item
                 }) }
                 _history.update { it.copy(entries = merged, loading = false,
                     hasMore = if (silent && it.page > 0) it.hasMore else result.hasMore,
@@ -10112,12 +10128,14 @@ fun openTopicSearch(topicId: Long, title: String) {
             } else result.items
             ExcerptCache.loadBatchFromStore(freshItems.map { it.topic.id })
             if (!isCurrent()) return
+            // 等待预览缓存期间可能已读过帖子，再合并一次避免迟到列表把蓝点带回来。
+            val visibleItems = freshItems.map { item -> item.copy(topic = container.reading.mergeReadState(item.topic)) }
             // 分页等待期间可能已经合并了提示条的新话题，使用当前状态。
             val latest = _feedStates.value[feed] ?: loadingState
             val merged = if (page == 0) {
-                freshItems.distinctBy { it.topic.id }
+                visibleItems.distinctBy { it.topic.id }
             } else {
-                (latest.items + freshItems).distinctBy { it.topic.id }
+                (latest.items + visibleItems).distinctBy { it.topic.id }
             }
             // 对齐通知分页：防死循环检测页码推进，而非条目增加。高频重叠由页码单调递增穿透。
             val hasMore = result.hasMore && result.items.isNotEmpty() && (page == 0 || page > current.page)

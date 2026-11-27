@@ -5550,7 +5550,7 @@ class TopicRepository(
         val known = if (awaitCategories) categories() else categoryCache.orEmpty()
         val usersById = response.users.associateBy { it.id }
         response.users.forEach { u -> AvatarCache.record(u.username, u.animatedAvatar) }
-        // 开启同步只合并成功回执；关闭同步才用本地浏览记录覆盖未读状态。
+        // 未读楼层按同步回执合并；“从未看过”蓝点另外合并本机实际浏览记录。
         val items = response.topicList.topics.distinctBy { it.id }.map { topic ->
             // 对齐 fluxdo：优先取首个 Original Poster（兼容 user_id 映射顶层 users 表与 poster.user 内嵌对象两种形状），
             // 缺失时再按其余 poster 或 lastPosterUsername 匹配，确保人员图标绝不因序列化形状差异而漏取。
