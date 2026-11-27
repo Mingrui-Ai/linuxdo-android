@@ -32,6 +32,36 @@ fun mostRepliedPostRows(posts: List<Post>): List<TreePost> = flatPostRows(posts)
         .thenBy { it.post.id },
 )
 
+/** 显示方式与排序独立：默认只移动一级回帖及其整组楼中楼，全部展开时每层单独排序。 */
+fun orderedCommentRows(
+    posts: List<Post>,
+    order: CommentOrder,
+    threaded: Boolean,
+    collapsed: Set<Long> = emptySet(),
+    expanded: Set<Long> = emptySet(),
+): List<TreePost> {
+    if (!threaded) return when (order) {
+        CommentOrder.TimeAscending -> flatPostRows(posts)
+        CommentOrder.TimeDescending -> flatPostRows(posts, descending = true)
+        CommentOrder.Likes -> likedPostRows(posts)
+        CommentOrder.Replies -> mostRepliedPostRows(posts)
+    }
+    val rows = threadRows(posts, collapsed, expanded, descending = order == CommentOrder.TimeDescending)
+    if (!order.requiresAllPosts) return rows
+
+    val groups = rows.groupBy { it.rootPostId }
+    val roots = rows.filter { it.depth == 0 }.sortedWith(
+        compareBy<TreePost> { it.post.postNumber != 1 }
+            .thenByDescending {
+                // 使用整组实际可见的后代数，包含多层嵌套；不受三条预览、展开或收起影响。
+                if (order == CommentOrder.Replies) it.allLoadedCount else it.post.sortLikeCount
+            }
+            .thenBy { it.post.postNumber }
+            .thenBy { it.post.id },
+    )
+    return roots.flatMap { groups[it.post.id].orEmpty() }
+}
+
 /**
  * 点赞数和回复数不在 stream ID 列表中。完整补齐快照后才切换排序，避免把分页窗口冒充全帖排名。
  * 沿用每批 20 楼与串行请求；异常/取消直接交给调用方，成功但未返回的 ID 视为不可访问。

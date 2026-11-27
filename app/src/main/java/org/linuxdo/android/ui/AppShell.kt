@@ -1193,6 +1193,7 @@ private fun MainNavigation(state: UiState, viewModel: MainViewModel, lifecycle: 
                                     initialPostNumber = resumePostNumber,
                                     onUnknownTag = { viewModel.diagnostics.log("未知 cooked 标签: $it") },
                                     treeView = treeView,
+                                    onTreeView = viewModel::setTreeView,
                                     showTopicScrollbar = showTopicScrollbar,
                                     showUnreadDot = showUnreadDot,
                                     unreadDotPosition = unreadDotPosition,

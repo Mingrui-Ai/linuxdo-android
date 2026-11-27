@@ -1408,7 +1408,7 @@ fun SettingsScreen(
                     Column(Modifier.weight(1f)) {
                         Text("树形查看话题", style = IosTheme.type.body.copy(fontSize = 14.5.sp), fontWeight = FontWeight.Normal)
                         Text(
-                            "按回复树状排列，关闭后恢复顺序楼层",
+                            "默认保留楼中楼，关闭后全部展开；帖内排序菜单也可切换",
                             style = IosTheme.type.footnote.copy(fontSize = 12.sp),
                             color = IosTheme.colors.secondaryLabel,
                             modifier = Modifier.padding(top = 3.dp),

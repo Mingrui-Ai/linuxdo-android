@@ -9,6 +9,9 @@ import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.selection.selectable
+import androidx.compose.foundation.selection.selectableGroup
+import androidx.compose.ui.semantics.Role
 import androidx.compose.foundation.gestures.detectTransformGestures
 import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
@@ -241,8 +244,7 @@ import org.linuxdo.android.data.Post
 import org.linuxdo.android.data.sortedReactions
 import org.linuxdo.android.data.CommentOrder
 import org.linuxdo.android.data.TopicSortOrder
-import org.linuxdo.android.data.likedPostRows
-import org.linuxdo.android.data.mostRepliedPostRows
+import org.linuxdo.android.data.orderedCommentRows
 import org.linuxdo.android.data.DiscourseUser
 import org.linuxdo.android.data.Category
 import org.linuxdo.android.data.Boost
@@ -250,14 +252,12 @@ import org.linuxdo.android.data.PostFlagReason
 import org.linuxdo.android.data.SignaturePolicy
 import org.linuxdo.android.data.TopicRepository
 import org.linuxdo.android.data.effectiveReplyToPostNumber
-import org.linuxdo.android.data.flatPostRows
 import org.linuxdo.android.data.BoostLength
 import org.linuxdo.android.data.UserCardData
 import org.linuxdo.android.data.measureBoost
 import org.linuxdo.android.data.avatarUrlOf
 import org.linuxdo.android.data.TreePost
 import org.linuxdo.android.data.DEFAULT_SUB_REPLY_LIMIT
-import org.linuxdo.android.data.threadRows
 import org.linuxdo.android.data.postAncestorIds
 import org.linuxdo.android.data.resolveTopicFloor
 import org.linuxdo.android.data.InternalTopicLink
@@ -467,6 +467,7 @@ fun TopicDetailScreen(
     onLoadPrevious: () -> Unit,
     onUnknownTag: (String) -> Unit,
     treeView: Boolean,
+    onTreeView: (Boolean) -> Unit,
     onLoadReplies: (Long) -> Unit,
     onReact: (Long, String) -> Unit,
     onBoost: (Long, String) -> Unit,
@@ -515,7 +516,7 @@ fun TopicDetailScreen(
     onOpenTag: (String) -> Unit = {},
     showTopicScrollbar: Boolean = true,
 ) {
-    val useThreadView = treeView && !state.commentOrder.requiresAllPosts
+    val useThreadView = treeView
     val list = rememberLazyListState()
     val pullState = rememberPullToRefreshState()
     val scope = rememberCoroutineScope()
@@ -585,15 +586,7 @@ fun TopicDetailScreen(
         } ?: state.posts
     }
     val rows = remember(displayedPosts, useThreadView, collapsed, expanded, state.commentOrder) {
-        if (state.sortByReplies) {
-            mostRepliedPostRows(displayedPosts)
-        } else if (state.sortByLikes) {
-            likedPostRows(displayedPosts)
-        } else if (useThreadView) {
-            threadRows(displayedPosts, collapsed.toSet(), expanded.toSet(), descending = state.descending)
-        } else {
-            flatPostRows(displayedPosts, descending = state.descending)
-        }
+        orderedCommentRows(displayedPosts, state.commentOrder, useThreadView, collapsed.toSet(), expanded.toSet())
     }
     val reportUnknownTag by rememberUpdatedState(onUnknownTag)
     var preparedBodies by remember(topicId) { mutableStateOf(emptyMap<Long, PreparedPostBody>()) }
@@ -898,11 +891,13 @@ fun TopicDetailScreen(
         if (state.error != null) pendingTargetFloor = null
     }
 
-    // 切换正/倒序后把视口带回评论区头部,否则用户会停在原先的滚动偏移上、看不出顺序变了。
+    // 切换排序或显示方式后回到评论区头部，避免停在旧列表的滚动偏移上。
     var lastOrder by remember { mutableStateOf(state.commentOrder) }
-    LaunchedEffect(state.commentOrder, state.loading, rows) {
-        if (lastOrder == state.commentOrder || state.loading) return@LaunchedEffect
+    var lastThreadView by remember { mutableStateOf(useThreadView) }
+    LaunchedEffect(state.commentOrder, useThreadView, state.loading, rows) {
+        if ((lastOrder == state.commentOrder && lastThreadView == useThreadView) || state.loading) return@LaunchedEffect
         lastOrder = state.commentOrder
+        lastThreadView = useThreadView
         if (!showOrderBar) return@LaunchedEffect
         // 定位尚未完成时，不允许倒序切换滚动覆盖初始定位位置
         if (!located) return@LaunchedEffect
@@ -1122,13 +1117,15 @@ fun TopicDetailScreen(
                                     onLoadReplies(unloadedTargetId)
                                 }
                             }
-                            .padding(horizontal = 12.dp, vertical = 9.dp),
+                            .padding(horizontal = 12.dp, vertical = 8.dp),
+                        contentAlignment = Alignment.CenterEnd,
                     ) {
                         Text(
                             text = if (replyLoading) "正在加载回复…" else "查看全部 $totalHint 条回复 >",
                             style = IosTheme.type.footnote,
                             fontWeight = FontWeight.Medium,
                             color = IosTheme.colors.accent,
+                            modifier = Modifier.padding(horizontal = 4.dp, vertical = 2.dp),
                         )
                     }
                 }
@@ -1217,32 +1214,26 @@ fun TopicDetailScreen(
                             .padding(start = 16.dp, end = 16.dp, bottom = 14.dp)
                             .clip(RoundedCornerShape(bottomStart = 10.dp, bottomEnd = 10.dp))
                             .background(IosTheme.colors.fieldBackground)
-                            .then(
-                                if (canExpandMore && !showCollapseButton) {
-                                    Modifier.clickable(enabled = !moreLoading) {
-                                        expanded = (expanded + row.rootPostId).distinct()
-                                        collapsed = collapsed - row.rootPostId
-                                        if (moreTargetId != null) {
-                                            collapsed = collapsed - moreTargetId
-                                            onLoadReplies(moreTargetId)
-                                        }
-                                    }
-                                } else {
-                                    Modifier
-                                },
-                            )
                             .padding(horizontal = 12.dp, vertical = 8.dp),
-                        horizontalArrangement = Arrangement.SpaceBetween,
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
                         verticalAlignment = Alignment.CenterVertically,
                     ) {
-                        if (canExpandMore) {
-                            Text(
-                                text = if (moreLoading) "正在加载回复…" else "查看全部 $totalReplies 条回复 >",
-                                style = IosTheme.type.footnote,
-                                fontWeight = FontWeight.Medium,
-                                color = IosTheme.colors.accent,
-                                modifier = if (showCollapseButton) {
-                                    Modifier
+                        Text(
+                            text = "共 $totalReplies 条回复",
+                            style = IosTheme.type.caption,
+                            color = IosTheme.colors.secondaryLabel,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                            modifier = Modifier.weight(1f),
+                        )
+                        Column(horizontalAlignment = Alignment.End) {
+                            if (canExpandMore) {
+                                Text(
+                                    text = if (moreLoading) "正在加载回复…" else "查看全部回复 >",
+                                    style = IosTheme.type.footnote,
+                                    fontWeight = FontWeight.Medium,
+                                    color = IosTheme.colors.accent,
+                                    modifier = Modifier
                                         .clip(RoundedCornerShape(4.dp))
                                         .clickable(enabled = !moreLoading) {
                                             expanded = (expanded + row.rootPostId).distinct()
@@ -1252,45 +1243,38 @@ fun TopicDetailScreen(
                                                 onLoadReplies(moreTargetId)
                                             }
                                         }
-                                        .padding(vertical = 2.dp)
-                                } else {
-                                    Modifier.padding(vertical = 2.dp)
-                                },
-                            )
-                        } else {
-                            Text(
-                                text = "共 $totalReplies 条回复",
-                                style = IosTheme.type.caption,
-                                color = IosTheme.colors.secondaryLabel,
-                            )
-                        }
-                        if (showCollapseButton) {
-                            Text(
-                                text = "收起回复",
-                                style = IosTheme.type.footnote,
-                                color = IosTheme.colors.accent,
-                                modifier = Modifier
-                                    .clip(RoundedCornerShape(4.dp))
-                                    .clickable {
-                                        val rootId = row.rootPostId
-                                        val visibleRoot = list.layoutInfo.visibleItemsInfo.firstOrNull { postIdFromListKey(it.key) == rootId }
-                                        val rootRowIndex = rows.indexOfFirst { it.post.id == rootId }
-                                        val needScrollToRoot = visibleRoot == null || visibleRoot.offset < 0
-                                        if (row.allLoadedCount > DEFAULT_SUB_REPLY_LIMIT && rootId in expanded) {
-                                            expanded = expanded - rootId
-                                        } else {
-                                            expanded = expanded - rootId
-                                            collapsed = (collapsed + rootId).distinct()
-                                        }
-                                        if (needScrollToRoot && rootRowIndex >= 0) {
-                                            val targetLazyIndex = lazyIndexOf(rootRowIndex, partIndexFromListKey(visibleRoot?.key))
-                                            scope.launch {
-                                                list.scrollToItem(targetLazyIndex, 0)
+                                        .padding(horizontal = 4.dp, vertical = 2.dp),
+                                )
+                            }
+                            if (showCollapseButton) {
+                                Text(
+                                    text = "收起回复",
+                                    style = IosTheme.type.footnote,
+                                    fontWeight = FontWeight.Medium,
+                                    color = IosTheme.colors.accent,
+                                    modifier = Modifier
+                                        .clip(RoundedCornerShape(4.dp))
+                                        .clickable {
+                                            val rootId = row.rootPostId
+                                            val visibleRoot = list.layoutInfo.visibleItemsInfo.firstOrNull { postIdFromListKey(it.key) == rootId }
+                                            val rootRowIndex = rows.indexOfFirst { it.post.id == rootId }
+                                            val needScrollToRoot = visibleRoot == null || visibleRoot.offset < 0
+                                            if (row.allLoadedCount > DEFAULT_SUB_REPLY_LIMIT && rootId in expanded) {
+                                                expanded = expanded - rootId
+                                            } else {
+                                                expanded = expanded - rootId
+                                                collapsed = (collapsed + rootId).distinct()
+                                            }
+                                            if (needScrollToRoot && rootRowIndex >= 0) {
+                                                val targetLazyIndex = lazyIndexOf(rootRowIndex, partIndexFromListKey(visibleRoot?.key))
+                                                scope.launch {
+                                                    list.scrollToItem(targetLazyIndex, 0)
+                                                }
                                             }
                                         }
-                                    }
-                                    .padding(horizontal = 4.dp, vertical = 2.dp),
-                            )
+                                        .padding(horizontal = 4.dp, vertical = 2.dp),
+                                )
+                            }
                         }
                     }
                     IosDivider()
@@ -1494,6 +1478,8 @@ fun TopicDetailScreen(
                                 CommentOrderBar(
                                     total = replyTotal,
                                     order = state.commentOrder,
+                                    threaded = useThreadView,
+                                    onThreadedChange = onTreeView,
                                     busy = (state.loading || state.refreshing) && state.pendingCommentOrder == null,
                                     progress = state.pendingCommentOrder?.takeIf { it.requiresAllPosts }?.let {
                                         "正在准备${it.title}排序 ${state.sortLoaded}/${state.sortTotal}"
@@ -1857,7 +1843,7 @@ fun TopicDetailScreen(
 /**
  * 评论区头部栏：
  * - 左侧：总回复数 + 锚定下拉筛选发言者胶囊（样式与主页筛选胶囊保持一致，不再弹出全屏中间弹窗）；
- * - 右侧：复用主页动态排序按钮与锚定下拉菜单逻辑（按时间正/倒序、点赞数切换语义图标与菜单高亮）。
+ * - 右侧：显示方式与排序菜单，默认只排序一级回帖，全部展开后每层独立排序。
  * 固定跟在 1 楼下方 —— 向上滑动触顶时吸顶冻结，方便随时切换筛选或排序。
  */
 @OptIn(ExperimentalLayoutApi::class)
@@ -1865,6 +1851,8 @@ fun TopicDetailScreen(
 private fun CommentOrderBar(
     total: Int,
     order: CommentOrder,
+    threaded: Boolean,
+    onThreadedChange: (Boolean) -> Unit,
     busy: Boolean,
     progress: String?,
     onSelect: (CommentOrder) -> Unit,
@@ -2134,7 +2122,7 @@ private fun CommentOrderBar(
                     Box(Modifier.size(40.dp).clip(CircleShape)
                         .background(if (order == CommentOrder.TimeAscending) Color.Transparent else accent.copy(alpha = 0.12f))
                         .clickable(enabled = !busy) { menuExpanded = true }
-                        .semantics { contentDescription = "回复排序：${order.title}" },
+                        .semantics { contentDescription = "回复排序：${if (threaded) "默认" else "全部展开"}，${order.title}" },
                         contentAlignment = Alignment.Center) {
                         if (order == CommentOrder.Replies) PostActionIcon(PostAction.Reply, selected = false, tint = tint, modifier = Modifier.size(19.dp))
                         else TopicSortDynamicGlyph(order = mappedSortOrder, tint = tint, modifier = Modifier.size(19.dp))
@@ -2147,6 +2135,30 @@ private fun CommentOrderBar(
                         shape = RoundedCornerShape(16.dp),
                         modifier = Modifier.width(184.dp),
                     ) {
+                        Row(
+                            Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 4.dp)
+                                .clip(RoundedCornerShape(9.dp)).background(IosTheme.colors.fieldBackground)
+                                .padding(3.dp).selectableGroup(),
+                            horizontalArrangement = Arrangement.spacedBy(3.dp),
+                        ) {
+                            listOf(true to "默认", false to "全部展开").forEach { (value, title) ->
+                                Box(
+                                    Modifier.weight(1f).clip(RoundedCornerShape(7.dp))
+                                        .background(if (threaded == value) IosTheme.colors.card else Color.Transparent)
+                                        .selectable(selected = threaded == value, enabled = !busy, role = Role.Tab,
+                                            onClick = { onThreadedChange(value) })
+                                        .padding(horizontal = 4.dp, vertical = 8.dp),
+                                    contentAlignment = Alignment.Center,
+                                ) {
+                                    Text(title, fontSize = 12.sp, maxLines = 1, overflow = TextOverflow.Ellipsis,
+                                        fontWeight = if (threaded == value) FontWeight.SemiBold else FontWeight.Normal,
+                                        color = if (threaded == value) accent else IosTheme.colors.secondaryLabel)
+                                }
+                            }
+                        }
+                        Text(if (threaded) "仅排序一级回帖" else "所有回帖参与排序",
+                            style = IosTheme.type.caption.copy(fontSize = 10.5.sp), color = IosTheme.colors.secondaryLabel,
+                            modifier = Modifier.padding(start = 12.dp, end = 12.dp, top = 2.dp, bottom = 5.dp))
                         CommentOrder.entries.forEachIndexed { idx, option ->
                             val selected = option == order
                             val optionGlyph = when (option) {
@@ -2158,8 +2170,8 @@ private fun CommentOrderBar(
                             val optionDesc = when (option) {
                                 CommentOrder.TimeAscending -> "按楼层先后浏览"
                                 CommentOrder.TimeDescending -> "最新回复优先"
-                                CommentOrder.Likes -> "全帖按获赞从高到低"
-                                CommentOrder.Replies -> "每层回复数从多到少"
+                                CommentOrder.Likes -> if (threaded) "一级回帖获赞优先" else "每层获赞从多到少"
+                                CommentOrder.Replies -> if (threaded) "楼中楼数量优先" else "每层回复数从多到少"
                             }
                             val tint = if (selected) accent else IosTheme.colors.label
                             val iconBg = if (selected) accent.copy(alpha = 0.12f)
