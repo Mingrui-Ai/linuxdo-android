@@ -380,6 +380,7 @@ class TopicRepository(
             sessionGeneration = requestGeneration,
             receivedAtElapsedMs = receivedAtElapsedMs,
             alreadyRecorded = true,
+            canRetryPageRead = !cfChallenge,
         )
     }
 
@@ -5579,7 +5580,16 @@ class TopicRepository(
         beforeDispatch: (() -> Unit)? = null,
     ): String {
         try {
-            return pacedGet(path, burst, present, retryAllowed = retryAllowed, beforeDispatch = beforeDispatch)
+            return try {
+                pacedGet(path, burst, present, retryAllowed, beforeDispatch)
+            } catch (error: RateLimitException) {
+                val retry = currentCoroutineContext()[PageReadRetry]?.takeIf { present } ?: throw error
+                retry.waitForRetry(error)
+                pacedGet(path, burst, present, retryAllowed) {
+                    retry.checkBeforeSend()
+                    beforeDispatch?.invoke()
+                }
+            }
         } catch (challenge: NeedsInteractiveVerification) {
             if (!retryAllowed || !present || requestHost(path) != Config.HOST) {
                 if (challenge.isFrom429 && requestHost(path) == Config.HOST) {

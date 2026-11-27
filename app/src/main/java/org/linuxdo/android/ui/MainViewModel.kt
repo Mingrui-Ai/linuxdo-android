@@ -25,6 +25,7 @@ import androidx.lifecycle.viewModelScope
 import java.io.ByteArrayOutputStream
 import java.io.File
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -57,6 +58,7 @@ import org.linuxdo.android.App
 import org.linuxdo.android.BuildConfig
 import org.linuxdo.android.Config
 import org.linuxdo.android.data.ApiQuotaPool
+import org.linuxdo.android.data.PageReadRetry
 import org.linuxdo.android.data.TopicOpStore
 import org.linuxdo.android.net.BrowserSession
 import org.linuxdo.android.net.loadDohServers
@@ -1571,6 +1573,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     private var autoProbeJob: Job? = null
     private var activeCategory: Pair<Int, String>? = null
     private var autoProbeVisible = false
+    private var homePageExit: CompletableDeferred<Unit>? = null
 
     fun setAutoProbeVisible(visible: Boolean, categoryId: Int? = null, slug: String? = null) {
         val category = if (categoryId != null && !slug.isNullOrBlank()) {
@@ -1579,6 +1582,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             null
         }
         if (autoProbeVisible == visible && activeCategory == category) return
+        homePageExit?.complete(Unit)
+        homePageExit = if (visible && category == null) CompletableDeferred() else null
         val wasVisible = autoProbeVisible
         autoProbeVisible = visible
         activeCategory = category
@@ -1623,13 +1628,13 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     private val readTrackers = mutableMapOf<Long, TopicReadTracker>()
     private val readReportJobs = mutableMapOf<Long, Job>()
     /** 当前处于前台可见、活跃状态的话题集合（被验证页遮挡、切后台或被下层路由盖住时不在其中）。 */
-    private val activeTopicIds = MutableStateFlow(emptySet<Long>())
+    private val activeTopicPages = MutableStateFlow(emptyMap<Long, CompletableDeferred<Unit>>())
     /** 各话题在当前屏幕上当前可见的楼层号。 */
     private val currentVisiblePostsByTopic = mutableMapOf<Long, List<Int>>()
     private val highestVisiblePostByTopic = mutableMapOf<Long, Int>()
     fun setTopicActive(topicId: Long, active: Boolean) {
         if (active) {
-            activeTopicIds.update { it + topicId }
+            activeTopicPages.update { if (topicId in it) it else it + (topicId to CompletableDeferred()) }
             beginReadTracking(topicId)
             startTopicLiveUpdates(topicId)
         } else {
@@ -1643,7 +1648,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                     states + (topicId to it.copy(loading = false, pendingCommentOrder = null))
                 } ?: states }
             }
-            activeTopicIds.update { it - topicId }
+            activeTopicPages.value[topicId]?.complete(Unit)
+            activeTopicPages.update { it - topicId }
             topicLiveAtEnd.remove(topicId)
             topicLiveScrolling.remove(topicId)
             topicScrollSettledAt.remove(topicId)
@@ -1657,7 +1663,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     private fun isTopicActive(topicId: Long): Boolean {
-        return _state.value.screen == Screen.List && topicId in activeTopicIds.value &&
+        return _state.value.screen == Screen.List && topicId in activeTopicPages.value &&
             !store.sessionChanging && !_accounts.value.switching
     }
 
@@ -3019,7 +3025,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             readReportJobs.clear()
             readTrackers.clear()
         } else {
-            activeTopicIds.value.forEach(::beginReadTracking)
+            activeTopicPages.value.keys.forEach(::beginReadTracking)
         }
         diagnostics.log(if (enabled) "已开启阅读进度同步(低频 timings 上报)" else "已关闭阅读进度同步(仅本地标记已读)")
     }
@@ -3188,7 +3194,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     private fun refreshActiveReadState() {
         val userId = store.currentUserId()
         val generation = accountScopeGeneration
-        activeTopicIds.value.forEach { topicId ->
+        activeTopicPages.value.keys.forEach { topicId ->
             if (topicId in topicLiveScrolling || pageJobs["read-state:$topicId"]?.isActive == true) return@forEach
             val detail = _details.value[topicId] ?: return@forEach
             val visible = currentVisiblePostsByTopic[topicId].orEmpty().toSet()
@@ -4554,7 +4560,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         if (previous && current.previousIds.isEmpty()) return
         pageJobs["topic:$id"]?.cancel()
         // 先登记任务再启动，立即失败时 finally 也能识别当前请求并收尾。
-        pageJobs["topic:$id"] = viewModelScope.launch(start = CoroutineStart.LAZY) {
+        val pageExit = if (more || previous) activeTopicPages.value[id] else null
+        pageJobs["topic:$id"] = viewModelScope.launch(PageReadRetry.forPage(pageExit), start = CoroutineStart.LAZY) {
             _details.update { it + (id to current.copy(loading = true, error = null, failedPostNumber = null, retryAtElapsedMs = 0L)) }
             try {
                 if (more || previous) {
@@ -8539,7 +8546,7 @@ fun openTopicSearch(topicId: Long, title: String) {
 
     private suspend fun awaitAutomaticReadWindow(afterTopic: Boolean = false) {
         while (true) {
-            if (afterTopic) activeTopicIds.first { it.isEmpty() }
+            if (afterTopic) activeTopicPages.first { it.isEmpty() }
             val waitMs = ApiQuotaPool.automaticReadDelayMs()
             if (waitMs <= 0L) return
             delay(waitMs)
@@ -8724,6 +8731,7 @@ fun openTopicSearch(topicId: Long, title: String) {
 
     fun switchHomeFeed(feed: HomeFeedType) {
         if (_state.value.homeFeed == feed) return
+        homePageExit?.let { it.complete(Unit); homePageExit = CompletableDeferred() }
         val cached = _feedStates.value[feed]
         _state.update {
             it.copy(
@@ -8765,7 +8773,7 @@ fun openTopicSearch(topicId: Long, title: String) {
         if (!current.hasMore || current.loadingMore || current.refreshing) return
         if (current.needsRefresh) { refreshLatest(); return }
         val currentPage = current.page
-        viewModelScope.launch { loadFeed(feed, page = currentPage + 1, pullRefresh = false) }
+        viewModelScope.launch(PageReadRetry.forPage(homePageExit)) { loadFeed(feed, page = currentPage + 1, pullRefresh = false) }
     }
 
     fun setPath(path: NetworkPath) {
@@ -9484,7 +9492,9 @@ fun openTopicSearch(topicId: Long, title: String) {
         readReportJobs.clear()
         TopicRepository.clearTimingsCache()
         readTrackers.clear()
-        activeTopicIds.value = emptySet()
+        activeTopicPages.value.values.forEach { it.complete(Unit) }
+        activeTopicPages.value = emptyMap()
+        homePageExit?.let { it.complete(Unit); homePageExit = CompletableDeferred() }
         currentVisiblePostsByTopic.clear()
         highestVisiblePostByTopic.clear()
         topicDetailCache.clear()
