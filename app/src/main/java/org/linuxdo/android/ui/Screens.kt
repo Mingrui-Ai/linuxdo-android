@@ -7396,8 +7396,7 @@ fun TopicCreatorSheet(
 
         IosDivider()
 
-        // 错误或保存成功轻提示
-        state.syncStatus?.let { Text(it, style = IosTheme.type.footnote, color = IosTheme.colors.secondaryLabel) }
+        // 错误或操作成功轻提示（不再显示“已与网页同步”“已保存到手机”等底部草稿同步状态行）
         state.error?.let { err ->
             Row(
                 modifier = Modifier

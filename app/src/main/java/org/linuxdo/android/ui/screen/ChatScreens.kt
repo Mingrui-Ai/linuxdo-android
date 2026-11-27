@@ -12,7 +12,6 @@ import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
-import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
@@ -35,15 +34,13 @@ import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.foundation.text.BasicTextField
-import androidx.compose.foundation.text.KeyboardActions
-import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.foundation.text.InlineTextContent
+import androidx.compose.foundation.text.appendInlineContent
 import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Notifications
-import androidx.compose.material.icons.filled.Search
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.Icon
@@ -55,9 +52,9 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshotFlow
@@ -67,25 +64,33 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Path
-import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.StrokeJoin
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.drawscope.scale
-import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.layout.ContentScale
-import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.text.LinkAnnotation
+import androidx.compose.ui.text.Placeholder
+import androidx.compose.ui.text.PlaceholderVerticalAlign
+import androidx.compose.ui.text.SpanStyle
+import androidx.compose.ui.text.TextLinkStyles
 import androidx.compose.ui.text.TextStyle
+import androidx.compose.ui.text.buildAnnotatedString
+import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.text.input.ImeAction
+import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.text.withLink
+import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.Dp
+import androidx.compose.ui.unit.TextUnit
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import androidx.compose.ui.viewinterop.AndroidView
 import coil.compose.AsyncImage
 import coil.compose.SubcomposeAsyncImage
 import kotlinx.coroutines.delay
@@ -99,7 +104,6 @@ import org.linuxdo.android.data.ChatUpload
 import org.linuxdo.android.data.ChatUserSummary
 import org.linuxdo.android.data.avatarUrlOf
 import org.linuxdo.android.ui.ChatUiState
-import org.linuxdo.android.ui.RichMarkdownEditorView
 import org.linuxdo.android.ui.design.FullscreenDialog
 import org.linuxdo.android.ui.design.IosActivityIndicator
 import org.linuxdo.android.ui.design.IosDivider
@@ -107,10 +111,12 @@ import org.linuxdo.android.ui.design.IosFullDivider
 import org.linuxdo.android.ui.design.IosTheme
 import org.linuxdo.android.ui.design.MessageListRefresh
 import org.linuxdo.android.ui.design.UserAvatar
-import org.linuxdo.android.ui.design.composerBackKeys
-import org.linuxdo.android.ui.design.rememberComposerDismiss
 import org.linuxdo.android.ui.design.scrollListBars
 import org.linuxdo.android.ui.format.RelativeTime
+import org.linuxdo.android.ui.html.CookedBlock
+import org.linuxdo.android.ui.html.CookedParser
+import org.linuxdo.android.ui.html.InlineText
+import org.linuxdo.android.ui.html.replyMarkdownPreview
 import java.time.Instant
 import java.time.OffsetDateTime
 import java.time.ZoneId
@@ -758,12 +764,34 @@ private fun MutedBellGlyph(tint: Color, modifier: Modifier = Modifier) {
     }
 }
 
+/**
+ * 解析聊天消息的 Markdown / cooked HTML 内容为结构化块，供气泡渲染（支持粗体、斜体、删除线、行内/围栏代码、
+ * 链接、引用、列表、表格、折叠详情 [details]、剧透 [spoiler]、表情短码及图片）。
+ */
+internal fun parseChatBubbleBlocks(
+    message: ChatMessageSummary,
+    emojiUrls: Map<String, String> = emptyMap(),
+): List<CookedBlock> {
+    if (message.cooked.isNotBlank()) {
+        val parsed = runCatching { CookedParser().parse(message.cooked) }.getOrNull().orEmpty()
+        if (parsed.isNotEmpty()) return parsed
+    }
+    if (message.message.isNotBlank()) {
+        val rendered = renderEmojiShortcodes(message.message, keepUnknown = true).orEmpty()
+        val parsed = runCatching { replyMarkdownPreview(rendered, emojiUrls) }.getOrNull().orEmpty()
+        if (parsed.isNotEmpty()) return parsed
+        return listOf(CookedBlock.Paragraph(listOf(InlineText(rendered))))
+    }
+    return emptyList()
+}
+
 @Composable
 fun ChatRoomScreen(
     channel: ChatChannelSummary,
     state: ChatUiState,
     active: Boolean,
     currentUsername: String? = null,
+    emojiUrls: Map<String, String> = emptyMap(),
     onLoad: (Long, Boolean) -> Unit,
     onLoadPast: (Long) -> Unit = {},
     onSetChannelMuted: (Long, Boolean) -> Unit,
@@ -771,6 +799,8 @@ fun ChatRoomScreen(
     onSend: (Long, String, List<Long>, () -> Unit) -> Unit,
     onUploadAttachment: (Long, Uri, (AttachedMedia) -> Unit, (String) -> Unit) -> Unit = { _, _, _, _ -> },
     onOpenUser: (String) -> Unit = {},
+    onOpenTopic: (Long, String, Int?) -> Unit = { _, _, _ -> },
+    onOpenExternalUrl: (String) -> Unit = {},
     onBack: () -> Unit,
 ) {
     val channelId = channel.id
@@ -778,42 +808,37 @@ fun ChatRoomScreen(
     val listState = rememberLazyListState()
     var draft by rememberSaveable(channelId) { mutableStateOf("") }
     var showComposerSheet by remember(channelId) { mutableStateOf(false) }
+    var composerInitialFullscreen by remember(channelId) { mutableStateOf(false) }
     var pendingAttachments by remember(channelId) { mutableStateOf<List<AttachedMedia>>(emptyList()) }
     var isUploading by remember(channelId) { mutableStateOf(false) }
-    var pickingAttachment by remember(channelId) { mutableStateOf(false) }
+    var chatGallery by remember(channelId) { mutableStateOf<Pair<List<ImageViewerItem>, Int>?>(null) }
     val keyboard = LocalSoftwareKeyboardController.current
     val send: (String, List<Long>) -> Unit = { text, uploads ->
         onSend(channelId, text, uploads) {
             draft = ""
             pendingAttachments = emptyList()
             showComposerSheet = false
+            composerInitialFullscreen = false
+            keyboard?.hide()
         }
+    }
+
+    fun handleAttachUri(uri: Uri) {
+        isUploading = true
+        onUploadAttachment(channelId, uri, { media ->
+            isUploading = false
+            pendingAttachments = pendingAttachments + media
+        }, {
+            isUploading = false
+        })
     }
 
     val pickImage = rememberLauncherForActivityResult(ActivityResultContracts.PickVisualMedia()) { uri ->
-        pickingAttachment = false
-        if (uri != null) {
-            isUploading = true
-            onUploadAttachment(channelId, uri, { media ->
-                isUploading = false
-                pendingAttachments = pendingAttachments + media
-            }, {
-                isUploading = false
-            })
-        }
+        if (uri != null) handleAttachUri(uri)
     }
 
     val pickFile = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
-        pickingAttachment = false
-        if (uri != null) {
-            isUploading = true
-            onUploadAttachment(channelId, uri, { media ->
-                isUploading = false
-                pendingAttachments = pendingAttachments + media
-            }, {
-                isUploading = false
-            })
-        }
+        if (uri != null) handleAttachUri(uri)
     }
 
     LaunchedEffect(active, channelId) {
@@ -874,10 +899,14 @@ fun ChatRoomScreen(
     val canSendInline = (draft.isNotBlank() || pendingAttachments.isNotEmpty()) &&
         !isUploading && state.sendingChannelId == null
 
-    fun submitInline() {
+    fun submitChatDraft() {
         if (!canSendInline) return
         val text = draft.trim()
-        val attachText = pendingAttachments.joinToString("\n") { it.toMarkdown() }
+        val unincluded = pendingAttachments.filter { media ->
+            val shortUrl = media.uploaded.shortUrl
+            shortUrl.isBlank() || !text.contains(shortUrl)
+        }
+        val attachText = unincluded.joinToString("\n") { it.toMarkdown() }
         val fullMessage = when {
             text.isBlank() -> attachText
             attachText.isBlank() -> text
@@ -985,9 +1014,13 @@ fun ChatRoomScreen(
                             ChatMessageBubble(
                                 message = message,
                                 isMe = isMe,
+                                emojiUrls = emojiUrls,
                                 showSenderName = showSenderNames && !sameAsPrev,
                                 groupedWithPrevious = sameAsPrev,
                                 groupedWithNext = sameAsNext,
+                                onPicture = { images, idx -> chatGallery = images to idx },
+                                onOpenTopic = onOpenTopic,
+                                onOpenExternalUrl = onOpenExternalUrl,
                                 onOpenUser = onOpenUser,
                             )
                         }
@@ -1088,7 +1121,6 @@ fun ChatRoomScreen(
                                 .clip(CircleShape)
                                 .background(IosTheme.colors.fieldBackground)
                                 .clickable(enabled = !isUploading && state.sendingChannelId == null) {
-                                    pickingAttachment = true
                                     pickImage.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly))
                                 },
                             contentAlignment = Alignment.Center,
@@ -1103,7 +1135,6 @@ fun ChatRoomScreen(
                                 .clip(CircleShape)
                                 .background(IosTheme.colors.fieldBackground)
                                 .clickable(enabled = !isUploading && state.sendingChannelId == null) {
-                                    pickingAttachment = true
                                     pickFile.launch(arrayOf("*/*"))
                                 },
                             contentAlignment = Alignment.Center,
@@ -1111,59 +1142,43 @@ fun ChatRoomScreen(
                             ComposerAttachmentIcon(tint = if (isUploading) IosTheme.colors.tertiaryLabel else IosTheme.colors.label)
                         }
 
-                        // 原地胶囊文本输入框 + 内置展开富文本按钮
-                        Row(
+                        // 底部精简输入条：图片 / 附件 + 点击直接拉起回帖同款 MarkdownComposerSheet（支持常态精简、Aa、全屏工具栏、实时预览）+ 发送
+                        Box(
                             modifier = Modifier
                                 .weight(1f)
-                                .heightIn(min = 36.dp, max = 112.dp)
+                                .heightIn(min = 36.dp)
                                 .clip(RoundedCornerShape(18.dp))
                                 .background(IosTheme.colors.fieldBackground)
-                                .padding(start = 13.dp, end = 6.dp, top = 5.dp, bottom = 5.dp),
-                            verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.spacedBy(4.dp),
+                                .clickable(enabled = state.sendingChannelId == null) {
+                                    composerInitialFullscreen = false
+                                    showComposerSheet = true
+                                }
+                                .padding(horizontal = 13.dp, vertical = 8.dp)
+                                .semantics { contentDescription = "输入聊天消息" },
+                            contentAlignment = Alignment.CenterStart,
                         ) {
-                            BasicTextField(
-                                value = draft,
-                                onValueChange = { draft = it },
-                                enabled = state.sendingChannelId == null,
-                                maxLines = 4,
-                                textStyle = TextStyle(
-                                    fontSize = 14.5.sp,
-                                    lineHeight = 20.sp,
-                                    color = IosTheme.colors.label,
-                                ),
-                                cursorBrush = SolidColor(IosTheme.colors.accent),
-                                keyboardOptions = KeyboardOptions(imeAction = ImeAction.Default),
-                                keyboardActions = KeyboardActions(onSend = { submitInline() }),
-                                modifier = Modifier
-                                    .weight(1f)
-                                    .semantics { contentDescription = "输入聊天消息" },
-                                decorationBox = { innerField ->
-                                    Box(contentAlignment = Alignment.CenterStart) {
-                                        if (draft.isEmpty()) {
-                                            Text(
-                                                text = "发送消息…",
-                                                style = TextStyle(fontSize = 14.5.sp, color = IosTheme.colors.tertiaryLabel),
-                                            )
-                                        }
-                                        innerField()
-                                    }
-                                },
-                            )
-                            Box(
-                                modifier = Modifier
-                                    .size(26.dp)
-                                    .clip(CircleShape)
-                                    .clickable(enabled = state.sendingChannelId == null) {
-                                        showComposerSheet = true
-                                    }
-                                    .semantics { contentDescription = "展开全屏富文本编辑器" },
-                                contentAlignment = Alignment.Center,
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(6.dp),
                             ) {
-                                ChatFullscreenToggleIcon(
-                                    isFullScreen = false,
-                                    tint = IosTheme.colors.secondaryLabel,
-                                    modifier = Modifier.size(14.dp),
+                                Text(
+                                    text = if (draft.isEmpty()) "发送消息… 支持 Markdown" else draft.replace('\n', ' '),
+                                    style = TextStyle(
+                                        fontSize = 14.5.sp,
+                                        color = if (draft.isEmpty()) IosTheme.colors.tertiaryLabel else IosTheme.colors.label,
+                                    ),
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis,
+                                    modifier = Modifier.weight(1f),
+                                )
+                                Text(
+                                    text = "Aa",
+                                    style = TextStyle(
+                                        fontSize = 12.5.sp,
+                                        fontWeight = FontWeight.Bold,
+                                        color = IosTheme.colors.secondaryLabel,
+                                    ),
                                 )
                             }
                         }
@@ -1174,7 +1189,7 @@ fun ChatRoomScreen(
                                 .height(34.dp)
                                 .clip(RoundedCornerShape(17.dp))
                                 .background(if (canSendInline) IosTheme.colors.accent else IosTheme.colors.accent.copy(alpha = 0.35f))
-                                .clickable(enabled = canSendInline, onClick = ::submitInline)
+                                .clickable(enabled = canSendInline, onClick = ::submitChatDraft)
                                 .padding(horizontal = 14.dp),
                             contentAlignment = Alignment.Center,
                         ) {
@@ -1192,27 +1207,37 @@ fun ChatRoomScreen(
             }
         }
 
-        // 点击展开图标后弹出的富文本/全屏输入面板
+        // 复用回帖 MarkdownComposerSheet（常态精简 Aa 工具条 + 全屏云端工具栏 + 实时预览）
         if (showComposerSheet) {
-            ChatComposerBottomSheet(
-                channelTitle = channel.displayTitle.ifBlank { "实时聊天" },
+            MarkdownComposerSheet(
+                sessionKey = "chat_$channelId",
+                heading = "发送给 ${channel.displayTitle.ifBlank { "直接消息" }}",
+                sendLabel = "发送",
+                placeholder = "发送消息… 支持 Markdown",
                 draft = draft,
-                onDraftChange = { newDraft: String -> draft = newDraft },
-                pendingAttachments = pendingAttachments,
-                onRemoveAttachment = { removeId: String -> pendingAttachments = pendingAttachments.filterNot { it.id == removeId } },
-                isUploading = isUploading,
-                pickingAttachment = pickingAttachment,
-                isSending = state.sendingChannelId == channelId,
+                attachments = pendingAttachments,
+                emojiUrls = emojiUrls,
+                submitting = state.sendingChannelId == channelId,
+                uploading = isUploading,
+                canSubmit = canSendInline,
                 error = state.error,
-                onPickImage = { pickingAttachment = true; pickImage.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)) },
-                onPickFile = { pickingAttachment = true; pickFile.launch(arrayOf("*/*")) },
-                onSend = { fullMessage, uploadIds ->
-                    if (fullMessage.isNotBlank()) {
-                        send(fullMessage, uploadIds)
-                    }
+                allowPoll = false,
+                initialFullScreen = composerInitialFullscreen,
+                onDraftChange = { draft = it },
+                onSubmit = ::submitChatDraft,
+                onClose = {
+                    keyboard?.hide()
+                    showComposerSheet = false
                 },
-                onDismiss = { keyboard?.hide(); showComposerSheet = false },
+                onAttach = ::handleAttachUri,
+                onRemoveAttachment = { removeId ->
+                    pendingAttachments = pendingAttachments.filterNot { it.id == removeId }
+                },
             )
+        }
+
+        chatGallery?.let { (images, idx) ->
+            ImageViewer(images = images, initialIndex = idx) { chatGallery = null }
         }
     }
 }
@@ -1361,16 +1386,18 @@ private fun ChatChannelNotificationMenu(
 private fun ChatMessageBubble(
     message: ChatMessageSummary,
     isMe: Boolean,
+    emojiUrls: Map<String, String>,
     showSenderName: Boolean,
     groupedWithPrevious: Boolean,
     groupedWithNext: Boolean,
+    onPicture: (List<ImageViewerItem>, Int) -> Unit,
+    onOpenTopic: (Long, String, Int?) -> Unit,
+    onOpenExternalUrl: (String) -> Unit,
     onOpenUser: (String) -> Unit,
 ) {
     val user = message.user
-    val textContent = remember(message.message, message.cooked) {
-        val raw = if (message.message.isNotBlank()) message.message
-        else android.text.Html.fromHtml(message.cooked, android.text.Html.FROM_HTML_MODE_COMPACT).toString().trim()
-        renderEmojiShortcodes(raw, keepUnknown = true).orEmpty()
+    val blocks = remember(message.id, message.message, message.cooked, emojiUrls) {
+        parseChatBubbleBlocks(message, emojiUrls)
     }
     val timeStr = remember(message.createdAt) { formatBubbleClock(message.createdAt) }
     val imageUploads = remember(message.uploads) { message.uploads.filter { it.isImage } }
@@ -1427,13 +1454,14 @@ private fun ChatMessageBubble(
                     .padding(horizontal = 13.dp, vertical = 8.5.dp),
             ) {
                 Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                    if (textContent.isNotBlank()) {
-                        SelectionContainer {
-                            Text(
-                                text = textContent,
-                                style = TextStyle(fontSize = 14.8.sp, color = Color.White, lineHeight = 20.5.sp),
-                            )
-                        }
+                    if (blocks.isNotEmpty()) {
+                        ChatMarkdownContent(
+                            blocks = blocks,
+                            onAccent = true,
+                            onPicture = onPicture,
+                            onOpenTopic = onOpenTopic,
+                            onOpenExternalUrl = onOpenExternalUrl,
+                        )
                     }
                     imageUploads.forEach { upload ->
                         AsyncImage(
@@ -1523,13 +1551,14 @@ private fun ChatMessageBubble(
                         .padding(horizontal = 13.dp, vertical = 8.5.dp),
                 ) {
                     Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                        if (textContent.isNotBlank()) {
-                            SelectionContainer {
-                                Text(
-                                    text = textContent,
-                                    style = TextStyle(fontSize = 14.8.sp, color = IosTheme.colors.label, lineHeight = 20.5.sp),
-                                )
-                            }
+                        if (blocks.isNotEmpty()) {
+                            ChatMarkdownContent(
+                                blocks = blocks,
+                                onAccent = false,
+                                onPicture = onPicture,
+                                onOpenTopic = onOpenTopic,
+                                onOpenExternalUrl = onOpenExternalUrl,
+                            )
                         }
                         imageUploads.forEach { upload ->
                             AsyncImage(
@@ -1563,273 +1592,283 @@ private fun ChatMessageBubble(
     }
 }
 
-/** 实时聊天富文本评论样式输入框 (支持半屏/全屏切换、附件、表情、Markdown) */
+/**
+ * 聊天气泡内 Markdown 渲染组件：
+ * - 我方蓝色气泡（onAccent = true）自动适配纯白文字、半透明浅白代码块/引用条与下划线链接；
+ * - 对方气泡（onAccent = false）适配主题正文色、强调色链接与浅底代码块/引用块；
+ * - 完整支持段落富文本（粗/斜/删/行内代码/小字/剧透点击展开/表情/链接）、标题、代码块、引用、列表、表格、折叠详情、分割线与图片预览。
+ */
 @Composable
-private fun ChatComposerBottomSheet(
-    channelTitle: String,
-    draft: String,
-    onDraftChange: (String) -> Unit,
-    pendingAttachments: List<AttachedMedia>,
-    onRemoveAttachment: (String) -> Unit,
-    isUploading: Boolean,
-    pickingAttachment: Boolean,
-    isSending: Boolean,
-    error: String?,
-    onPickImage: () -> Unit,
-    onPickFile: () -> Unit,
-    onSend: (String, List<Long>) -> Unit,
-    onDismiss: () -> Unit,
+private fun ChatMarkdownContent(
+    blocks: List<CookedBlock>,
+    onAccent: Boolean,
+    onPicture: (List<ImageViewerItem>, Int) -> Unit,
+    onOpenTopic: (Long, String, Int?) -> Unit,
+    onOpenExternalUrl: (String) -> Unit,
 ) {
-    val completionSource = org.linuxdo.android.ui.LocalEditorSuggestionSource.current
-    var isFullScreen by rememberSaveable { mutableStateOf(false) }
-    var editorView by remember { mutableStateOf<RichMarkdownEditorView?>(null) }
-    var editorContentHeight by remember { mutableIntStateOf(0) }
-    val compactEditorHeight = with(LocalDensity.current) {
-        editorContentHeight.toDp().coerceIn(44.dp, 180.dp)
-    }
-    val dismiss = rememberComposerDismiss(
-        canDismiss = !isSending,
-        ignoreKeyboardHide = pickingAttachment,
-    ) {
-        editorView?.exportToMarkdown()?.let(onDraftChange)
-        onDismiss()
-    }
-    val textColorInt = IosTheme.colors.label.toArgb()
-    val hintColorInt = IosTheme.colors.tertiaryLabel.toArgb()
+    val colors = IosTheme.colors
+    val textColor = if (onAccent) Color.White else colors.label
+    val secondaryColor = if (onAccent) Color.White.copy(alpha = 0.80f) else colors.secondaryLabel
+    val codeBg = if (onAccent) Color.White.copy(alpha = 0.18f) else colors.fieldBackground
+    val quoteBg = if (onAccent) Color.White.copy(alpha = 0.14f) else colors.fieldBackground
+    val quoteBar = if (onAccent) Color.White.copy(alpha = 0.72f) else colors.accent.copy(alpha = 0.65f)
+    val dividerColor = if (onAccent) Color.White.copy(alpha = 0.28f) else colors.separator
+    val allImages = remember(blocks) { extractChatBubbleImages(blocks) }
 
-    LaunchedEffect(pendingAttachments) {
-        editorView?.syncAttachments(pendingAttachments)
-    }
-
-    BoxWithConstraints(
-        modifier = Modifier
-            .fillMaxSize()
-            .composerBackKeys(dismiss)
-            .imePadding()
-            .navigationBarsPadding(),
-        contentAlignment = Alignment.BottomCenter,
-    ) {
-        Box(
-            modifier = Modifier
-                .fillMaxSize()
-                .background(Color.Black.copy(alpha = 0.45f))
-                .clickable(
-                    interactionSource = remember { MutableInteractionSource() },
-                    indication = null,
-                    onClick = dismiss,
-                ),
-        )
-
-        Column(
-            modifier = Modifier
-                .fillMaxWidth()
-                .heightIn(max = maxHeight * 0.92f)
-                .then(if (isFullScreen) Modifier.height(maxHeight * 0.92f) else Modifier)
-                .clip(RoundedCornerShape(topStart = 16.dp, topEnd = 16.dp))
-                .background(IosTheme.colors.card)
-                .clickable(
-                    interactionSource = remember { MutableInteractionSource() },
-                    indication = null,
-                    onClick = {},
-                )
-                .padding(horizontal = 12.dp, vertical = 8.dp),
-            verticalArrangement = Arrangement.spacedBy(6.dp),
-        ) {
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.SpaceBetween,
-            ) {
-                Text(
-                    text = "发送给 $channelTitle",
-                    style = IosTheme.type.headline,
-                    fontWeight = FontWeight.SemiBold,
-                    color = IosTheme.colors.label,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                    modifier = Modifier
-                        .weight(1f)
-                        .padding(horizontal = 8.dp),
+    Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+        blocks.forEach { block ->
+            when (block) {
+                is CookedBlock.Paragraph -> ChatBubbleRichParagraph(
+                    runs = block.runs,
+                    onAccent = onAccent,
+                    onPicture = onPicture,
+                    onOpenTopic = onOpenTopic,
+                    onOpenExternalUrl = onOpenExternalUrl,
                 )
 
-                Box(
-                    modifier = Modifier
-                        .size(32.dp)
-                        .clip(CircleShape)
-                        .clickable { isFullScreen = !isFullScreen }
-                        .semantics { contentDescription = if (isFullScreen) "恢复默认高度" else "全屏显示" },
-                    contentAlignment = Alignment.Center,
-                ) {
-                    ChatFullscreenToggleIcon(isFullScreen = isFullScreen, tint = IosTheme.colors.label)
-                }
-            }
-
-            val editorTextSizePx = with(LocalDensity.current) { 16.sp.toPx() }
-            Box(
-                modifier = Modifier
-                    .weight(1f, fill = isFullScreen)
-                    .fillMaxWidth()
-                    .then(
-                        if (isFullScreen) Modifier else Modifier.height(
-                            compactEditorHeight + (if (pendingAttachments.isNotEmpty() || isUploading) 44.dp else 0.dp),
+                is CookedBlock.Heading -> {
+                    val fontSize = when (block.level) {
+                        1 -> 17.5.sp
+                        2 -> 16.5.sp
+                        3 -> 15.5.sp
+                        else -> 14.8.sp
+                    }
+                    Text(
+                        text = block.title,
+                        style = TextStyle(
+                            fontSize = fontSize,
+                            fontWeight = FontWeight.Bold,
+                            color = textColor,
+                            lineHeight = (fontSize.value + 5f).sp,
                         ),
                     )
-                    .clip(RoundedCornerShape(12.dp))
-                    .background(IosTheme.colors.fieldBackground),
-            ) {
-                Column(modifier = Modifier.fillMaxSize()) {
-                    Box(modifier = Modifier.weight(1f).fillMaxWidth()) {
-                        AndroidView(
-                            modifier = Modifier.fillMaxSize(),
-                            factory = { ctx ->
-                                RichMarkdownEditorView(ctx).apply {
-                                    setOnDismissInputListener(dismiss)
-                                    hint = "发送消息…"
-                                    updateThemeColors(textColorInt, hintColorInt)
-                                    setCompletionSource(completionSource)
-                                    setOnContentHeightChangeListener { editorContentHeight = it }
-                                    setInitialMarkdown(draft, pendingAttachments)
-                                    setOnMarkdownChangeListener { newRaw -> onDraftChange(newRaw) }
-                                    setOnRemoveAttachmentListener { mediaId -> onRemoveAttachment(mediaId) }
-                                    editorView = this
-                                    post { requestInputFocus() }
-                                }
-                            },
-                            update = { view ->
-                                view.setOnDismissInputListener(dismiss)
-                                view.updateThemeColors(textColorInt, hintColorInt)
-                                view.setTextSize(android.util.TypedValue.COMPLEX_UNIT_PX, editorTextSizePx)
-                                view.setCompletionSource(completionSource)
-                                view.isEnabled = !isSending
-                            },
+                }
+
+                is CookedBlock.Code -> {
+                    SelectionContainer {
+                        Text(
+                            text = block.text,
+                            fontFamily = FontFamily.Monospace,
+                            style = TextStyle(
+                                fontSize = 12.8.sp,
+                                lineHeight = 18.sp,
+                                color = textColor,
+                            ),
+                            modifier = Modifier
+                                .clip(RoundedCornerShape(8.dp))
+                                .background(codeBg)
+                                .horizontalScroll(rememberScrollState())
+                                .padding(horizontal = 10.dp, vertical = 8.dp),
                         )
                     }
+                }
 
-                    if (pendingAttachments.isNotEmpty() || isUploading) {
-                        Row(
+                is CookedBlock.Quote -> {
+                    Row(
+                        modifier = Modifier
+                            .clip(RoundedCornerShape(8.dp))
+                            .background(quoteBg)
+                            .padding(end = 8.dp),
+                    ) {
+                        Box(
                             modifier = Modifier
-                                .fillMaxWidth()
-                                .horizontalScroll(rememberScrollState())
-                                .padding(top = 8.dp),
-                            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                                .width(3.dp)
+                                .heightIn(min = 24.dp)
+                                .background(quoteBar),
+                        )
+                        Box(Modifier.padding(start = 8.dp, top = 6.dp, bottom = 6.dp)) {
+                            ChatMarkdownContent(block.blocks, onAccent, onPicture, onOpenTopic, onOpenExternalUrl)
+                        }
+                    }
+                }
+
+                is CookedBlock.Details -> {
+                    var expanded by remember(block.id) { mutableStateOf(block.initiallyOpen) }
+                    Column(
+                        modifier = Modifier
+                            .clip(RoundedCornerShape(8.dp))
+                            .background(quoteBg)
+                            .padding(horizontal = 9.dp, vertical = 7.dp),
+                        verticalArrangement = Arrangement.spacedBy(5.dp),
+                    ) {
+                        Row(
+                            modifier = Modifier.clickable { expanded = !expanded },
                             verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(5.dp),
                         ) {
-                            for (media in pendingAttachments) {
-                                Box(
-                                    modifier = Modifier
-                                        .clip(RoundedCornerShape(8.dp))
-                                        .background(IosTheme.colors.card)
-                                        .padding(horizontal = 8.dp, vertical = 4.dp),
-                                ) {
-                                    Row(
-                                        verticalAlignment = Alignment.CenterVertically,
-                                        horizontalArrangement = Arrangement.spacedBy(6.dp),
-                                    ) {
-                                        if (media.isImage) {
-                                            AsyncImage(
-                                                model = media.previewUrl,
-                                                contentDescription = media.name,
-                                                modifier = Modifier
-                                                    .size(24.dp)
-                                                    .clip(RoundedCornerShape(4.dp)),
-                                                contentScale = ContentScale.Crop,
-                                            )
-                                        } else {
-                                            Icon(
-                                                imageVector = Icons.Default.Search,
-                                                contentDescription = null,
-                                                tint = IosTheme.colors.accent,
-                                                modifier = Modifier.size(16.dp),
-                                            )
-                                        }
-                                        Text(
-                                            text = media.name,
-                                            style = IosTheme.type.caption,
-                                            color = IosTheme.colors.label,
-                                            maxLines = 1,
-                                        )
-                                        Icon(
-                                            imageVector = Icons.Default.Close,
-                                            contentDescription = "删除",
-                                            tint = IosTheme.colors.secondaryLabel,
-                                            modifier = Modifier
-                                                .size(14.dp)
-                                                .clickable { onRemoveAttachment(media.id) },
-                                        )
+                            Text(
+                                text = if (expanded) "▾" else "▸",
+                                style = TextStyle(fontSize = 12.sp, fontWeight = FontWeight.Bold, color = secondaryColor),
+                            )
+                            ChatBubbleRichParagraph(
+                                runs = block.summary.ifEmpty { listOf(InlineText("总结")) },
+                                onAccent = onAccent,
+                                onPicture = onPicture,
+                                onOpenTopic = onOpenTopic,
+                                onOpenExternalUrl = onOpenExternalUrl,
+                                boldOverride = true,
+                            )
+                        }
+                        if (expanded && block.blocks.isNotEmpty()) {
+                            ChatMarkdownContent(block.blocks, onAccent, onPicture, onOpenTopic, onOpenExternalUrl)
+                        }
+                    }
+                }
+
+                is CookedBlock.ListBlock -> {
+                    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                        block.entries.forEachIndexed { idx, entryBlocks ->
+                            val marker = block.start?.let { "${it + idx}." } ?: "•"
+                            Row(
+                                horizontalArrangement = Arrangement.spacedBy(6.dp),
+                                verticalAlignment = Alignment.Top,
+                            ) {
+                                Text(
+                                    text = marker,
+                                    style = TextStyle(fontSize = 14.sp, fontWeight = FontWeight.SemiBold, color = secondaryColor),
+                                )
+                                Box(Modifier.weight(1f, fill = false)) {
+                                    ChatMarkdownContent(entryBlocks, onAccent, onPicture, onOpenTopic, onOpenExternalUrl)
+                                }
+                            }
+                        }
+                    }
+                }
+
+                is CookedBlock.Table -> {
+                    Column(
+                        modifier = Modifier
+                            .clip(RoundedCornerShape(8.dp))
+                            .background(codeBg)
+                            .horizontalScroll(rememberScrollState())
+                            .padding(6.dp),
+                        verticalArrangement = Arrangement.spacedBy(4.dp),
+                    ) {
+                        block.rows.forEachIndexed { rIdx, row ->
+                            Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                                row.forEach { cell ->
+                                    Box(Modifier.widthIn(min = 52.dp, max = 140.dp)) {
+                                        ChatMarkdownContent(cell.blocks, onAccent, onPicture, onOpenTopic, onOpenExternalUrl)
                                     }
                                 }
                             }
-                            if (isUploading) {
-                                Row(
-                                    modifier = Modifier
-                                        .clip(RoundedCornerShape(8.dp))
-                                        .background(IosTheme.colors.card)
-                                        .padding(horizontal = 8.dp, vertical = 4.dp),
-                                    verticalAlignment = Alignment.CenterVertically,
-                                    horizontalArrangement = Arrangement.spacedBy(6.dp),
-                                ) {
-                                    IosActivityIndicator(diameter = 14.dp, color = IosTheme.colors.accent)
-                                    Text("正在上传...", style = IosTheme.type.caption, color = IosTheme.colors.secondaryLabel)
-                                }
+                            if (rIdx < block.rows.lastIndex) {
+                                Box(Modifier.fillMaxWidth().height(0.5.dp).background(dividerColor))
                             }
                         }
                     }
                 }
-            }
 
-            error?.let { Text(it, style = IosTheme.type.footnote, color = IosTheme.colors.destructive, maxLines = 2) }
-
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.SpaceBetween,
-            ) {
-                Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(10.dp),
-                ) {
-                    Box(
+                is CookedBlock.Picture -> {
+                    val idx = allImages.indexOfFirst { it.url == block.originalUrl || it.previewUrl == block.url }.coerceAtLeast(0)
+                    AsyncImage(
+                        model = block.url,
+                        contentDescription = block.description.ifBlank { "图片" },
                         modifier = Modifier
-                            .size(36.dp)
-                            .clip(CircleShape)
-                            .clickable(enabled = !isUploading && !isSending, onClick = onPickImage),
-                        contentAlignment = Alignment.Center,
-                    ) {
-                        ComposerImageIcon(tint = if (isUploading) IosTheme.colors.tertiaryLabel else IosTheme.colors.label)
-                    }
+                            .widthIn(max = 200.dp)
+                            .clip(RoundedCornerShape(10.dp))
+                            .clickable {
+                                val gallery = allImages.ifEmpty {
+                                    listOf(ImageViewerItem(block.originalUrl, block.url, block.description))
+                                }
+                                onPicture(gallery, idx.coerceIn(0, gallery.lastIndex))
+                            },
+                        contentScale = ContentScale.FillWidth,
+                    )
+                }
 
-                    Box(
-                        modifier = Modifier
-                            .size(36.dp)
-                            .clip(CircleShape)
-                            .clickable(enabled = !isUploading && !isSending, onClick = onPickFile),
-                        contentAlignment = Alignment.Center,
-                    ) {
-                        ComposerAttachmentIcon(tint = if (isUploading) IosTheme.colors.tertiaryLabel else IosTheme.colors.label)
+                is CookedBlock.ImageGrid -> {
+                    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                        block.pictures.forEach { pic ->
+                            val idx = allImages.indexOfFirst { it.url == pic.originalUrl || it.previewUrl == pic.url }.coerceAtLeast(0)
+                            AsyncImage(
+                                model = pic.url,
+                                contentDescription = pic.description.ifBlank { "图片" },
+                                modifier = Modifier
+                                    .widthIn(max = 200.dp)
+                                    .clip(RoundedCornerShape(10.dp))
+                                    .clickable {
+                                        val gallery = allImages.ifEmpty {
+                                            listOf(ImageViewerItem(pic.originalUrl, pic.url, pic.description))
+                                        }
+                                        onPicture(gallery, idx.coerceIn(0, gallery.lastIndex))
+                                    },
+                                contentScale = ContentScale.FillWidth,
+                            )
+                        }
                     }
                 }
 
-                val canSend = (draft.isNotBlank() || pendingAttachments.isNotEmpty()) && !isUploading && !isSending
-                Box(
-                    modifier = Modifier
-                        .clip(RoundedCornerShape(20.dp))
-                        .background(if (canSend) IosTheme.colors.accent else IosTheme.colors.accent.copy(alpha = 0.4f))
-                        .clickable(enabled = canSend) {
-                            val fullText = editorView?.exportToMarkdown()?.trim() ?: draft.trim()
-                            val uploadIds = pendingAttachments.mapNotNull { it.uploadId }
-                            onSend(fullText, uploadIds)
-                        }
-                        .padding(horizontal = 20.dp, vertical = 9.dp),
-                    contentAlignment = Alignment.Center,
-                ) {
-                    if (isSending) {
-                        IosActivityIndicator(diameter = 16.dp, color = Color.White)
-                    } else {
+                is CookedBlock.Onebox -> {
+                    Column(
+                        modifier = Modifier
+                            .clip(RoundedCornerShape(8.dp))
+                            .background(quoteBg)
+                            .clickable { onOpenExternalUrl(block.url) }
+                            .padding(horizontal = 9.dp, vertical = 7.dp),
+                        verticalArrangement = Arrangement.spacedBy(2.dp),
+                    ) {
                         Text(
-                            text = "发送",
-                            style = TextStyle(fontSize = 14.sp, fontWeight = FontWeight.SemiBold, color = Color.White),
+                            text = block.title.ifBlank { block.url },
+                            style = TextStyle(fontSize = 13.5.sp, fontWeight = FontWeight.SemiBold, color = textColor),
+                            maxLines = 2,
+                            overflow = TextOverflow.Ellipsis,
                         )
+                        block.description?.takeIf { it.isNotBlank() }?.let { desc ->
+                            Text(
+                                text = desc,
+                                style = TextStyle(fontSize = 12.sp, color = secondaryColor),
+                                maxLines = 2,
+                                overflow = TextOverflow.Ellipsis,
+                            )
+                        }
                     }
+                }
+
+                is CookedBlock.Video -> {
+                    Text(
+                        text = "🎬 ${block.title}",
+                        style = TextStyle(fontSize = 13.5.sp, color = textColor, textDecoration = TextDecoration.Underline),
+                        modifier = Modifier.clickable { onOpenExternalUrl(block.url) },
+                    )
+                }
+
+                is CookedBlock.Audio -> {
+                    Text(
+                        text = "🎵 ${block.title}",
+                        style = TextStyle(fontSize = 13.5.sp, color = textColor, textDecoration = TextDecoration.Underline),
+                        modifier = Modifier.clickable { onOpenExternalUrl(block.url) },
+                    )
+                }
+
+                is CookedBlock.Poll -> {
+                    Column(
+                        modifier = Modifier
+                            .clip(RoundedCornerShape(8.dp))
+                            .background(quoteBg)
+                            .padding(horizontal = 9.dp, vertical = 7.dp),
+                        verticalArrangement = Arrangement.spacedBy(3.dp),
+                    ) {
+                        Text(
+                            text = "📊 ${block.title.ifBlank { "投票" }}",
+                            style = TextStyle(fontSize = 13.5.sp, fontWeight = FontWeight.SemiBold, color = textColor),
+                        )
+                        block.options.forEach { opt ->
+                            Text(
+                                text = "• ${opt.title}",
+                                style = TextStyle(fontSize = 12.5.sp, color = secondaryColor),
+                            )
+                        }
+                    }
+                }
+
+                CookedBlock.Divider -> {
+                    Box(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(0.8.dp)
+                            .background(dividerColor),
+                    )
                 }
             }
         }
@@ -1837,29 +1876,138 @@ private fun ChatComposerBottomSheet(
 }
 
 @Composable
-private fun ChatFullscreenToggleIcon(isFullScreen: Boolean, tint: Color, modifier: Modifier = Modifier) {
-    Canvas(modifier.size(18.dp)) {
-        scale(size.width / 24f, size.height / 24f, pivot = Offset.Zero) {
-            val stroke = Stroke(width = 2.2f, cap = StrokeCap.Round, join = StrokeJoin.Round)
-            if (!isFullScreen) {
-                val p1 = Path().apply { moveTo(3f, 8f); lineTo(3f, 3f); lineTo(8f, 3f) }
-                val p2 = Path().apply { moveTo(16f, 3f); lineTo(21f, 3f); lineTo(21f, 8f) }
-                val p3 = Path().apply { moveTo(21f, 16f); lineTo(21f, 21f); lineTo(16f, 21f) }
-                val p4 = Path().apply { moveTo(8f, 21f); lineTo(3f, 21f); lineTo(3f, 16f) }
-                drawPath(p1, tint, style = stroke)
-                drawPath(p2, tint, style = stroke)
-                drawPath(p3, tint, style = stroke)
-                drawPath(p4, tint, style = stroke)
-            } else {
-                val p1 = Path().apply { moveTo(8f, 3f); lineTo(8f, 8f); lineTo(3f, 8f) }
-                val p2 = Path().apply { moveTo(16f, 3f); lineTo(16f, 8f); lineTo(21f, 8f) }
-                val p3 = Path().apply { moveTo(16f, 21f); lineTo(16f, 16f); lineTo(21f, 16f) }
-                val p4 = Path().apply { moveTo(8f, 21f); lineTo(8f, 16f); lineTo(3f, 16f) }
-                drawPath(p1, tint, style = stroke)
-                drawPath(p2, tint, style = stroke)
-                drawPath(p3, tint, style = stroke)
-                drawPath(p4, tint, style = stroke)
+private fun ChatBubbleRichParagraph(
+    runs: List<InlineText>,
+    onAccent: Boolean,
+    onPicture: (List<ImageViewerItem>, Int) -> Unit,
+    onOpenTopic: (Long, String, Int?) -> Unit,
+    onOpenExternalUrl: (String) -> Unit,
+    boldOverride: Boolean = false,
+) {
+    val colors = IosTheme.colors
+    val context = LocalContext.current
+    val updatedOpenExternal by rememberUpdatedState(onOpenExternalUrl)
+    val updatedOpenTopic by rememberUpdatedState(onOpenTopic)
+    val hasSpoiler = remember(runs) { runs.any { it.spoiler } }
+    var revealedSpoilers by remember(runs) { mutableStateOf(false) }
+
+    val textColor = if (onAccent) Color.White else colors.label
+    val secondaryColor = if (onAccent) Color.White.copy(alpha = 0.80f) else colors.secondaryLabel
+    val codeBg = if (onAccent) Color.White.copy(alpha = 0.22f) else colors.fieldBackground
+    val spoilerHiddenBg = if (onAccent) Color.White.copy(alpha = 0.55f) else colors.secondaryLabel.copy(alpha = 0.78f)
+    val linkColor = if (onAccent) Color.White else colors.accent
+
+    val annotated = remember(runs, onAccent, colors, revealedSpoilers, boldOverride) {
+        buildAnnotatedString {
+            runs.forEach { run ->
+                val emoji = run.emojiUrl
+                if (emoji != null) {
+                    appendInlineContent(emoji, run.text.ifBlank { "表情" })
+                    return@forEach
+                }
+                val isHiddenSpoiler = run.spoiler && !revealedSpoilers
+                val span = SpanStyle(
+                    fontWeight = if (run.bold || boldOverride) FontWeight.Bold else null,
+                    fontStyle = if (run.italic) FontStyle.Italic else null,
+                    fontFamily = if (run.code) FontFamily.Monospace else null,
+                    fontSize = if (run.small) 12.sp else TextUnit.Unspecified,
+                    textDecoration = if (run.strikethrough) TextDecoration.LineThrough else null,
+                    color = when {
+                        isHiddenSpoiler -> Color.Transparent
+                        run.small -> secondaryColor
+                        else -> Color.Unspecified
+                    },
+                    background = when {
+                        isHiddenSpoiler -> spoilerHiddenBg
+                        run.spoiler -> codeBg
+                        run.code -> codeBg
+                        else -> Color.Unspecified
+                    },
+                )
+                withStyle(span) {
+                    val link = run.href
+                    if (link == null || isHiddenSpoiler) {
+                        append(run.text)
+                    } else {
+                        withLink(
+                            LinkAnnotation.Url(
+                                url = link,
+                                styles = TextLinkStyles(
+                                    style = SpanStyle(
+                                        color = linkColor,
+                                        textDecoration = if (onAccent) TextDecoration.Underline else null,
+                                    ),
+                                ),
+                                linkInteractionListener = {
+                                    if (run.isAttachment) {
+                                        AttachmentDownloadManager.enqueue(
+                                            context = context,
+                                            url = link,
+                                            suggestedName = run.text.trim(),
+                                        )
+                                    } else {
+                                        val internalTarget = org.linuxdo.android.data.parseInternalTopicUrl(link)
+                                        if (internalTarget != null) {
+                                            updatedOpenTopic(internalTarget.topicId, run.text.ifBlank { "话题 #${internalTarget.topicId}" }, internalTarget.postNumber)
+                                        } else {
+                                            updatedOpenExternal(link)
+                                        }
+                                    }
+                                },
+                            ),
+                        ) {
+                            append(run.text)
+                        }
+                    }
+                }
             }
         }
     }
+
+    val inline = remember(runs) {
+        runs.mapNotNull { it.emojiUrl }.distinct().associateWith { url ->
+            InlineTextContent(Placeholder(18.sp, 18.sp, PlaceholderVerticalAlign.TextCenter)) {
+                AsyncImage(url, "表情", modifier = Modifier.fillMaxSize())
+            }
+        }
+    }
+
+    val spoilerModifier = if (hasSpoiler) {
+        Modifier.clickable(
+            interactionSource = remember { MutableInteractionSource() },
+            indication = null,
+        ) { revealedSpoilers = !revealedSpoilers }
+    } else {
+        Modifier
+    }
+
+    SelectionContainer {
+        Text(
+            text = annotated,
+            style = TextStyle(fontSize = 14.8.sp, color = textColor, lineHeight = 20.5.sp),
+            inlineContent = inline,
+            modifier = spoilerModifier,
+        )
+    }
+}
+
+private fun extractChatBubbleImages(blocks: List<CookedBlock>): List<ImageViewerItem> {
+    val result = mutableListOf<ImageViewerItem>()
+    fun walk(list: List<CookedBlock>) {
+        list.forEach { b ->
+            when (b) {
+                is CookedBlock.Picture -> result += ImageViewerItem(b.originalUrl, b.url, b.description)
+                is CookedBlock.ImageGrid -> b.pictures.forEach { p ->
+                    result += ImageViewerItem(p.originalUrl, p.url, p.description)
+                }
+                is CookedBlock.Quote -> walk(b.blocks)
+                is CookedBlock.Details -> walk(b.blocks)
+                is CookedBlock.ListBlock -> b.entries.forEach(::walk)
+                is CookedBlock.Table -> b.rows.forEach { row -> row.forEach { walk(it.blocks) } }
+                else -> Unit
+            }
+        }
+    }
+    walk(blocks)
+    return result
 }

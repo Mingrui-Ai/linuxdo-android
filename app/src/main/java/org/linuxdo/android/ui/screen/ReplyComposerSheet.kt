@@ -104,12 +104,12 @@ private enum class ComposerExpandedTab { Edit, Preview }
 private enum class ComposerSubToolbar { Heading, Quote, Code, List, More }
 
 /**
- * 回复 / 编辑共用的 Markdown 输入弹层。
+ * 回复 / 编辑 / 实时聊天共用的 Markdown 输入弹层。
  * 对齐 LINUX DO 云端 Discourse 新版编辑器（composer-redesign）底部工具栏体系，并兼顾移动端体验：
- * - 常态精简：低矮自适应输入框；底栏左起与云端一致（图片 / 附件 / 投票 | Aa），点 Aa 展开发言快捷条；
- * - 展开全屏：顶栏左侧收起 + 标题 + 字数，右侧「编辑 / 预览」分段胶囊 + 发表胶囊；
+ * - 常态精简：低矮自适应输入框；底栏左起与云端一致（图片 / 附件 / 可选投票 | Aa），点 Aa 展开发言快捷条；
+ * - 展开全屏：顶栏左侧收起 + 标题 + 字数，右侧「编辑 / 预览」分段胶囊 + 发表/发送胶囊；
  *   编辑态底部常驻与云端顺序一致的横向可滚工具栏：
- *   粗体(B) / 斜体(I) / 文本大小(T▾: 标题1-4、小) | 链接 / 引用(▾: 块引用、隐藏详细信息 [details="总结"]) / 代码(</>▾) / 图片 / 附件 | 列表(▾: 项目符号/编号/待办) / 更多(⊕: 隐藏详细信息、模糊剧透、表格、分割线、投票、脚注)；
+ *   粗体(B) / 斜体(I) / 文本大小(T▾: 标题1-4、小) | 链接 / 引用(▾: 块引用、隐藏详细信息 [details="总结"]) / 代码(</>▾) / 图片 / 附件 | 列表(▾: 项目符号/编号/待办) / 更多(⊕: 隐藏详细信息、模糊剧透、表格、分割线、可选投票、脚注)；
  * - 预览态本地实时渲染 Markdown + Discourse 扩展语法。
  */
 @Composable
@@ -123,18 +123,66 @@ internal fun ReplyComposerSheet(
     onRemoveAttachment: (String) -> Unit = {},
 ) {
     val target = composer.target ?: return
-    val completionSource = LocalEditorSuggestionSource.current
     val heading = when (target) {
         is ComposerTarget.NewReply -> "发表评论"
         is ComposerTarget.ReplyTo -> "回复 @${target.username}"
         is ComposerTarget.Edit -> "编辑 #${target.postNumber}"
     }
     val sendText = if (target is ComposerTarget.Edit) "保存" else "发表"
+    MarkdownComposerSheet(
+        sessionKey = target,
+        heading = heading,
+        sendLabel = sendText,
+        placeholder = "说点什么… 支持 Markdown",
+        draft = composer.draft,
+        attachments = composer.attachments,
+        emojiUrls = emojiUrls,
+        loadingDraft = composer.loadingDraft,
+        remoteRevision = composer.remoteRevision,
+        submitting = composer.submitting,
+        uploading = composer.uploading,
+        canSubmit = composer.canSubmit,
+        error = composer.error,
+        topicId = target.topicId,
+        allowPoll = true,
+        onDraftChange = onDraftChange,
+        onSubmit = onSubmit,
+        onClose = onClose,
+        onAttach = onAttach,
+        onRemoveAttachment = onRemoveAttachment,
+    )
+}
+
+@Composable
+internal fun MarkdownComposerSheet(
+    sessionKey: Any,
+    heading: String,
+    sendLabel: String,
+    placeholder: String,
+    draft: String,
+    attachments: List<org.linuxdo.android.data.AttachedMedia>,
+    emojiUrls: Map<String, String>,
+    loadingDraft: Boolean = false,
+    remoteRevision: Long = 0L,
+    submitting: Boolean = false,
+    uploading: Boolean = false,
+    canSubmit: Boolean = (draft.isNotBlank() || attachments.isNotEmpty()) && !submitting && !loadingDraft && !uploading,
+    error: String? = null,
+    topicId: Long? = null,
+    allowPoll: Boolean = true,
+    initialFullScreen: Boolean = false,
+    onDraftChange: (String) -> Unit,
+    onSubmit: () -> Unit,
+    onClose: () -> Unit,
+    onAttach: (Uri) -> Unit,
+    onRemoveAttachment: (String) -> Unit = {},
+) {
+    val completionSource = LocalEditorSuggestionSource.current
     val keyboardController = LocalSoftwareKeyboardController.current
 
-    var isFullScreen by rememberSaveable { mutableStateOf(false) }
-    var expandedTab by rememberSaveable { mutableStateOf(ComposerExpandedTab.Edit) }
-    var quickMdOpen by rememberSaveable { mutableStateOf(false) }
+    var isFullScreen by rememberSaveable(sessionKey) { mutableStateOf(initialFullScreen) }
+    var expandedTab by rememberSaveable(sessionKey) { mutableStateOf(ComposerExpandedTab.Edit) }
+    var quickMdOpen by rememberSaveable(sessionKey) { mutableStateOf(false) }
     var openSubToolbar by remember { mutableStateOf<ComposerSubToolbar?>(null) }
 
     var showLinkDialog by remember { mutableStateOf(false) }
@@ -143,18 +191,17 @@ internal fun ReplyComposerSheet(
     var editingPollTarget by remember { mutableStateOf<Pair<CreatorPollSpan, PollBuilderSpec>?>(null) }
     var previewGallery by remember { mutableStateOf<Pair<List<ImageViewerItem>, Int>?>(null) }
 
-    var editorView by remember(target) { mutableStateOf<RichMarkdownEditorView?>(null) }
-    var editorContentHeight by remember(target) { mutableIntStateOf(0) }
+    var editorView by remember(sessionKey) { mutableStateOf<RichMarkdownEditorView?>(null) }
+    var editorContentHeight by remember(sessionKey) { mutableIntStateOf(0) }
     val compactEditorHeight = with(LocalDensity.current) { editorContentHeight.toDp().coerceIn(48.dp, 152.dp) }
     var pickingAttachment by remember { mutableStateOf(false) }
 
     val isPreview = isFullScreen && expandedTab == ComposerExpandedTab.Preview
-    val busy = composer.submitting || composer.uploading || composer.loadingDraft
-    val canSubmit = composer.canSubmit
+    val busy = submitting || uploading || loadingDraft
 
     val dismiss = rememberComposerDismiss(
         enabled = !showPollDialog && !showLinkDialog && previewGallery == null,
-        canDismiss = !composer.submitting,
+        canDismiss = !submitting,
         ignoreKeyboardHide = pickingAttachment || isFullScreen || showLinkDialog || showPollDialog,
     ) {
         editorView?.exportToMarkdown()?.let(onDraftChange)
@@ -174,21 +221,21 @@ internal fun ReplyComposerSheet(
     }
 
     // 服务端草稿恢复或冲突选择后刷新内容，普通输入不重置光标。
-    LaunchedEffect(target, composer.loadingDraft, composer.remoteRevision) {
-        if (!composer.loadingDraft) {
-            editorView?.setInitialMarkdown(composer.draft, composer.attachments)
+    LaunchedEffect(sessionKey, loadingDraft, remoteRevision) {
+        if (!loadingDraft) {
+            editorView?.setInitialMarkdown(draft, attachments)
         }
     }
 
     // 弹框打开时立刻聚焦输入框并呼出软键盘，消除额外延迟避免卡顿感
-    LaunchedEffect(editorView, composer.loadingDraft) {
-        if (!composer.loadingDraft && editorView != null && !isPreview) {
+    LaunchedEffect(editorView, loadingDraft) {
+        if (!loadingDraft && editorView != null && !isPreview) {
             editorView?.requestInputFocus()
         }
     }
 
-    LaunchedEffect(composer.attachments) {
-        editorView?.syncAttachments(composer.attachments)
+    LaunchedEffect(attachments) {
+        editorView?.syncAttachments(attachments)
     }
 
     val pickImage = rememberLauncherForActivityResult(ActivityResultContracts.PickVisualMedia()) { uri ->
@@ -330,9 +377,9 @@ internal fun ReplyComposerSheet(
                         overflow = TextOverflow.Ellipsis,
                         modifier = Modifier.weight(1f, fill = false),
                     )
-                    if (isFullScreen && composer.draft.isNotEmpty()) {
+                    if (isFullScreen && draft.isNotEmpty()) {
                         Text(
-                            text = "${composer.draft.length} 字",
+                            text = "${draft.length} 字",
                             style = IosTheme.type.caption.copy(fontSize = 11.sp),
                             color = colors.secondaryLabel,
                             maxLines = 1,
@@ -351,9 +398,9 @@ internal fun ReplyComposerSheet(
                         },
                     )
                     ComposerSendPill(
-                        label = sendText,
+                        label = sendLabel,
                         enabled = canSubmit,
-                        submitting = composer.submitting,
+                        submitting = submitting,
                         onClick = {
                             editorView?.exportToMarkdown()?.let(onDraftChange)
                             onSubmit()
@@ -393,7 +440,7 @@ internal fun ReplyComposerSheet(
             }
 
             Box(modifier = editorBoxModifier) {
-                if (composer.loadingDraft) {
+                if (loadingDraft) {
                     IosLoadingBox()
                 } else {
                     // 始终挂载 AndroidView 避免切到「预览」再切回「编辑」时丢失光标、输入法状态与媒体/投票 Span
@@ -406,34 +453,39 @@ internal fun ReplyComposerSheet(
                         modifier = editorVisibilityModifier,
                         factory = { ctx ->
                             RichMarkdownEditorView(ctx).apply {
-                                hint = "说点什么… 支持 Markdown"
+                                hint = placeholder
                                 setOnDismissInputListener(dismiss)
                                 updateThemeColors(textColorInt, hintColorInt)
                                 setTextSize(TypedValue.COMPLEX_UNIT_PX, editorTextSizePx)
-                                setCompletionSource(completionSource, topicId = target.topicId)
+                                setCompletionSource(completionSource, topicId = topicId)
                                 setOnContentHeightChangeListener { editorContentHeight = it }
-                                setInitialMarkdown(composer.draft, composer.attachments)
+                                setInitialMarkdown(draft, attachments)
                                 setOnMarkdownChangeListener { newRaw -> onDraftChange(newRaw) }
                                 setOnRemoveAttachmentListener { mediaId -> onRemoveAttachment(mediaId) }
                                 setOnPreviewImageListener { previewUrl ->
                                     previewGallery = listOf(ImageViewerItem(previewUrl, previewUrl, "图片")) to 0
                                 }
-                                setOnEditPollListener { span, spec ->
-                                    editingPollTarget = Pair(span, spec)
-                                    showPollDialog = true
+                                if (allowPoll) {
+                                    setOnEditPollListener { span, spec ->
+                                        editingPollTarget = Pair(span, spec)
+                                        showPollDialog = true
+                                    }
                                 }
                                 editorView = this
                                 post { requestInputFocus() }
                             }
                         },
                         update = { view ->
+                            view.hint = placeholder
                             view.setOnDismissInputListener(dismiss)
                             view.updateThemeColors(textColorInt, hintColorInt)
                             view.setTextSize(TypedValue.COMPLEX_UNIT_PX, editorTextSizePx)
-                            view.setCompletionSource(completionSource, topicId = target.topicId)
-                            view.setOnEditPollListener { span, spec ->
-                                editingPollTarget = Pair(span, spec)
-                                showPollDialog = true
+                            view.setCompletionSource(completionSource, topicId = topicId)
+                            if (allowPoll) {
+                                view.setOnEditPollListener { span, spec ->
+                                    editingPollTarget = Pair(span, spec)
+                                    showPollDialog = true
+                                }
                             }
                             val density = view.resources.displayMetrics.density
                             val padH = ((if (isFullScreen) 4 else 13) * density).toInt()
@@ -446,9 +498,9 @@ internal fun ReplyComposerSheet(
 
                     if (isPreview) {
                         ReplyMarkdownPreviewPane(
-                            raw = composer.draft,
+                            raw = draft,
                             emojiUrls = emojiUrls,
-                            attachments = composer.attachments,
+                            attachments = attachments,
                             onPicture = { images, idx -> previewGallery = images to idx },
                             modifier = Modifier.fillMaxSize(),
                         )
@@ -456,8 +508,8 @@ internal fun ReplyComposerSheet(
                 }
             }
 
-            // 草稿同步状态 / 错误提示 / 上传中（展开态）
-            val hasStatusRow = composer.syncStatus != null || composer.error != null || (isFullScreen && composer.uploading)
+            // 仅显示必要错误或展开态上传中，不再展示草稿同步状态提示行（如“已与网页同步”“已保存到手机”）
+            val hasStatusRow = error != null || (isFullScreen && uploading)
             if (hasStatusRow) {
                 Column(
                     modifier = Modifier
@@ -465,7 +517,7 @@ internal fun ReplyComposerSheet(
                         .padding(horizontal = 14.dp, vertical = 4.dp),
                     verticalArrangement = Arrangement.spacedBy(2.dp),
                 ) {
-                    if (isFullScreen && composer.uploading) {
+                    if (isFullScreen && uploading) {
                         Row(
                             verticalAlignment = Alignment.CenterVertically,
                             horizontalArrangement = Arrangement.spacedBy(6.dp),
@@ -478,16 +530,7 @@ internal fun ReplyComposerSheet(
                             )
                         }
                     }
-                    composer.syncStatus?.let { status ->
-                        Text(
-                            text = status,
-                            style = IosTheme.type.caption,
-                            color = colors.secondaryLabel,
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis,
-                        )
-                    }
-                    composer.error?.let { err ->
+                    error?.let { err ->
                         Text(
                             text = err,
                             style = IosTheme.type.footnote,
@@ -555,19 +598,21 @@ internal fun ReplyComposerSheet(
                         ) {
                             ComposerAttachmentIcon(tint = if (busy) colors.tertiaryLabel else colors.label)
                         }
-                        ComposerBarIconButton(
-                            contentDescription = "插入投票",
-                            enabled = !busy,
-                            active = showPollDialog,
-                            onClick = ::openPollInsert,
-                        ) {
-                            ComposerPollIcon(
-                                tint = when {
-                                    busy -> colors.tertiaryLabel
-                                    showPollDialog -> colors.accent
-                                    else -> colors.label
-                                },
-                            )
+                        if (allowPoll) {
+                            ComposerBarIconButton(
+                                contentDescription = "插入投票",
+                                enabled = !busy,
+                                active = showPollDialog,
+                                onClick = ::openPollInsert,
+                            ) {
+                                ComposerPollIcon(
+                                    tint = when {
+                                        busy -> colors.tertiaryLabel
+                                        showPollDialog -> colors.accent
+                                        else -> colors.label
+                                    },
+                                )
+                            }
                         }
 
                         ComposerVerticalDivider()
@@ -593,7 +638,7 @@ internal fun ReplyComposerSheet(
                             )
                         }
 
-                        if (composer.uploading) {
+                        if (uploading) {
                             Spacer(Modifier.width(6.dp))
                             IosActivityIndicator(diameter = 15.dp)
                             Text(
@@ -606,9 +651,9 @@ internal fun ReplyComposerSheet(
                     }
 
                     ComposerSendPill(
-                        label = sendText,
+                        label = sendLabel,
                         enabled = canSubmit,
-                        submitting = composer.submitting,
+                        submitting = submitting,
                         onClick = {
                             editorView?.exportToMarkdown()?.let(onDraftChange)
                             onSubmit()
@@ -621,6 +666,7 @@ internal fun ReplyComposerSheet(
             if (isFullScreen && !isPreview) {
                 ExpandedMarkdownToolbar(
                     enabled = !busy,
+                    allowPoll = allowPoll,
                     openSub = openSubToolbar,
                     onToggleSub = ::toggleSub,
                     onCloseSub = { openSubToolbar = null },
@@ -659,8 +705,8 @@ internal fun ReplyComposerSheet(
         )
     }
 
-    if (showPollDialog) {
-        val currentRaw = editorView?.exportToMarkdown() ?: composer.draft
+    if (allowPoll && showPollDialog) {
+        val currentRaw = editorView?.exportToMarkdown() ?: draft
         val suggestedPollName = remember(currentRaw) {
             nextAvailablePollName(currentRaw)
         }
@@ -886,6 +932,7 @@ private fun QuickMdChip(
 @Composable
 private fun ExpandedMarkdownToolbar(
     enabled: Boolean,
+    allowPoll: Boolean,
     openSub: ComposerSubToolbar?,
     onToggleSub: (ComposerSubToolbar) -> Unit,
     onCloseSub: () -> Unit,
@@ -965,7 +1012,9 @@ private fun ExpandedMarkdownToolbar(
                                 }
                                 SubToolbarPill("▦ 插入表格", enabled) { onTable(); onCloseSub() }
                                 SubToolbarPill("— 分割线", enabled) { onDivider(); onCloseSub() }
-                                SubToolbarPill("构建投票", enabled) { onCloseSub(); onOpenPoll() }
+                                if (allowPoll) {
+                                    SubToolbarPill("构建投票", enabled) { onCloseSub(); onOpenPoll() }
+                                }
                                 SubToolbarPill("¹ 添加脚注", enabled) { onFootnote(); onCloseSub() }
                             }
                         }

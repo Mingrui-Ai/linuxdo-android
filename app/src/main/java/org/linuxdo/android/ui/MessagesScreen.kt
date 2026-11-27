@@ -243,7 +243,8 @@ internal fun MessagesScreen(
                 .fillMaxWidth()
                 .background(IosTheme.colors.groupedBackground),
         ) {
-            // 第一行：个人头像 + 一级标签（通知 / 直接消息 / 频道）+ 全部已读 & 搜索
+            // 第一行：严格复用首页 HomeTopFilterHeader 第一行尺寸与边距（48dp 高，start=10dp, end=6dp，右端搜索 44dp），
+            // 保证从首页切到消息页时左上角头像与右上角搜索图标像素级零位移。
             AnimatedVisibility(
                 visible = topBarVisible,
                 enter = expandVertically(tween(220), expandFrom = Alignment.Top) + fadeIn(tween(180)),
@@ -253,11 +254,11 @@ internal fun MessagesScreen(
                     modifier = Modifier
                         .fillMaxWidth()
                         .height(48.dp)
-                        .padding(start = 6.dp, end = 6.dp),
+                        .padding(start = 10.dp, end = 6.dp),
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
                     leading()
-                    Spacer(Modifier.width(2.dp))
+                    Spacer(Modifier.width(8.dp))
                     Row(
                         modifier = Modifier
                             .weight(1f)
@@ -296,7 +297,7 @@ internal fun MessagesScreen(
                         }
                         IconButton(
                             onClick = { showSearch = !showSearch },
-                            modifier = Modifier.size(38.dp),
+                            modifier = Modifier.size(44.dp),
                         ) {
                             Icon(
                                 imageVector = Icons.Default.Search,
@@ -326,7 +327,7 @@ internal fun MessagesScreen(
                 )
             }
 
-            // 第二行：统一筛选胶囊行（复用首页 HeaderFilterPill 视觉语言）
+            // 第二行：严格复用首页筛选栏内边距（horizontal=12dp, vertical=6dp）与 32dp 胶囊高度，保持两级栏总高度一致
             val subBarActive = when (section) {
                 MessageSection.Notifications -> filter != NotificationFilter.All
                 MessageSection.DirectMessages -> dmFilter != DirectMessageFilter.All
@@ -341,7 +342,7 @@ internal fun MessagesScreen(
                     Row(
                         modifier = Modifier
                             .fillMaxWidth()
-                            .padding(start = 12.dp, end = 12.dp, top = 2.dp, bottom = 8.dp),
+                            .padding(horizontal = 12.dp, vertical = 6.dp),
                         verticalAlignment = Alignment.CenterVertically,
                         horizontalArrangement = Arrangement.spacedBy(7.dp),
                     ) {

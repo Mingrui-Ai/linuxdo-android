@@ -1125,6 +1125,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     }
     private val _chat = MutableStateFlow(ChatUiState())
     val chat: StateFlow<ChatUiState> = _chat.asStateFlow()
+    private val _chatEmojiUrls = MutableStateFlow<Map<String, String>>(emptyMap())
+    val chatEmojiUrls: StateFlow<Map<String, String>> = _chatEmojiUrls.asStateFlow()
     private val chatSyncedMessageIds = mutableMapOf<Long, Long>()
     private val _pendingChatChannel = MutableStateFlow<Long?>(null)
     val pendingChatChannel = _pendingChatChannel.asStateFlow()
@@ -3594,6 +3596,12 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun loadChatRoom(channelId: Long, refresh: Boolean = false) {
+        if (_chatEmojiUrls.value.isEmpty()) {
+            viewModelScope.launch {
+                val emojis = runCatching { repository.emojiUrls() }.getOrDefault(emptyMap())
+                if (emojis.isNotEmpty()) _chatEmojiUrls.value = emojis
+            }
+        }
         val jobKey = "chatRoom:$channelId"
         if (pageJobs[jobKey]?.isActive == true) return
         val generation = accountScopeGeneration
