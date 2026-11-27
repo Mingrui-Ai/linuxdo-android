@@ -682,7 +682,7 @@ internal fun TopicSortDropdownMenu(
         onDismissRequest = onDismiss,
         containerColor = IosTheme.colors.card,
         shape = RoundedCornerShape(16.dp),
-        modifier = Modifier.width(276.dp),
+        modifier = Modifier.width(196.dp),
     ) {
         TopicSortOrder.entries.forEachIndexed { idx, order ->
             val selected = order == currentOrder
@@ -728,7 +728,7 @@ internal fun TopicSortDropdownMenu(
                         text = order.description,
                         style = IosTheme.type.caption.copy(fontSize = 11.sp),
                         color = if (selected) IosTheme.colors.accent.copy(alpha = 0.8f) else IosTheme.colors.tertiaryLabel,
-                        maxLines = 3,
+                        maxLines = 1,
                         overflow = TextOverflow.Ellipsis,
                     )
                 }

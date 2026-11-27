@@ -178,12 +178,12 @@ enum class TopicSortOrder(
     val description: String,
     val supportsAscending: Boolean = false,
 ) {
-    Default("最新", null, "跟随网站默认，分类可能按发帖时间排序"),
-    Activity("最新动态", "activity", "按最近活动时间，最新动态优先"),
-    Created("最新发布", "created", "按发帖时间先后", supportsAscending = true),
-    Hot("热门", null, "按站点近期综合热度"),
-    Likes("点赞最多", "likes", "按整个话题的总赞数排序，包含回复", supportsAscending = true),
-    Views("浏览最多", "views", "按话题浏览量排序", supportsAscending = true);
+    Default("最新", null, "跟随网站默认"),
+    Activity("最新动态", "activity", "最近活动优先"),
+    Created("最新发布", "created", "按发帖时间", supportsAscending = true),
+    Hot("热门", null, "近期综合热度"),
+    Likes("点赞最多", "likes", "总赞数含回复", supportsAscending = true),
+    Views("浏览最多", "views", "按浏览量", supportsAscending = true);
 
     val isHotEndpoint: Boolean get() = this == Hot
 
