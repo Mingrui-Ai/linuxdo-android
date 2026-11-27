@@ -144,6 +144,7 @@ import org.linuxdo.android.data.EditorCompletionRequest
 import org.linuxdo.android.ui.design.HeaderActionPill
 import org.linuxdo.android.ui.design.HeaderFilterPill
 import org.linuxdo.android.ui.design.HeaderFilterPillRow
+import org.linuxdo.android.ui.design.UpdateReleaseNotes
 import org.linuxdo.android.ui.design.IosActivityIndicator
 import org.linuxdo.android.ui.design.ListNavigationHeader
 import org.linuxdo.android.ui.design.boundedTabSwipe
@@ -4010,18 +4011,13 @@ fun UpdateDialog(
             Box(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .heightIn(min = 64.dp, max = 220.dp)
+                    .heightIn(min = 64.dp, max = 240.dp)
                     .clip(RoundedCornerShape(10.dp))
                     .background(IosTheme.colors.fieldBackground)
                     .padding(12.dp)
                     .verticalScroll(rememberScrollState()),
             ) {
-                Text(
-                    text = info.changelog,
-                    style = IosTheme.type.footnote,
-                    color = IosTheme.colors.label,
-                    lineHeight = 19.sp,
-                )
+                UpdateReleaseNotes(info.changelog)
             }
 
             if (info.mandatory) {
