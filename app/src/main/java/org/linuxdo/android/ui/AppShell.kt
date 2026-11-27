@@ -102,6 +102,7 @@ import androidx.compose.runtime.saveable.rememberSaveableStateHolder
 import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clipToBounds
@@ -727,16 +728,14 @@ private fun MainNavigation(state: UiState, viewModel: MainViewModel, lifecycle: 
     val pendingChatChannel by viewModel.pendingChatChannel.collectAsStateWithLifecycle()
     val chatUnread = chat.channels.filter { it.membership?.muted != true }.sumOf { it.unreadCount }
     var messageSection by rememberSaveable { mutableStateOf(MessageSection.Notifications) }
-    var directMessages by rememberSaveable { mutableStateOf(true) }
     val openChat = {
-        messageSection = MessageSection.Chat
+        messageSection = MessageSection.DirectMessages
         selected = MainTab.Messages
         stacks.getValue(MainTab.Messages).popToRoot()
     }
     LaunchedEffect(pendingChatChannel) {
         pendingChatChannel?.let { channelId ->
             openChat()
-            directMessages = true
             val messagesStack = stacks.getValue(MainTab.Messages)
             messagesStack.push(Route.ChatRoom(channelId, "直接消息"))
             viewModel.clearChatNotification()
@@ -764,6 +763,7 @@ private fun MainNavigation(state: UiState, viewModel: MainViewModel, lifecycle: 
     val signatureSyncBusy by viewModel.signatureSyncBusy.collectAsStateWithLifecycle()
     val signatureSyncNotice by viewModel.signatureSyncNotice.collectAsStateWithLifecycle()
     val showTopicUnreadDot by viewModel.showTopicUnreadDot.collectAsStateWithLifecycle()
+    val showDirectMessageQuickBar by viewModel.showDirectMessageQuickBar.collectAsStateWithLifecycle()
     val topicUnreadDotPosition by viewModel.topicUnreadDotPosition.collectAsStateWithLifecycle()
     val listBars = remember(selected, stack.entries.last().id) { mutableStateOf(true) }
     val themeMode by viewModel.themeMode.collectAsStateWithLifecycle()
@@ -1048,24 +1048,50 @@ private fun MainNavigation(state: UiState, viewModel: MainViewModel, lifecycle: 
     ) {
     Box(Modifier.fillMaxSize().then(if (drawerVisible) Modifier.clearAndSetSemantics {} else Modifier)) {
         Box(Modifier.fillMaxSize()) {
-            holder.SaveableStateProvider(selected.name) {
-                androidx.compose.runtime.CompositionLocalProvider(
-                    org.linuxdo.android.ui.design.LocalNetworkSettingsAction provides {
-                        val destination = Route.SettingsDetail(org.linuxdo.android.ui.nav.SettingsPage.Network)
-                        if (stack.current != destination) stack.push(destination)
-                    },
-                ) {
-                key(selected) {
-                    IosNavHost(stack,
-                        interactive = browsing && !topicCreator.open && !topicSearch.open && !metadataEditor.open &&
-                            !drawerVisible && !showDrawerAccounts && !showDrawerScore,
-                        listBars = listBars.takeIf { browsing && listForeground && !isDetailRoute && !isKeyboardOpen },
-                        contentWindowInsets = { route ->
-                            if (route == Route.Profile || route is Route.UserProfile) WindowInsets(0)
-                            else WindowInsets.systemBars.union(WindowInsets.displayCutout).only(WindowInsetsSides.Top)
-                        },
-                    ) { route ->
-                        val active = browsing && stack.current == route
+            // 保持首页与消息两大主 Tab 各自常驻组合树：切 Tab 时仅改 zIndex/alpha 与指针拦截，
+            // 消除切换时整页卸载重建（LazyColumn + 图片 + 分页器重构）带来的卡顿与跳闪。
+            MainTab.primaryTabs.forEach { tab ->
+                val isTabSelected = tab == selected
+                val tabStack = stacks.getValue(tab)
+                val tabScrollToTopRequest = scrollRequests.getValue(tab).intValue
+                val tabVisibleRoute = tabStack.current
+                val tabIsDetailRoute = tabVisibleRoute is Route.TopicDetail || tabVisibleRoute == Route.Chat ||
+                    tabVisibleRoute is Route.ChatRoom || tabVisibleRoute is Route.Search ||
+                    tabVisibleRoute == Route.Profile || tabVisibleRoute is Route.UserProfile
+                key(tab) {
+                    Box(
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .zIndex(if (isTabSelected) 1f else 0f)
+                            .graphicsLayer { alpha = if (isTabSelected) 1f else 0f }
+                            .then(
+                                if (!isTabSelected) {
+                                    Modifier.clearAndSetSemantics {}
+                                } else {
+                                    Modifier
+                                },
+                            ),
+                    ) {
+                        holder.SaveableStateProvider(tab.name) {
+                            androidx.compose.runtime.CompositionLocalProvider(
+                                org.linuxdo.android.ui.design.LocalNetworkSettingsAction provides {
+                                    val destination = Route.SettingsDetail(org.linuxdo.android.ui.nav.SettingsPage.Network)
+                                    if (tabStack.current != destination) tabStack.push(destination)
+                                },
+                            ) {
+                                IosNavHost(
+                                    tabStack,
+                                    interactive = isTabSelected && browsing && !topicCreator.open && !topicSearch.open && !metadataEditor.open &&
+                                        !drawerVisible && !showDrawerAccounts && !showDrawerScore,
+                                    listBars = listBars.takeIf { isTabSelected && browsing && listForeground && !tabIsDetailRoute && !isKeyboardOpen },
+                                    contentWindowInsets = { route ->
+                                        if (route == Route.Profile || route is Route.UserProfile) WindowInsets(0)
+                                        else WindowInsets.systemBars.union(WindowInsets.displayCutout).only(WindowInsetsSides.Top)
+                                    },
+                                ) { route ->
+                                    val stack = tabStack
+                                    val scrollToTopRequest = tabScrollToTopRequest
+                                    val active = isTabSelected && browsing && stack.current == route
                         // 仅回写标题时保持加载身份，避免保存后重新按阅读游标跳楼。
                         val routeLoadIdentity = if (route is Route.TopicDetail) route.copy(title = "") else route
                         // 首次详情响应可补齐历史位置，之后固定；0 代表新话题，不能被阅读回执改写。
@@ -1621,11 +1647,13 @@ private fun MainNavigation(state: UiState, viewModel: MainViewModel, lifecycle: 
                                 val channel = chat.channels.firstOrNull { it.id == route.channelId }
                                     ?: org.linuxdo.android.data.ChatChannelSummary(id = route.channelId, title = route.title)
                                 val currentUsername = accountState.accounts.firstOrNull { it.userId == accountState.activeUserId }?.username
+                                val chatEmojiUrls by viewModel.chatEmojiUrls.collectAsStateWithLifecycle()
                                 ChatRoomScreen(
                                     channel = channel,
                                     state = chat,
                                     active = roomActive,
                                     currentUsername = currentUsername,
+                                    emojiUrls = chatEmojiUrls,
                                     onLoad = viewModel::loadChatRoom,
                                     onLoadPast = viewModel::loadMoreChatHistory,
                                     onSetChannelMuted = viewModel::setChatChannelMuted,
@@ -1633,6 +1661,10 @@ private fun MainNavigation(state: UiState, viewModel: MainViewModel, lifecycle: 
                                     onSend = viewModel::sendChatMessage,
                                     onUploadAttachment = viewModel::uploadChatAttachment,
                                     onOpenUser = viewModel::openUserCard,
+                                    onOpenTopic = { topicId, title, postNumber ->
+                                        stack.push(Route.TopicDetail(topicId, title, postNumber))
+                                    },
+                                    onOpenExternalUrl = { url -> globalBrowserUrl = url },
                                     onBack = { stack.pop() },
                                 )
                             }
@@ -1851,14 +1883,17 @@ private fun MainNavigation(state: UiState, viewModel: MainViewModel, lifecycle: 
                                 onSkinPreset = viewModel::setSkinPreset,
                                 isSelfHealing = isSelfHealing,
                                 onSelfHealNetwork = { viewModel.selfHealNetwork(context) },
+                                showDirectMessageQuickBar = showDirectMessageQuickBar,
+                                onShowDirectMessageQuickBar = viewModel::setShowDirectMessageQuickBar,
                             )
 
                             Route.Notifications -> MessagesScreen(
                                 feedDisplayMode = feedDisplayMode,
                                 section = messageSection,
                                 onSection = { messageSection = it },
-                                directMessages = directMessages,
-                                onDirectMessages = { directMessages = it },
+                                leading = { PersonalDrawerAvatar(state.username, drawerAccount, ::openPersonalDrawer) },
+                                showDirectMessageQuickBar = showDirectMessageQuickBar,
+                                currentUsername = accountState.accounts.firstOrNull { it.userId == accountState.activeUserId }?.username,
                                 notifications = profile[org.linuxdo.android.data.ProfileSection.Notifications] ?: ProfileUiState(),
                                 notificationPages = viewModel.notificationPages.collectAsStateWithLifecycle().value,
                                 chat = chat,
@@ -1875,6 +1910,10 @@ private fun MainNavigation(state: UiState, viewModel: MainViewModel, lifecycle: 
                                 onRead = viewModel::readNotification,
                                 onRefreshChat = { viewModel.loadChatChannels(refresh = true) },
                                 onOpenChannel = { stack.push(Route.ChatRoom(it.id, it.displayTitle)) },
+                                onStartDirectMessage = { username ->
+                                    viewModel.openChatWithUser(username) { targetRoute -> stack.push(targetRoute) }
+                                },
+                                onSearchUsers = viewModel::searchUsersForDirectMessage,
                                 onOpenTopic = { id, title, postNumber ->
                                     viewModel.markNotificationTopicPending(id, postNumber)
                                     val currentRoute = stack.current
@@ -1892,16 +1931,18 @@ private fun MainNavigation(state: UiState, viewModel: MainViewModel, lifecycle: 
                                 onOpenUser = viewModel::openUserCard,
                             )
 
-                            Route.Diagnostics -> DiagnosticsScreen(
-                                state = state,
-                                viewModel = viewModel,
-                                onBack = { stack.pop() },
-                            )
+                                    Route.Diagnostics -> DiagnosticsScreen(
+                                        state = state,
+                                        viewModel = viewModel,
+                                        onBack = { stack.pop() },
+                                    )
 
+                                }
+                            }
                         }
                     }
                 }
-                }
+            }
             }
 
             if (topicCreator.open) {
