@@ -89,7 +89,6 @@ import org.linuxdo.android.data.mergeChatMessages
 import org.linuxdo.android.data.TrustReport
 import org.linuxdo.android.data.LdcUserInfo
 import org.linuxdo.android.data.FollowUser
-import org.linuxdo.android.data.DiscourseTagInfo
 import org.linuxdo.android.data.DiscourseTagSearchResult
 import org.linuxdo.android.data.Category
 import org.linuxdo.android.data.CommentOrder
@@ -540,10 +539,6 @@ data class TopicCreatorUiState(
     val raw: String = "",
     val categoryId: Int? = null,
     val tags: List<String> = emptyList(),
-    val availableTags: List<DiscourseTagInfo> = emptyList(),
-    val requiredTagGroupName: String? = null,
-    val requiredTagMinCount: Int = 1,
-    val loadingTags: Boolean = false,
     val attachments: List<AttachedMedia> = emptyList(),
     val savingDraft: Boolean = false,
     val submitting: Boolean = false,
@@ -6087,7 +6082,6 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         restoreSyncedDraft(draftKey)
         ensureTopicCreatorCategoryPermissions()
         populateCreatorEmojis()
-        loadTopicCreatorTags(validCategoryId)
     }
 
     private fun cacheSelectedDraft(draft: DraftItem): Boolean = try {
@@ -6151,7 +6145,6 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         _topicCreator.update { it.copy(loadingDraft = true) }
         restoreSyncedDraft(draft.draftKey)
         populateCreatorEmojis()
-        loadTopicCreatorTags(validCategoryId)
     }
 
     private fun populateCreatorEmojis() {
@@ -6163,38 +6156,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
-    fun loadTopicCreatorTags(categoryId: Int?, query: String = "") {
-        pageJobs["tags:creator"]?.cancel()
-        pageJobs["tags:creator"] = viewModelScope.launch {
-            _topicCreator.update { it.copy(loadingTags = true) }
-            val currentSelected = _topicCreator.value.tags
-            val searchResult = repository.searchTags(
-                categoryId = categoryId,
-                query = query,
-                selectedTags = currentSelected,
-                limit = 8,
-                filterForInput = true,
-            )
-            _topicCreator.update {
-                if (it.open) it.copy(
-                    availableTags = searchResult.results,
-                    requiredTagGroupName = searchResult.requiredTagName,
-                    requiredTagMinCount = searchResult.requiredTagMinCount,
-                    loadingTags = false
-                ) else it
-            }
-        }
-    }
-
-    private var tagSearchDebounceJob: Job? = null
-    fun searchTopicCreatorTags(query: String) {
-        tagSearchDebounceJob?.cancel()
-        tagSearchDebounceJob = viewModelScope.launch {
-            delay(300L) // 照搬 FluxDO 300ms 防抖
-            val currentCat = _topicCreator.value.categoryId
-            loadTopicCreatorTags(currentCat, query)
-        }
-    }
+    suspend fun searchTopicCreatorTags(categoryId: Int?, query: String, selectedTags: List<String>): DiscourseTagSearchResult =
+        repository.searchInputTags(categoryId, query, selectedTags)
 
     fun updateTopicCreatorTitle(title: String) {
         if (_topicCreator.value.loadingDraft || _topicCreator.value.submitting) return
@@ -6212,7 +6175,6 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         if (_topicCreator.value.loadingDraft || _topicCreator.value.submitting) return
         _topicCreator.update { if (it.open) it.copy(categoryId = categoryId, error = null, notice = null) else it }
         persistCreatorDraft()
-        loadTopicCreatorTags(categoryId)
     }
 
     fun updateTopicCreatorTags(tags: List<String>) {
@@ -8247,7 +8209,7 @@ fun openTopicSearch(topicId: Long, title: String) {
         metadataTagJob = viewModelScope.launch {
             delay(300L)
             try {
-                val result = repository.searchTopicEditTags(current.categoryId, query, current.tags)
+                val result = repository.searchInputTags(current.categoryId, query, current.tags)
                 if (sequence != metadataSequence || tagSequence != metadataTagSequence || current.userId != store.currentUserId()) return@launch
                 _metadataEditor.update { it.copy(loadingTags = false, tagOptions = result.results,
                     requiredTagName = result.requiredTagName, requiredTagMin = result.requiredTagMinCount) }

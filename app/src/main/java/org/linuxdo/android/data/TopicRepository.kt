@@ -3570,7 +3570,7 @@ class TopicRepository(
         )
     }
 
-    suspend fun searchTopicEditTags(categoryId: Int?, query: String, selectedTags: List<String>): DiscourseTagSearchResult {
+    suspend fun searchInputTags(categoryId: Int?, query: String, selectedTags: List<String>): DiscourseTagSearchResult {
         val params = mutableListOf("q=${encode(query)}", "limit=8", "filterForInput=true")
         categoryId?.let { params += "categoryId=$it" }
         selectedTags.forEach { params += "selected_tags[]=${encode(it)}" }

@@ -276,8 +276,6 @@ internal fun HomeTopFilterHeader(
                                     onSelectCategory(cat)
                                 },
                                 onTogglePin = onTogglePinCategory,
-                                onSaveOrder = onSaveCategoryOrder,
-                                onResetOrder = onResetCategoryOrder,
                                 onClearAll = {
                                     showCategoryMenu = false
                                     onClearFilters()
@@ -438,7 +436,7 @@ private fun LinuxDoBrandWordmark() {
 }
 
 @Composable
-private fun HomeFilterPill(
+internal fun HomeFilterPill(
     text: String,
     active: Boolean,
     selectedLevel: Int? = null,
@@ -802,68 +800,14 @@ private fun HomeLevelDropdownMenu(
     val knownLevel = trustLevel?.takeIf { it in 0..4 }
     val hasLockedLevels = levelAccess.values.any { it == HomeLevelAccess.UpgradeRequired }
 
-    DropdownMenu(
+    CategoryLevelDropdownMenu(
         expanded = expanded,
-        onDismissRequest = onDismiss,
-        offset = DpOffset(0.dp, 4.dp),
-        containerColor = IosTheme.colors.card,
-        shape = RoundedCornerShape(14.dp),
-        modifier = Modifier.width(118.dp),
+        selectedLevel = filter.level,
+        levelEnabled = { levelAccess.getValue(it).selectable },
+        optionLabel = { levelAccess.getValue(it).label },
+        onDismiss = onDismiss,
+        onSelectLevel = onSelectLevel,
     ) {
-        (0..3).forEach { lv ->
-            val access = levelAccess.getValue(lv)
-            val selected = filter.level == lv
-            val (lvBg, lvBorder, lvText) = levelPillColors(lv, IosTheme.colors.isDark)
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(horizontal = 6.dp, vertical = 2.dp)
-                    .clip(RoundedCornerShape(9.dp))
-                    .background(if (selected) lvBg.copy(alpha = if (lv == 3) 0.22f else 0.75f) else Color.Transparent)
-                    .then(
-                        if (selected) Modifier.border(0.8.dp, lvBorder, RoundedCornerShape(9.dp))
-                        else Modifier,
-                    )
-                    .clickable(enabled = access.selectable) { onSelectLevel(lv) }
-                    .padding(horizontal = 9.dp, vertical = 7.dp)
-                    .alpha(if (access.selectable) 1f else 0.5f),
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.SpaceBetween,
-            ) {
-                Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(5.dp),
-                ) {
-                    if (lv == 0) {
-                        Box(
-                            modifier = Modifier
-                                .clip(RoundedCornerShape(6.dp))
-                                .background(lvBg)
-                                .border(0.8.dp, lvBorder, RoundedCornerShape(6.dp))
-                                .padding(horizontal = 5.dp, vertical = 1.dp),
-                        ) {
-                            Text(
-                                text = "Lv0",
-                                fontSize = 10.sp,
-                                lineHeight = 12.sp,
-                                fontWeight = FontWeight.SemiBold,
-                                color = lvText,
-                            )
-                        }
-                    } else {
-                        LevelBadge(level = lv)
-                    }
-                    Text(
-                        text = access.label,
-                        style = IosTheme.type.caption.copy(fontSize = 11.5.sp),
-                        color = if (selected) lvText else IosTheme.colors.secondaryLabel,
-                    )
-                }
-                if (selected) {
-                    Text("✓", color = lvText, fontWeight = FontWeight.Bold, fontSize = 12.sp)
-                }
-            }
-        }
         if (!signedIn || hasLockedLevels || knownLevel == null) {
             Text(
                 text = when {
@@ -893,23 +837,117 @@ private fun HomeLevelDropdownMenu(
     }
 }
 
+@Composable
+internal fun CategoryLevelDropdownMenu(
+    expanded: Boolean,
+    selectedLevel: Int?,
+    levelEnabled: (Int) -> Boolean,
+    optionLabel: (Int) -> String,
+    onDismiss: () -> Unit,
+    onSelectLevel: (Int) -> Unit,
+    footer: @Composable () -> Unit = {},
+) {
+    DropdownMenu(
+        expanded = expanded,
+        onDismissRequest = onDismiss,
+        offset = DpOffset(0.dp, 4.dp),
+        containerColor = IosTheme.colors.card,
+        shape = RoundedCornerShape(14.dp),
+        modifier = Modifier.width(118.dp),
+    ) {
+        (0..3).forEach { lv ->
+            val enabled = levelEnabled(lv)
+            val selected = selectedLevel == lv
+            val (lvBg, lvBorder, lvText) = levelPillColors(lv, IosTheme.colors.isDark)
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 6.dp, vertical = 2.dp)
+                    .clip(RoundedCornerShape(9.dp))
+                    .background(if (selected) lvBg.copy(alpha = if (lv == 3) 0.22f else 0.75f) else Color.Transparent)
+                    .then(
+                        if (selected) Modifier.border(0.8.dp, lvBorder, RoundedCornerShape(9.dp))
+                        else Modifier,
+                    )
+                    .clickable(enabled = enabled) { onSelectLevel(lv) }
+                    .padding(horizontal = 9.dp, vertical = 7.dp)
+                    .alpha(if (enabled) 1f else 0.5f),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.SpaceBetween,
+            ) {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(5.dp),
+                ) {
+                    if (lv == 0) {
+                        Box(
+                            modifier = Modifier
+                                .clip(RoundedCornerShape(6.dp))
+                                .background(lvBg)
+                                .border(0.8.dp, lvBorder, RoundedCornerShape(6.dp))
+                                .padding(horizontal = 5.dp, vertical = 1.dp),
+                        ) {
+                            Text(
+                                text = "Lv0",
+                                fontSize = 10.sp,
+                                lineHeight = 12.sp,
+                                fontWeight = FontWeight.SemiBold,
+                                color = lvText,
+                            )
+                        }
+                    } else {
+                        LevelBadge(level = lv)
+                    }
+                    Text(
+                        text = optionLabel(lv),
+                        style = IosTheme.type.caption.copy(fontSize = 11.5.sp),
+                        color = if (selected) lvText else IosTheme.colors.secondaryLabel,
+                    )
+                }
+                if (selected) {
+                    Text("✓", color = lvText, fontWeight = FontWeight.Bold, fontSize = 12.sp)
+                }
+            }
+        }
+        footer()
+    }
+}
+
+@Composable
+internal fun FilterMenuSearch(query: String, placeholder: String = "搜索…", onChange: (String) -> Unit) {
+    Box(
+        Modifier.fillMaxWidth().padding(horizontal = 6.dp, vertical = 4.dp)
+            .height(28.dp).clip(RoundedCornerShape(8.dp)).background(IosTheme.colors.groupedBackground)
+            .padding(horizontal = 7.dp),
+        contentAlignment = Alignment.CenterStart,
+    ) {
+        BasicTextField(
+            value = query, onValueChange = onChange, singleLine = true,
+            textStyle = IosTheme.type.footnote.copy(fontSize = 12.sp, color = IosTheme.colors.label),
+            cursorBrush = SolidColor(IosTheme.colors.accent), modifier = Modifier.fillMaxWidth(),
+            decorationBox = { inner ->
+                if (query.isEmpty()) Text(placeholder, style = IosTheme.type.footnote.copy(fontSize = 12.sp), color = IosTheme.colors.tertiaryLabel)
+                inner()
+            },
+        )
+    }
+}
+
 /** 首页类别锚定下拉栏：窄宽原色胶囊，长按置顶、再次长按取消置顶，无多余按钮。 */
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
-private fun HomeCategoryDropdownMenu(
+internal fun HomeCategoryDropdownMenu(
     expanded: Boolean,
     categories: List<Category>,
     loading: Boolean,
     categoryOrder: List<Long>,
     pinnedCategoryIds: List<Long>,
     selectedCategoryId: Int?,
-    activeFilterCount: Int,
+    activeFilterCount: Int = 0,
     onDismiss: () -> Unit,
-    onSelectCategory: (Category?) -> Unit,
+    onSelectCategory: (Category) -> Unit,
     onTogglePin: (Long) -> Unit,
-    @Suppress("UNUSED_PARAMETER") onSaveOrder: (List<Long>) -> Unit,
-    @Suppress("UNUSED_PARAMETER") onResetOrder: () -> Unit,
-    onClearAll: () -> Unit,
+    onClearAll: (() -> Unit)? = null,
 ) {
     var query by remember { mutableStateOf("") }
     val pinnedSet = remember(pinnedCategoryIds) { pinnedCategoryIds.toSet() }
@@ -937,38 +975,7 @@ private fun HomeCategoryDropdownMenu(
         shape = RoundedCornerShape(16.dp),
         modifier = Modifier.width(174.dp),
     ) {
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(horizontal = 6.dp, vertical = 4.dp),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(4.dp),
-        ) {
-            Box(
-                modifier = Modifier
-                    .weight(1f)
-                    .height(28.dp)
-                    .clip(RoundedCornerShape(8.dp))
-                    .background(IosTheme.colors.groupedBackground)
-                    .padding(horizontal = 7.dp),
-                contentAlignment = Alignment.CenterStart,
-            ) {
-                BasicTextField(
-                    value = query,
-                    onValueChange = { query = it },
-                    singleLine = true,
-                    textStyle = IosTheme.type.footnote.copy(fontSize = 12.sp, color = IosTheme.colors.label),
-                    cursorBrush = SolidColor(IosTheme.colors.accent),
-                    modifier = Modifier.fillMaxWidth(),
-                    decorationBox = { inner ->
-                        if (query.isEmpty()) {
-                            Text("搜索…", style = IosTheme.type.footnote.copy(fontSize = 12.sp), color = IosTheme.colors.tertiaryLabel)
-                        }
-                        inner()
-                    },
-                )
-            }
-        }
+        FilterMenuSearch(query, onChange = { query = it })
         IosFullDivider()
 
         Column(
@@ -994,7 +1001,7 @@ private fun HomeCategoryDropdownMenu(
                     val selected = selectedCategoryId == parent.id
                     val rawCatColor = parseCategoryColor(parent.color) ?: IosTheme.colors.accent
                     val fgColor = remember(rawCatColor, isDark) { readableCategoryForeground(rawCatColor, isDark) }
-                    val lvNums = levels.mapNotNull { HomeFilterResolver.extractLevel(it) }.distinct().sorted()
+                    val lvNums = levels.ifEmpty { listOf(parent) }.mapNotNull { HomeFilterResolver.extractLevel(it) }.distinct().sorted()
 
                     // 浅色模式用低饱和柔和底 + 高对比压暗同色系前景/图标，清晰护眼
                     val itemBg = when {
@@ -1071,7 +1078,7 @@ private fun HomeCategoryDropdownMenu(
                 style = IosTheme.type.caption.copy(fontSize = 10.sp),
                 color = IosTheme.colors.tertiaryLabel,
             )
-            if (activeFilterCount > 0) {
+            if (activeFilterCount > 0 && onClearAll != null) {
                 Text(
                     text = "清空筛选",
                     style = IosTheme.type.caption.copy(fontSize = 10.5.sp, fontWeight = FontWeight.SemiBold),
@@ -1145,38 +1152,7 @@ private fun HomeTagDropdownMenu(
         shape = RoundedCornerShape(16.dp),
         modifier = Modifier.width(214.dp),
     ) {
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(horizontal = 7.dp, vertical = 4.dp),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(5.dp),
-        ) {
-            Box(
-                modifier = Modifier
-                    .weight(1f)
-                    .height(29.dp)
-                    .clip(RoundedCornerShape(8.dp))
-                    .background(IosTheme.colors.groupedBackground)
-                    .padding(horizontal = 8.dp),
-                contentAlignment = Alignment.CenterStart,
-            ) {
-                BasicTextField(
-                    value = query,
-                    onValueChange = onQueryChange,
-                    singleLine = true,
-                    textStyle = IosTheme.type.footnote.copy(fontSize = 12.sp, color = IosTheme.colors.label),
-                    cursorBrush = SolidColor(IosTheme.colors.accent),
-                    modifier = Modifier.fillMaxWidth(),
-                    decorationBox = { inner ->
-                        if (query.isEmpty()) {
-                            Text("搜索标签…", style = IosTheme.type.footnote.copy(fontSize = 12.sp), color = IosTheme.colors.tertiaryLabel)
-                        }
-                        inner()
-                    },
-                )
-            }
-        }
+        FilterMenuSearch(query, "搜索标签…", onQueryChange)
         IosFullDivider()
 
         Column(
@@ -1207,7 +1183,8 @@ private fun HomeTagDropdownMenu(
                     ) {
                         pinnedList.forEach { tag ->
                             HomeTagOptionChip(
-                                tag = tag,
+                                name = tag.displayName,
+                                count = tag.effectiveCount,
                                 selected = selectedTag.equals(tag.displayName, ignoreCase = true),
                                 pinned = true,
                                 onClick = { onSelectTag(tag.displayName) },
@@ -1232,7 +1209,8 @@ private fun HomeTagDropdownMenu(
                     ) {
                         categorySuggested.forEach { tag ->
                             HomeTagOptionChip(
-                                tag = tag,
+                                name = tag.displayName,
+                                count = tag.effectiveCount,
                                 selected = selectedTag.equals(tag.displayName, ignoreCase = true),
                                 pinned = tag.displayName.lowercase() in pinnedLowerSet,
                                 onClick = { onSelectTag(tag.displayName) },
@@ -1262,7 +1240,8 @@ private fun HomeTagDropdownMenu(
                     ) {
                         regularList.forEach { tag ->
                             HomeTagOptionChip(
-                                tag = tag,
+                                name = tag.displayName,
+                                count = tag.effectiveCount,
                                 selected = selectedTag.equals(tag.displayName, ignoreCase = true),
                                 pinned = false,
                                 onClick = { onSelectTag(tag.displayName) },
@@ -1307,12 +1286,13 @@ private fun HomeTagDropdownMenu(
 
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
-private fun HomeTagOptionChip(
-    tag: DiscourseTag,
+internal fun HomeTagOptionChip(
+    name: String,
+    count: Int = 0,
     selected: Boolean,
-    pinned: Boolean,
+    pinned: Boolean = false,
     onClick: () -> Unit,
-    onLongClick: () -> Unit,
+    onLongClick: (() -> Unit)? = null,
 ) {
     val shape = RoundedCornerShape(8.dp)
     Row(
@@ -1343,9 +1323,9 @@ private fun HomeTagOptionChip(
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(4.dp),
     ) {
-        ForumTagIcon(tag = tag.displayName, size = 12.dp, fallbackHash = true)
+        ForumTagIcon(tag = name, size = 12.dp, fallbackHash = true)
         Text(
-            text = tag.displayName,
+            text = name,
             style = IosTheme.type.caption.copy(
                 fontSize = 12.sp,
                 fontWeight = if (selected || pinned) FontWeight.SemiBold else FontWeight.Normal,
@@ -1353,9 +1333,9 @@ private fun HomeTagOptionChip(
             color = if (selected) IosTheme.colors.accent else IosTheme.colors.label,
             maxLines = 1,
         )
-        if (tag.effectiveCount > 0) {
+        if (count > 0) {
             Text(
-                text = formatHomeFilterTagCount(tag.effectiveCount),
+                text = formatHomeFilterTagCount(count),
                 style = IosTheme.type.caption.copy(fontSize = 10.sp),
                 color = IosTheme.colors.tertiaryLabel,
             )
