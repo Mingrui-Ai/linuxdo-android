@@ -1,6 +1,7 @@
 package org.linuxdo.android.ui.design
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
@@ -18,18 +19,56 @@ import androidx.compose.ui.unit.sp
 
 @Composable
 internal fun MessageSearchField(query: String, onQuery: (String) -> Unit, placeholder: String) {
-    Box(Modifier.fillMaxWidth().background(IosTheme.colors.card).padding(horizontal = 14.dp, vertical = 8.dp)) {
-        BasicTextField(
-            value = query, onValueChange = onQuery, singleLine = true,
-            textStyle = IosTheme.type.body.copy(fontSize = 14.sp, color = IosTheme.colors.label),
-            cursorBrush = SolidColor(IosTheme.colors.accent),
-            modifier = Modifier.fillMaxWidth().clip(RoundedCornerShape(8.dp))
-                .background(IosTheme.colors.fieldBackground).padding(horizontal = 10.dp, vertical = 8.dp),
-            decorationBox = { field ->
-                if (query.isEmpty()) Text(placeholder, fontSize = 14.sp, color = IosTheme.colors.tertiaryLabel)
-                field()
-            },
-        )
+    val colors = IosTheme.colors
+    val fieldBg = if (colors.isDark) {
+        androidx.compose.ui.graphics.Color.White.copy(alpha = 0.08f)
+    } else {
+        androidx.compose.ui.graphics.Color(0xFF767680).copy(alpha = 0.11f)
+    }
+    Box(
+        Modifier
+            .fillMaxWidth()
+            .background(colors.groupedBackground)
+            .padding(start = 12.dp, end = 12.dp, top = 0.dp, bottom = 8.dp),
+    ) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(36.dp)
+                .clip(RoundedCornerShape(16.dp))
+                .background(fieldBg)
+                .padding(horizontal = 12.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            BasicTextField(
+                value = query,
+                onValueChange = onQuery,
+                singleLine = true,
+                textStyle = IosTheme.type.body.copy(fontSize = 14.sp, color = colors.label),
+                cursorBrush = SolidColor(colors.accent),
+                modifier = Modifier.weight(1f),
+                decorationBox = { field ->
+                    Box(contentAlignment = Alignment.CenterStart) {
+                        if (query.isEmpty()) {
+                            Text(placeholder, fontSize = 14.sp, color = colors.tertiaryLabel, maxLines = 1)
+                        }
+                        field()
+                    }
+                },
+            )
+            if (query.isNotEmpty()) {
+                Text(
+                    text = "清除",
+                    style = IosTheme.type.caption.copy(fontSize = 12.sp),
+                    color = colors.secondaryLabel,
+                    modifier = Modifier
+                        .clip(RoundedCornerShape(8.dp))
+                        .clickable { onQuery("") }
+                        .padding(horizontal = 4.dp, vertical = 2.dp),
+                )
+            }
+        }
     }
 }
 

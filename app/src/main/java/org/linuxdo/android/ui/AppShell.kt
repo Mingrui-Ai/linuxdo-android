@@ -727,16 +727,14 @@ private fun MainNavigation(state: UiState, viewModel: MainViewModel, lifecycle: 
     val pendingChatChannel by viewModel.pendingChatChannel.collectAsStateWithLifecycle()
     val chatUnread = chat.channels.filter { it.membership?.muted != true }.sumOf { it.unreadCount }
     var messageSection by rememberSaveable { mutableStateOf(MessageSection.Notifications) }
-    var directMessages by rememberSaveable { mutableStateOf(true) }
     val openChat = {
-        messageSection = MessageSection.Chat
+        messageSection = MessageSection.DirectMessages
         selected = MainTab.Messages
         stacks.getValue(MainTab.Messages).popToRoot()
     }
     LaunchedEffect(pendingChatChannel) {
         pendingChatChannel?.let { channelId ->
             openChat()
-            directMessages = true
             val messagesStack = stacks.getValue(MainTab.Messages)
             messagesStack.push(Route.ChatRoom(channelId, "直接消息"))
             viewModel.clearChatNotification()
@@ -762,6 +760,7 @@ private fun MainNavigation(state: UiState, viewModel: MainViewModel, lifecycle: 
     val signatureSyncBusy by viewModel.signatureSyncBusy.collectAsStateWithLifecycle()
     val signatureSyncNotice by viewModel.signatureSyncNotice.collectAsStateWithLifecycle()
     val showTopicUnreadDot by viewModel.showTopicUnreadDot.collectAsStateWithLifecycle()
+    val showDirectMessageQuickBar by viewModel.showDirectMessageQuickBar.collectAsStateWithLifecycle()
     val topicUnreadDotPosition by viewModel.topicUnreadDotPosition.collectAsStateWithLifecycle()
     val listBars = remember(selected, stack.entries.last().id) { mutableStateOf(true) }
     val themeMode by viewModel.themeMode.collectAsStateWithLifecycle()
@@ -1843,14 +1842,17 @@ private fun MainNavigation(state: UiState, viewModel: MainViewModel, lifecycle: 
                                 onSkinPreset = viewModel::setSkinPreset,
                                 isSelfHealing = isSelfHealing,
                                 onSelfHealNetwork = { viewModel.selfHealNetwork(context) },
+                                showDirectMessageQuickBar = showDirectMessageQuickBar,
+                                onShowDirectMessageQuickBar = viewModel::setShowDirectMessageQuickBar,
                             )
 
                             Route.Notifications -> MessagesScreen(
                                 feedDisplayMode = feedDisplayMode,
                                 section = messageSection,
                                 onSection = { messageSection = it },
-                                directMessages = directMessages,
-                                onDirectMessages = { directMessages = it },
+                                leading = { PersonalDrawerAvatar(state.username, drawerAccount, ::openPersonalDrawer) },
+                                showDirectMessageQuickBar = showDirectMessageQuickBar,
+                                currentUsername = accountState.accounts.firstOrNull { it.userId == accountState.activeUserId }?.username,
                                 notifications = profile[org.linuxdo.android.data.ProfileSection.Notifications] ?: ProfileUiState(),
                                 notificationPages = viewModel.notificationPages.collectAsStateWithLifecycle().value,
                                 chat = chat,
@@ -1867,6 +1869,10 @@ private fun MainNavigation(state: UiState, viewModel: MainViewModel, lifecycle: 
                                 onRead = viewModel::readNotification,
                                 onRefreshChat = { viewModel.loadChatChannels(refresh = true) },
                                 onOpenChannel = { stack.push(Route.ChatRoom(it.id, it.displayTitle)) },
+                                onStartDirectMessage = { username ->
+                                    viewModel.openChatWithUser(username) { targetRoute -> stack.push(targetRoute) }
+                                },
+                                onSearchUsers = viewModel::searchUsersForDirectMessage,
                                 onOpenTopic = { id, title, postNumber ->
                                     viewModel.markNotificationTopicPending(id, postNumber)
                                     val currentRoute = stack.current

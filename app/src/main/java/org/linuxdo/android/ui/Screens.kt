@@ -262,30 +262,119 @@ internal fun NotificationRow(
     onRead: (Long) -> Unit,
     onOpenUser: (String) -> Unit,
 ) {
+    val colors = IosTheme.colors
     val typeTag = notificationTypeTag(entry.notificationType)
-    val date = entry.subtitle.substringAfterLast(" · ", "").takeIf { it.length == 10 && it[4] == '-' }
-    MessageFeedRow(
-        name = entry.actor?.takeIf { it.isNotBlank() } ?: "系统通知",
-        preview = entry.title,
-        date = date?.takeLast(5).orEmpty(),
-        onClick = {
-            if (entry.unread) entry.id.toLongOrNull()?.let(onRead)
-            entry.topicId?.let { onOpenTopic(it, entry.title, entry.postNumber) }
-        },
-        avatar = {
-            NotificationAvatarWithBadge(entry.avatarUrl, entry.actor, entry.notificationType, entry.unread) {
-                entry.actor?.let(onOpenUser)
+    val tint = notificationTypeTint(entry.notificationType)
+    val subtitleParts = remember(entry.subtitle) {
+        val raw = entry.subtitle.trim()
+        val trailingDate = raw.substringAfterLast(" · ", "")
+            .takeIf { it.length == 10 && it[4] == '-' }
+        val excerptText = if (trailingDate != null) {
+            raw.removeSuffix(" · $trailingDate").removeSuffix(trailingDate).trim()
+        } else {
+            raw
+        }
+        val shortDate = trailingDate?.takeLast(5).orEmpty()
+        excerptText to shortDate
+    }
+    val rowBg = if (entry.unread) {
+        colors.accent.copy(alpha = if (colors.isDark) 0.08f else 0.04f)
+    } else {
+        colors.card
+    }
+
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .background(colors.card)
+            .background(rowBg)
+            .clickable {
+                if (entry.unread) entry.id.toLongOrNull()?.let(onRead)
+                entry.topicId?.let { onOpenTopic(it, entry.title, entry.postNumber) }
             }
-        },
-        badge = {
-            val tint = notificationTypeTint(entry.notificationType)
-            Text(typeTag, style = IosTheme.type.caption.copy(fontSize = 11.sp), color = tint,
-                modifier = Modifier.background(tint.copy(alpha = 0.13f), RoundedCornerShape(4.dp))
-                    .padding(horizontal = 5.dp, vertical = 1.dp))
-            if (entry.unread) Spacer(Modifier.size(6.dp).background(IosTheme.colors.accent, CircleShape)
-                .semantics { contentDescription = "未读" })
-        },
-    )
+            .padding(horizontal = 16.dp, vertical = 12.dp),
+        verticalAlignment = Alignment.Top,
+        horizontalArrangement = Arrangement.spacedBy(11.dp),
+    ) {
+        NotificationAvatarWithBadge(
+            avatarUrl = entry.avatarUrl,
+            actor = entry.actor,
+            notificationType = entry.notificationType,
+            unread = entry.unread,
+            avatarSize = 38.dp,
+            onClick = { entry.actor?.let(onOpenUser) },
+        )
+        Column(
+            modifier = Modifier.weight(1f),
+            verticalArrangement = Arrangement.spacedBy(4.dp),
+        ) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(6.dp),
+            ) {
+                Row(
+                    modifier = Modifier.weight(1f),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(6.dp),
+                ) {
+                    Text(
+                        text = entry.actor?.takeIf { it.isNotBlank() } ?: "系统通知",
+                        modifier = Modifier.weight(1f, fill = false),
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                        style = IosTheme.type.body.copy(fontSize = 13.5.sp, fontWeight = FontWeight.SemiBold),
+                        color = colors.label,
+                    )
+                    Text(
+                        text = typeTag,
+                        style = IosTheme.type.caption.copy(fontSize = 10.5.sp, fontWeight = FontWeight.SemiBold),
+                        color = tint,
+                        maxLines = 1,
+                        modifier = Modifier
+                            .background(tint.copy(alpha = 0.13f), RoundedCornerShape(5.dp))
+                            .padding(horizontal = 6.dp, vertical = 1.5.dp),
+                    )
+                    if (entry.unread) {
+                        Spacer(
+                            Modifier
+                                .size(6.5.dp)
+                                .background(colors.accent, CircleShape)
+                                .semantics { contentDescription = "未读" },
+                        )
+                    }
+                }
+                if (subtitleParts.second.isNotBlank()) {
+                    Text(
+                        text = subtitleParts.second,
+                        style = IosTheme.type.caption.copy(fontSize = 11.5.sp, fontFeatureSettings = "tnum"),
+                        color = colors.tertiaryLabel,
+                        maxLines = 1,
+                    )
+                }
+            }
+            Text(
+                text = entry.title,
+                maxLines = 2,
+                overflow = TextOverflow.Ellipsis,
+                color = colors.label,
+                style = IosTheme.type.body.copy(
+                    fontSize = 14.5.sp,
+                    fontWeight = if (entry.unread) FontWeight.SemiBold else FontWeight.Medium,
+                    lineHeight = 20.sp,
+                ),
+            )
+            if (subtitleParts.first.isNotBlank() && subtitleParts.first != typeTag) {
+                Text(
+                    text = subtitleParts.first,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    style = IosTheme.type.footnote.copy(fontSize = 12.5.sp),
+                    color = colors.secondaryLabel,
+                )
+            }
+        }
+    }
 }
 
 @Composable
@@ -718,6 +807,7 @@ private fun NotificationAvatarWithBadge(
     actor: String?,
     notificationType: Int,
     unread: Boolean,
+    avatarSize: androidx.compose.ui.unit.Dp = 32.dp,
     onClick: () -> Unit = {},
 ) {
     val cardColor = IosTheme.colors.card
@@ -729,21 +819,21 @@ private fun NotificationAvatarWithBadge(
         IosTheme.colors.isDark -> Color(0xFFD1D1D6)
         else -> Color(0xFF3A3A3C)
     }
-    Box(Modifier.size(32.dp).clickable(enabled = !actor.isNullOrBlank(), onClick = onClick)) {
+    Box(Modifier.size(avatarSize).clickable(enabled = !actor.isNullOrBlank(), onClick = onClick)) {
         if (avatarUrl != null) {
             AsyncImage(
                 model = avatarUrl,
                 contentDescription = actor,
                 modifier = Modifier
                     .align(Alignment.BottomStart)
-                    .size(32.dp)
+                    .size(avatarSize)
                     .clip(avatarShape(actor, avatarUrl, 4.dp)),
             )
         } else {
             Box(
                 Modifier
                     .align(Alignment.BottomStart)
-                    .size(32.dp)
+                    .size(avatarSize)
                     .clip(avatarShape(actor, null, 4.dp))
                     .background(IosTheme.colors.fieldBackground),
                 contentAlignment = Alignment.Center,
@@ -1009,6 +1099,8 @@ fun SettingsScreen(
     signatureSyncNotice: String? = null,
     onSyncSeeSignatures: () -> Unit = {},
     onOpenWebSignaturePreferences: () -> Unit = {},
+    showDirectMessageQuickBar: Boolean = true,
+    onShowDirectMessageQuickBar: (Boolean) -> Unit = {},
 ) {
     val context = LocalContext.current
     var showSyncConfirmDialog by remember { mutableStateOf(false) }
@@ -1956,6 +2048,35 @@ fun SettingsScreen(
         }
 
         // ── 3. 通知与后台保活 ──
+        if (page == SettingsPage.Notifications) item("group-messages-display") {
+            SectionTitle("消息页显示")
+            IosGroupCard {
+                IosRow(onClick = { onShowDirectMessageQuickBar(!showDirectMessageQuickBar) }) {
+                    SettingIconBadge(bgColor = Color(0xFFE5F6FF)) {
+                        SettingUnreadDotIcon(tint = Color(0xFF007AFF))
+                    }
+                    Spacer(Modifier.width(12.dp))
+                    Column(Modifier.weight(1f)) {
+                        Text(
+                            "直接消息顶部快捷栏",
+                            style = IosTheme.type.body.copy(fontSize = 14.5.sp),
+                            fontWeight = FontWeight.Normal,
+                        )
+                        Text(
+                            "在直接消息顶部显示最近联系人与新对话快捷入口",
+                            style = IosTheme.type.footnote.copy(fontSize = 12.sp),
+                            color = IosTheme.colors.secondaryLabel,
+                            modifier = Modifier.padding(top = 3.dp),
+                        )
+                    }
+                    IosSwitch(
+                        checked = showDirectMessageQuickBar,
+                        onCheckedChange = onShowDirectMessageQuickBar,
+                    )
+                }
+            }
+        }
+
         if (page == SettingsPage.Notifications) item("group-notifications") {
             SectionTitle("通知")
             IosGroupCard {

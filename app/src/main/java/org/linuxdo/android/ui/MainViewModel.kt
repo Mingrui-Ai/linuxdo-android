@@ -1152,6 +1152,10 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     val unreadDotPosition = _unreadDotPosition.asStateFlow()
     private val _showTopicUnreadDot = MutableStateFlow(container.preferences.getBoolean("show_topic_unread_dot", true))
     val showTopicUnreadDot = _showTopicUnreadDot.asStateFlow()
+    private val _showDirectMessageQuickBar = MutableStateFlow(
+        container.preferences.getBoolean("show_dm_quick_contacts_bar", true)
+    )
+    val showDirectMessageQuickBar = _showDirectMessageQuickBar.asStateFlow()
     private val _topicUnreadDotPosition = MutableStateFlow(
         TopicUnreadDotPosition.fromId(container.preferences.getString("topic_unread_dot_position", "avatar"))
     )
@@ -2918,6 +2922,11 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         container.preferences.edit { putBoolean("show_topic_unread_dot", enabled) }
     }
 
+    fun setShowDirectMessageQuickBar(enabled: Boolean) {
+        _showDirectMessageQuickBar.value = enabled
+        container.preferences.edit { putBoolean("show_dm_quick_contacts_bar", enabled) }
+    }
+
     fun setTopicUnreadDotPosition(position: TopicUnreadDotPosition) {
         _topicUnreadDotPosition.value = position
         container.preferences.edit { putString("topic_unread_dot_position", position.id) }
@@ -3554,7 +3563,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         val state = _chat.value
         val channel = state.channels.firstOrNull { it.id == channelId } ?: return
         val membership = channel.membership ?: return
-        if (channel.isDirectMessage || membership.muted == muted || channelId in state.updatingMuteChannelIds) return
+        if (membership.muted == muted || channelId in state.updatingMuteChannelIds) return
 
         val generation = accountScopeGeneration
         _chat.update { it.copy(updatingMuteChannelIds = it.updatingMuteChannelIds + channelId) }
@@ -3574,6 +3583,14 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 }
             }
         }
+    }
+
+    suspend fun searchUsersForDirectMessage(query: String): List<org.linuxdo.android.data.EditorSuggestion> {
+        val clean = query.trim().removePrefix("@")
+        if (clean.isEmpty()) return emptyList()
+        return repository.searchEditorSuggestions(
+            org.linuxdo.android.data.EditorCompletionRequest(marker = '@', term = clean)
+        )
     }
 
     fun loadChatRoom(channelId: Long, refresh: Boolean = false) {
