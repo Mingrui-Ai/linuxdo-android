@@ -1657,14 +1657,15 @@ fun TopicDetailScreen(
             }
             if (composer.open) {
                 key(composer.draftKey, composer.target) {
-                ComposerSheet(
-                    composer = composer,
-                    onDraftChange = onDraftChange,
-                    onSubmit = onSubmitComposer,
-                    onClose = onCloseComposer,
-                    onAttach = onAttach,
-                    onRemoveAttachment = onRemoveComposerAttachment,
-                )
+                    ReplyComposerSheet(
+                        composer = composer,
+                        emojiUrls = state.emojiUrls,
+                        onDraftChange = onDraftChange,
+                        onSubmit = onSubmitComposer,
+                        onClose = onCloseComposer,
+                        onAttach = onAttach,
+                        onRemoveAttachment = onRemoveComposerAttachment,
+                    )
                 }
             }
             boostTarget?.let { target ->
@@ -3100,327 +3101,6 @@ fun AttachmentPreviewRow(
                 }
             }
         }
-    }
-}
-
-/** 回复 / 编辑共用的输入弹层。页内底部抽屉设计,完全跟随宿主窗口键盘避让,支持一键全屏展开与收起。 */
-@Composable
-private fun ComposerSheet(
-    composer: ComposerUiState,
-    onDraftChange: (String) -> Unit,
-    onSubmit: () -> Unit,
-    onClose: () -> Unit,
-    onAttach: (Uri) -> Unit,
-    onRemoveAttachment: (String) -> Unit = {},
-) {
-    val target = composer.target ?: return
-    val completionSource = org.linuxdo.android.ui.LocalEditorSuggestionSource.current
-    val heading = when (target) {
-        is ComposerTarget.NewReply -> "发表评论"
-        is ComposerTarget.ReplyTo -> "回复 @${target.username}"
-        is ComposerTarget.Edit -> "编辑 #${target.postNumber}"
-    }
-    val keyboardController = LocalSoftwareKeyboardController.current
-    var isFullScreen by rememberSaveable { mutableStateOf(false) }
-    var showPollDialog by remember { mutableStateOf(false) }
-    var editingPollTarget by remember { mutableStateOf<Pair<CreatorPollSpan, PollBuilderSpec>?>(null) }
-    var previewingImage by remember { mutableStateOf<String?>(null) }
-    var editorView by remember(target) { mutableStateOf<RichMarkdownEditorView?>(null) }
-    var editorContentHeight by remember(target) { mutableIntStateOf(0) }
-    val compactEditorHeight = with(LocalDensity.current) { editorContentHeight.toDp().coerceIn(44.dp, 180.dp) }
-    var pickingAttachment by remember { mutableStateOf(false) }
-    val dismiss = rememberComposerDismiss(
-        enabled = !showPollDialog && previewingImage == null,
-        canDismiss = !composer.submitting,
-        ignoreKeyboardHide = pickingAttachment,
-    ) {
-        editorView?.exportToMarkdown()?.let(onDraftChange)
-        onClose()
-    }
-
-    // 服务端草稿恢复或冲突选择后刷新内容，普通输入不重置光标。
-    LaunchedEffect(target, composer.loadingDraft, composer.remoteRevision) {
-        if (!composer.loadingDraft) {
-            editorView?.setInitialMarkdown(composer.draft, composer.attachments)
-        }
-    }
-
-    // 弹框打开时默认选中输入框并弹出软键盘
-    LaunchedEffect(editorView, composer.loadingDraft) {
-        if (!composer.loadingDraft && editorView != null) {
-            kotlinx.coroutines.delay(120)
-            editorView?.requestInputFocus()
-        }
-    }
-
-    LaunchedEffect(composer.attachments) {
-        editorView?.syncAttachments(composer.attachments)
-    }
-
-    // 系统相册选择器和 SAF 文件选择器都不需要声明存储权限。
-    val pickImage = rememberLauncherForActivityResult(ActivityResultContracts.PickVisualMedia()) { uri ->
-        pickingAttachment = false
-        uri?.let(onAttach)
-    }
-    val pickFile = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
-        pickingAttachment = false
-        uri?.let(onAttach)
-    }
-    val busy = composer.submitting || composer.uploading || composer.loadingDraft
-
-
-    BoxWithConstraints(
-        modifier = Modifier.fillMaxSize().composerBackKeys(dismiss),
-        contentAlignment = Alignment.BottomCenter,
-    ) {
-        // 背景半透明暗色遮罩,点击收起弹层
-        Box(
-            Modifier
-                .fillMaxSize()
-                .background(Color.Black.copy(alpha = 0.45f))
-                .clickable(
-                    interactionSource = remember { MutableInteractionSource() },
-                    indication = null,
-                    onClick = dismiss,
-                ),
-        )
-        // 底部抽屉面板
-        Column(
-            modifier = Modifier
-                .fillMaxWidth()
-                .heightIn(max = maxHeight * 0.92f)
-                .then(if (isFullScreen) Modifier.height(maxHeight * 0.92f) else Modifier)
-                .clip(RoundedCornerShape(topStart = 16.dp, topEnd = 16.dp))
-                .background(IosTheme.colors.card)
-                .clickable(
-                    interactionSource = remember { MutableInteractionSource() },
-                    indication = null,
-                    onClick = {}, // 阻止点击穿透到遮罩
-                )
-                .padding(horizontal = 12.dp, vertical = 8.dp),
-            verticalArrangement = Arrangement.spacedBy(6.dp),
-        ) {
-            // 顶部标题与全屏切换栏
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.SpaceBetween,
-            ) {
-                Text(
-                    heading,
-                    style = IosTheme.type.headline,
-                    fontWeight = FontWeight.SemiBold,
-                    color = IosTheme.colors.label,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                    modifier = Modifier.weight(1f),
-                )
-
-                // 右上角全屏/恢复 切换图标
-                Box(
-                    modifier = Modifier
-                        .size(32.dp)
-                        .clip(CircleShape)
-                        .clickable { isFullScreen = !isFullScreen }
-                        .semantics { contentDescription = if (isFullScreen) "恢复默认高度" else "全屏显示" },
-                    contentAlignment = Alignment.Center,
-                ) {
-                    FullscreenToggleIcon(isFullScreen = isFullScreen, tint = IosTheme.colors.label)
-                }
-            }
-
-            // 中间输入区域 (自适应填满剩余空间，基于原生 EditText + ReplacementSpan 所见即所得图文混排)
-            val textColorInt = IosTheme.colors.label.toArgb()
-            val hintColorInt = IosTheme.colors.tertiaryLabel.toArgb()
-            val editorTextSizePx = with(LocalDensity.current) { 16.sp.toPx() }
-
-            Box(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .weight(1f, fill = isFullScreen)
-                    .then(if (isFullScreen) Modifier else Modifier.height(compactEditorHeight))
-                    .clip(RoundedCornerShape(12.dp))
-                    .background(IosTheme.colors.fieldBackground),
-            ) {
-                if (composer.loadingDraft) {
-                    IosLoadingBox()
-                } else {
-                    AndroidView(
-                        modifier = Modifier.fillMaxSize(),
-                        factory = { ctx ->
-                            RichMarkdownEditorView(ctx).apply {
-                                setOnDismissInputListener(dismiss)
-                                updateThemeColors(textColorInt, hintColorInt)
-                                setCompletionSource(completionSource, topicId = target.topicId)
-                                setOnContentHeightChangeListener { editorContentHeight = it }
-                                setInitialMarkdown(composer.draft, composer.attachments)
-                                setOnMarkdownChangeListener { newRaw -> onDraftChange(newRaw) }
-                                setOnRemoveAttachmentListener { mediaId -> onRemoveAttachment(mediaId) }
-                                setOnPreviewImageListener { previewUrl -> previewingImage = previewUrl }
-                                setOnEditPollListener { span, spec ->
-                                    editingPollTarget = Pair(span, spec)
-                                    showPollDialog = true
-                                }
-                                editorView = this
-                                post { requestInputFocus() }
-                            }
-                        },
-                        update = { view ->
-                            view.setOnDismissInputListener(dismiss)
-                            view.updateThemeColors(textColorInt, hintColorInt)
-                            view.setTextSize(android.util.TypedValue.COMPLEX_UNIT_PX, editorTextSizePx)
-                            view.setCompletionSource(completionSource, topicId = target.topicId)
-                            view.setOnEditPollListener { span, spec ->
-                                editingPollTarget = Pair(span, spec)
-                                showPollDialog = true
-                            }
-                        },
-                    )
-                }
-            }
-
-            composer.syncStatus?.let { Text(it, style = IosTheme.type.caption, color = IosTheme.colors.secondaryLabel, maxLines = 1, overflow = TextOverflow.Ellipsis) }
-            composer.error?.let {
-                Text(it, style = IosTheme.type.footnote, color = IosTheme.colors.destructive, maxLines = 1)
-            }
-
-            // 底部操作栏：图片、附件、投票和发送
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(bottom = 2.dp),
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                // 图片 Icon
-                Box(
-                    modifier = Modifier
-                        .size(36.dp)
-                        .clip(CircleShape)
-                        .clickable(enabled = !busy) {
-                            pickingAttachment = true
-                            pickImage.launch(
-                                PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly),
-                            )
-                        }
-                        .semantics { contentDescription = "添加图片" },
-                    contentAlignment = Alignment.Center,
-                ) {
-                    ComposerImageIcon(tint = if (busy) IosTheme.colors.tertiaryLabel else IosTheme.colors.label)
-                }
-
-                Spacer(Modifier.width(8.dp))
-
-                // 附件 Icon
-                Box(
-                    modifier = Modifier
-                        .size(36.dp)
-                        .clip(CircleShape)
-                        .clickable(enabled = !busy) {
-                            pickingAttachment = true
-                            pickFile.launch(arrayOf("*/*"))
-                        }
-                        .semantics { contentDescription = "添加附件" },
-                    contentAlignment = Alignment.Center,
-                ) {
-                    ComposerAttachmentIcon(tint = if (busy) IosTheme.colors.tertiaryLabel else IosTheme.colors.label)
-                }
-
-                Spacer(Modifier.width(8.dp))
-
-                // 投票 Icon
-                Box(
-                    modifier = Modifier
-                        .size(36.dp)
-                        .clip(CircleShape)
-                        .background(if (showPollDialog) IosTheme.colors.accent.copy(alpha = 0.12f) else Color.Transparent)
-                        .clickable(enabled = !busy) {
-                            keyboardController?.hide()
-                            editingPollTarget = null
-                            showPollDialog = true
-                        }
-                        .semantics { contentDescription = "插入投票" },
-                    contentAlignment = Alignment.Center,
-                ) {
-                    ComposerPollIcon(
-                        tint = when {
-                            busy -> IosTheme.colors.tertiaryLabel
-                            showPollDialog -> IosTheme.colors.accent
-                            else -> IosTheme.colors.label
-                        },
-                    )
-                }
-
-                if (composer.uploading) {
-                    Spacer(Modifier.width(10.dp))
-                    IosActivityIndicator(diameter = 16.dp)
-                    Text(
-                        "上传中…",
-                        style = IosTheme.type.caption,
-                        color = IosTheme.colors.secondaryLabel,
-                        modifier = Modifier.padding(start = 4.dp),
-                    )
-                }
-
-                Spacer(Modifier.weight(1f))
-
-                // 发送 / 保存 胶囊按钮
-                val sendText = if (target is ComposerTarget.Edit) "保存" else "发表"
-                val canSubmit = composer.canSubmit
-                Box(
-                    modifier = Modifier
-                        .clip(RoundedCornerShape(50))
-                        .background(if (canSubmit) IosTheme.colors.accent else IosTheme.colors.accent.copy(alpha = 0.35f))
-                        .clickable(enabled = canSubmit) {
-                            editorView?.exportToMarkdown()?.let { onDraftChange(it) }
-                            onSubmit()
-                        }
-                        .padding(horizontal = 22.dp, vertical = 7.dp),
-                    contentAlignment = Alignment.Center,
-                ) {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        if (composer.submitting) {
-                            IosActivityIndicator(diameter = 14.dp)
-                            Spacer(Modifier.width(6.dp))
-                        }
-                        Text(
-                            sendText,
-                            style = IosTheme.type.subheadline.copy(fontWeight = FontWeight.Medium),
-                            color = Color.White,
-                        )
-                    }
-                }
-            }
-
-        }
-    }
-
-    if (showPollDialog) {
-        val currentRaw = editorView?.exportToMarkdown() ?: composer.draft
-        val suggestedPollName = remember(currentRaw) {
-            nextAvailablePollName(currentRaw)
-        }
-        PollBuilderDialog(
-            suggestedPollName = suggestedPollName,
-            initialSpec = editingPollTarget?.second,
-            onDismiss = {
-                showPollDialog = false
-                editingPollTarget = null
-            },
-            onConfirm = { resultSpec ->
-                val targetPoll = editingPollTarget
-                if (targetPoll != null) {
-                    editorView?.updatePollSpan(targetPoll.first, resultSpec)
-                } else {
-                    editorView?.insertPoll(resultSpec)
-                }
-                showPollDialog = false
-                editingPollTarget = null
-            },
-        )
-    }
-
-    previewingImage?.let { previewUrl ->
-        ImageViewer(url = previewUrl) { previewingImage = null }
     }
 }
 
@@ -6883,7 +6563,9 @@ private fun RichParagraph(
     val updatedOpenExternal by rememberUpdatedState(openExternal)
     val scope = rememberCoroutineScope()
     val resetKey = LocalSelectionResetKey.current
-    val annotated = remember(runs, colors, context, openExternal) {
+    val hasSpoiler = remember(runs) { runs.any { it.spoiler } }
+    var revealedSpoilers by remember(runs) { mutableStateOf(false) }
+    val annotated = remember(runs, colors, context, openExternal, revealedSpoilers) {
         buildAnnotatedString {
             runs.forEach { run ->
                 val emoji = run.emojiUrl
@@ -6891,14 +6573,28 @@ private fun RichParagraph(
                     appendInlineContent(emoji, run.text.ifBlank { "表情" })
                     return@forEach
                 }
-                withStyle(SpanStyle(
+                val isHiddenSpoiler = run.spoiler && !revealedSpoilers
+                val baseSpan = SpanStyle(
                     fontWeight = if (run.bold) FontWeight.Bold else null,
                     fontStyle = if (run.italic) FontStyle.Italic else null,
                     fontFamily = if (run.code) FontFamily.Monospace else null,
-                    background = if (run.code) colors.fieldBackground else Color.Unspecified,
-                )) {
+                    fontSize = if (run.small) 12.5.sp else androidx.compose.ui.unit.TextUnit.Unspecified,
+                    textDecoration = if (run.strikethrough) androidx.compose.ui.text.style.TextDecoration.LineThrough else null,
+                    color = when {
+                        isHiddenSpoiler -> Color.Transparent
+                        run.small -> colors.secondaryLabel
+                        else -> Color.Unspecified
+                    },
+                    background = when {
+                        isHiddenSpoiler -> colors.secondaryLabel.copy(alpha = 0.78f)
+                        run.spoiler -> colors.fieldBackground
+                        run.code -> colors.fieldBackground
+                        else -> Color.Unspecified
+                    },
+                )
+                withStyle(baseSpan) {
                     val link = run.href
-                    if (link == null) append(run.text) else withLink(LinkAnnotation.Url(
+                    if (link == null || isHiddenSpoiler) append(run.text) else withLink(LinkAnnotation.Url(
                         link, TextLinkStyles(style = SpanStyle(color = colors.accent)),
                         linkInteractionListener = {
                             if (run.isAttachment) {
@@ -6955,14 +6651,23 @@ private fun RichParagraph(
             AsyncImage(url, "表情", modifier = Modifier.fillMaxSize())
         }
     }
+    val spoilerClickModifier = if (hasSpoiler) {
+        Modifier.clickable(
+            interactionSource = remember { MutableInteractionSource() },
+            indication = null,
+        ) { revealedSpoilers = !revealedSpoilers }
+    } else {
+        Modifier
+    }
     key(resetKey) {
         when {
-            compact -> Text(annotated, style = IosTheme.type.caption, inlineContent = inline)
+            compact -> Text(annotated, style = IosTheme.type.caption, inlineContent = inline, modifier = spoilerClickModifier)
             subReply -> DecryptableSelection {
                 Text(
                     annotated,
                     style = IosTheme.type.subheadline.copy(fontSize = 14.sp, lineHeight = 19.5.sp),
                     inlineContent = inline,
+                    modifier = spoilerClickModifier,
                 )
             }
             else -> DecryptableSelection {
@@ -6970,6 +6675,7 @@ private fun RichParagraph(
                     annotated,
                     style = style ?: IosTheme.type.body.copy(fontSize = 15.5.sp, lineHeight = 22.sp),
                     inlineContent = inline,
+                    modifier = spoilerClickModifier,
                 )
             }
         }

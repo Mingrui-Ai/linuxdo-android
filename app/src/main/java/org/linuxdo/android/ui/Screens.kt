@@ -6712,6 +6712,88 @@ internal class RichMarkdownEditorView(context: Context) : EditText(context) {
         requestFocus()
     }
 
+    /** 当前选区文本，供链接弹窗等需要预填选中文字的交互读取。 */
+    fun currentSelectedText(): String {
+        val ed = text ?: return ""
+        val start = minOf(selectionStart, selectionEnd).coerceIn(0, ed.length)
+        val end = maxOf(selectionStart, selectionEnd).coerceIn(0, ed.length)
+        return if (end > start) ed.subSequence(start, end).toString() else ""
+    }
+
+    private fun applyEditableMarkdownOp(
+        transform: (text: String, start: Int, end: Int) -> org.linuxdo.android.ui.design.MarkdownEditResult,
+    ) {
+        val ed = text ?: return
+        val start = selectionStart.coerceIn(0, ed.length)
+        val end = selectionEnd.coerceIn(0, ed.length)
+        val min = minOf(start, end)
+        val max = maxOf(start, end)
+        val before = ed.toString()
+        val result = transform(before, min, max)
+        // 用最小差异区间替换 Editable，避免重建整段文本破坏已有媒体/投票 ReplacementSpan。
+        var commonPrefix = 0
+        val maxPrefix = minOf(before.length, result.text.length)
+        while (commonPrefix < maxPrefix && before[commonPrefix] == result.text[commonPrefix]) {
+            commonPrefix++
+        }
+        var beforeSuffix = before.length
+        var afterSuffix = result.text.length
+        while (beforeSuffix > commonPrefix && afterSuffix > commonPrefix &&
+            before[beforeSuffix - 1] == result.text[afterSuffix - 1]
+        ) {
+            beforeSuffix--
+            afterSuffix--
+        }
+        val replacement = result.text.substring(commonPrefix, afterSuffix)
+        ed.replace(commonPrefix, beforeSuffix, replacement)
+        val selStart = result.selectionStart.coerceIn(0, ed.length)
+        val selEnd = result.selectionEnd.coerceIn(0, ed.length)
+        setSelection(selStart, selEnd)
+        requestFocus()
+    }
+
+    fun applyMarkdownWrap(prefix: String, suffix: String, placeholder: String = "") {
+        applyEditableMarkdownOp { raw, s, e ->
+            org.linuxdo.android.ui.design.MarkdownEditOps.applyWrap(raw, s, e, prefix, suffix, placeholder)
+        }
+    }
+
+    fun applyMarkdownLinePrefix(prefix: String, placeholder: String = "") {
+        applyEditableMarkdownOp { raw, s, e ->
+            org.linuxdo.android.ui.design.MarkdownEditOps.applyLinePrefix(raw, s, e, prefix, placeholder)
+        }
+    }
+
+    fun applyMarkdownBlock(prefix: String, suffix: String = "", placeholder: String = "") {
+        applyEditableMarkdownOp { raw, s, e ->
+            org.linuxdo.android.ui.design.MarkdownEditOps.applyBlock(raw, s, e, prefix, suffix, placeholder)
+        }
+    }
+
+    fun applyMarkdownLink(label: String, url: String) {
+        applyEditableMarkdownOp { raw, s, e ->
+            org.linuxdo.android.ui.design.MarkdownEditOps.applyLink(raw, s, e, label, url)
+        }
+    }
+
+    fun applyMarkdownTable() {
+        applyEditableMarkdownOp { raw, s, e ->
+            org.linuxdo.android.ui.design.MarkdownEditOps.applyTable(raw, s, e)
+        }
+    }
+
+    fun applyMarkdownDivider() {
+        applyEditableMarkdownOp { raw, s, e ->
+            org.linuxdo.android.ui.design.MarkdownEditOps.applyDivider(raw, s, e)
+        }
+    }
+
+    fun applyMarkdownFootnote() {
+        applyEditableMarkdownOp { raw, s, e ->
+            org.linuxdo.android.ui.design.MarkdownEditOps.applyFootnote(raw, s, e)
+        }
+    }
+
     /** 块级插入（对齐 Fluxdo insertBlockSnippet）：非行首先补换行，末尾补换行，确保独立成段 */
     fun insertBlockSnippet(snippet: String) {
         val ed = text ?: return
