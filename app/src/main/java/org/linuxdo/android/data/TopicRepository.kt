@@ -185,10 +185,22 @@ internal fun parseTopicMetadata(root: JsonObject, expectedId: Long): TopicMetada
         val name = (it as? JsonPrimitive)?.contentOrNull ?: ((it as? JsonObject)?.get("name") as? JsonPrimitive)?.contentOrNull
         name?.takeIf(String::isNotBlank)
     }.distinct()
-    return TopicMetadata(expectedId, (root["title"] as? JsonPrimitive)?.contentOrNull.orEmpty(),
-        (root["category_id"] as? JsonPrimitive)?.intOrNull, tags,
-        (details?.get("can_edit") as? JsonPrimitive)?.booleanOrNull == true,
-        (root["archetype"] as? JsonPrimitive)?.contentOrNull == "private_message")
+    val postStream = root["post_stream"] as? JsonObject
+    val posts = (postStream?.get("posts") as? JsonArray).orEmpty().mapNotNull { it as? JsonObject }
+    val firstPost = posts.firstOrNull { (it["post_number"] as? JsonPrimitive)?.intOrNull == 1 }
+    val firstPostId = (firstPost?.get("id") as? JsonPrimitive)?.longOrNull
+        ?: (postStream?.get("stream") as? JsonArray)?.firstOrNull()?.let { (it as? JsonPrimitive)?.longOrNull }
+    val firstPostCanEdit = (firstPost?.get("can_edit") as? JsonPrimitive)?.booleanOrNull == true
+    return TopicMetadata(
+        topicId = expectedId,
+        title = (root["title"] as? JsonPrimitive)?.contentOrNull.orEmpty(),
+        categoryId = (root["category_id"] as? JsonPrimitive)?.intOrNull,
+        tags = tags,
+        canEdit = (details?.get("can_edit") as? JsonPrimitive)?.booleanOrNull == true,
+        privateMessage = (root["archetype"] as? JsonPrimitive)?.contentOrNull == "private_message",
+        firstPostId = firstPostId,
+        firstPostCanEdit = firstPostCanEdit,
+    )
 }
 
 internal fun bookmarkTarget(value: JsonObject): BookmarkTarget? {

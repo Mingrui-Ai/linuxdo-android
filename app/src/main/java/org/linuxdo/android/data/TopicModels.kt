@@ -586,6 +586,8 @@ data class TopicMetadata(
     val tags: List<String>,
     val canEdit: Boolean,
     val privateMessage: Boolean = false,
+    val firstPostId: Long? = null,
+    val firstPostCanEdit: Boolean = false,
 )
 
 data class TopicEditRules(

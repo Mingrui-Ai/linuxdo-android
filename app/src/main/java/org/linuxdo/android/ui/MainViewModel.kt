@@ -664,15 +664,36 @@ data class TopicMetadataEditorUiState(
     val open: Boolean = false, val topicId: Long = 0, val userId: Long = 0, val generation: Long = 0,
     val original: TopicMetadata? = null, val rules: TopicEditRules? = null,
     val title: String = "", val categoryId: Int? = null, val tags: List<String> = emptyList(),
+    val firstPostId: Long? = null, val canEditBody: Boolean = false,
+    val originalRaw: String = "", val raw: String = "", val rawRevision: Long = 0L,
+    val attachments: List<AttachedMedia> = emptyList(), val uploading: Boolean = false,
+    val emojiUrls: Map<String, String> = emptyMap(),
     val loading: Boolean = false, val saving: Boolean = false, val error: String? = null,
     val tagQuery: String = "", val loadingTags: Boolean = false,
     val tagOptions: List<org.linuxdo.android.data.DiscourseTagInfo> = emptyList(),
     val tagError: String? = null, val requiredTagName: String? = null, val requiredTagMin: Int = 0,
 ) {
-    val patch: TopicMetadataPatch? get() = original?.let { topicMetadataPatch(it, title, categoryId, tags, rules?.canTagTopics == true) }
-    val dirty: Boolean get() = patch?.changed == true
-    val validationError: String? get() = original?.let { original -> rules?.let { validateTopicMetadata(original, it, patch ?: TopicMetadataPatch()) } }
-    val canSave: Boolean get() = open && !loading && !saving && !loadingTags && original?.canEdit == true && rules != null && dirty && validationError == null
+    val canEditMetadata: Boolean get() = original?.canEdit == true
+    val patch: TopicMetadataPatch?
+        get() = original?.takeIf { it.canEdit }?.let {
+            topicMetadataPatch(it, title, categoryId, tags, rules?.canTagTopics == true)
+        }
+    val metadataDirty: Boolean get() = patch?.changed == true
+    val bodyDirty: Boolean
+        get() = canEditBody && firstPostId != null && (raw.trim() != originalRaw.trim() || attachments.isNotEmpty())
+    val dirty: Boolean get() = metadataDirty || bodyDirty
+    val validationError: String?
+        get() {
+            val metaError = if (metadataDirty) {
+                original?.let { orig -> rules?.let { validateTopicMetadata(orig, it, patch ?: TopicMetadataPatch()) } }
+            } else null
+            if (metaError != null) return metaError
+            if (bodyDirty && raw.trim().isEmpty() && attachments.isEmpty()) return "正文内容不能为空"
+            return null
+        }
+    val canSave: Boolean
+        get() = open && !loading && !saving && !uploading && !loadingTags &&
+            (canEditMetadata || canEditBody) && rules != null && dirty && validationError == null
 }
 
 data class ProfileUiState(
@@ -5278,8 +5299,12 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
-    /** 打开编辑器。编辑已有楼层时顺带把原文取回来填进输入框。 */
+    /** 打开编辑器。1 楼编辑统一走话题编辑器（可同时修改标题、分类、标签与正文），其余楼层编辑走楼层编辑器。 */
     fun openComposer(target: ComposerTarget) {
+        if (target is ComposerTarget.Edit && target.postNumber <= 1) {
+            openTopicMetadataEditor(target.topicId, explicitFirstPostId = target.postId)
+            return
+        }
         if (_composer.value.submitting || store.sessionChanging || _accounts.value.switching) return
         if (_composer.value.open) closeComposer()
         val needsDraft = target is ComposerTarget.Edit
@@ -8168,61 +8193,177 @@ fun openTopicSearch(topicId: Long, title: String) {
         }
     }
 
-    fun openTopicMetadataEditor(topicId: Long, preserveInput: Boolean = false) {
-        if (_metadataEditor.value.saving || store.currentUserId() <= 0L) return
+    fun openTopicMetadataEditor(topicId: Long, preserveInput: Boolean = false, explicitFirstPostId: Long? = null) {
+        if (_metadataEditor.value.saving || _metadataEditor.value.uploading || store.currentUserId() <= 0L) return
         metadataJob?.cancel()
         metadataTagJob?.cancel()
+        pageJobs.remove("upload:metadata")?.cancel()
         val previous = _metadataEditor.value
-        val pendingPatch = if (preserveInput && previous.topicId == topicId) previous.patch else null
+        val sameTopic = preserveInput && previous.topicId == topicId
+        val pendingPatch = if (sameTopic) previous.patch else null
+        val pendingRaw = if (sameTopic && previous.bodyDirty) previous.raw else null
+        val pendingAttachments = if (sameTopic) previous.attachments else emptyList()
         val sequence = ++metadataSequence
         val userId = store.currentUserId()
         val generation = store.sessionGeneration
-        _metadataEditor.value = if (pendingPatch != null) previous.copy(loading = true, error = null, generation = generation)
-            else TopicMetadataEditorUiState(open = true, topicId = topicId, userId = userId, generation = generation, loading = true)
+        val existingDetail = _details.value[topicId]
+        val existingFirstPost = existingDetail?.posts?.firstOrNull { it.postNumber == 1 }
+        val emojiSnapshot = existingDetail?.emojiUrls.orEmpty()
+        _metadataEditor.value = if (sameTopic) previous.copy(loading = true, error = null, generation = generation)
+            else TopicMetadataEditorUiState(
+                open = true,
+                topicId = topicId,
+                userId = userId,
+                generation = generation,
+                emojiUrls = emojiSnapshot,
+                loading = true,
+            )
         metadataJob = viewModelScope.launch {
             try {
                 val original = repository.fetchTopicMetadata(topicId)
                 if (sequence != metadataSequence) return@launch
                 if (userId != store.currentUserId() || generation != store.sessionGeneration) {
-                    _metadataEditor.update { it.copy(loading = false, original = it.original?.copy(canEdit = false),
-                        error = "账号状态已变化，请重新核对编辑权限") }
+                    _metadataEditor.update {
+                        it.copy(
+                            loading = false,
+                            original = it.original?.copy(canEdit = false, firstPostCanEdit = false),
+                            canEditBody = false,
+                            error = "账号状态已变化，请重新核对编辑权限",
+                        )
+                    }
                     return@launch
                 }
-                if (!original.canEdit) {
-                    _metadataEditor.update { it.copy(original = original, loading = false, error = "当前账号无权编辑此话题") }
+                val resolvedFirstPostId = explicitFirstPostId ?: original.firstPostId ?: existingFirstPost?.id
+                val canEditFirstPost = resolvedFirstPostId != null &&
+                    (original.firstPostCanEdit || existingFirstPost?.canEdit == true)
+                if (!original.canEdit && !canEditFirstPost) {
+                    _metadataEditor.update {
+                        it.copy(
+                            original = original,
+                            firstPostId = resolvedFirstPostId,
+                            canEditBody = false,
+                            loading = false,
+                            error = "当前账号无权编辑此话题",
+                        )
+                    }
                     return@launch
                 }
                 val rules = repository.fetchTopicEditRules()
                 if (sequence != metadataSequence) return@launch
+                var fetchedRaw = ""
+                var bodyLoadError: String? = null
+                var effectiveCanEditBody = canEditFirstPost
+                if (canEditFirstPost && resolvedFirstPostId != null) {
+                    try {
+                        fetchedRaw = repository.fetchPostRaw(resolvedFirstPostId)
+                    } catch (cancel: CancellationException) {
+                        throw cancel
+                    } catch (error: Exception) {
+                        if (!original.canEdit) throw error
+                        effectiveCanEditBody = false
+                        bodyLoadError = UserErrorMessage.format(error, "正文加载失败，可先修改标题分类或重试")
+                    }
+                }
+                if (sequence != metadataSequence) return@launch
                 if (userId != store.currentUserId() || generation != store.sessionGeneration) {
-                    _metadataEditor.update { it.copy(loading = false, original = it.original?.copy(canEdit = false),
-                        error = "账号状态已变化，请重新核对编辑权限") }
+                    _metadataEditor.update {
+                        it.copy(
+                            loading = false,
+                            original = it.original?.copy(canEdit = false, firstPostCanEdit = false),
+                            canEditBody = false,
+                            error = "账号状态已变化，请重新核对编辑权限",
+                        )
+                    }
                     return@launch
                 }
                 val pending = pendingPatch?.let { if (rules.canTagTopics) it else it.copy(tags = null) }?.applyTo(original) ?: original
-                _metadataEditor.value = TopicMetadataEditorUiState(open = true, topicId = topicId, userId = userId,
-                    generation = generation, original = original, rules = rules, title = pending.title,
-                    categoryId = pending.categoryId, tags = pending.tags)
-                if (!original.privateMessage && rules.canTagTopics) searchMetadataTags("")
+                val initialRaw = pendingRaw ?: fetchedRaw
+                val emojis = emojiSnapshot.ifEmpty { runCatching { repository.emojiUrls() }.getOrDefault(emptyMap()) }
+                if (sequence != metadataSequence) return@launch
+                _metadataEditor.value = TopicMetadataEditorUiState(
+                    open = true,
+                    topicId = topicId,
+                    userId = userId,
+                    generation = generation,
+                    original = original,
+                    rules = rules,
+                    title = pending.title,
+                    categoryId = pending.categoryId,
+                    tags = pending.tags,
+                    firstPostId = resolvedFirstPostId,
+                    canEditBody = effectiveCanEditBody,
+                    originalRaw = fetchedRaw,
+                    raw = initialRaw,
+                    rawRevision = previous.rawRevision + 1L,
+                    attachments = pendingAttachments,
+                    emojiUrls = emojis,
+                    error = bodyLoadError,
+                )
+                if (original.canEdit && !original.privateMessage && rules.canTagTopics) searchMetadataTags("")
             } catch (error: CancellationException) { throw error }
             catch (error: Exception) {
                 if (sequence != metadataSequence) return@launch
                 _metadataEditor.update { it.copy(loading = false, error = UserErrorMessage.format(error, "编辑信息加载失败")) }
-                handlePageFailure(error) { if (userId == store.currentUserId()) openTopicMetadataEditor(topicId, preserveInput = true) }
+                handlePageFailure(error) { if (userId == store.currentUserId()) openTopicMetadataEditor(topicId, preserveInput = true, explicitFirstPostId = explicitFirstPostId) }
             }
         }
     }
 
     fun closeTopicMetadataEditor() {
-        if (_metadataEditor.value.saving) return
+        if (_metadataEditor.value.saving || _metadataEditor.value.uploading) return
         metadataSequence++
         metadataJob?.cancel()
         metadataTagJob?.cancel()
+        pageJobs.remove("upload:metadata")?.cancel()
         _metadataEditor.value = TopicMetadataEditorUiState()
     }
 
     fun updateMetadataTitle(title: String) {
         _metadataEditor.update { if (it.saving || it.original?.canEdit != true) it else it.copy(title = title, error = null) }
+    }
+
+    fun updateMetadataRaw(raw: String) {
+        _metadataEditor.update { if (it.saving || !it.canEditBody) it else it.copy(raw = raw, error = null) }
+    }
+
+    fun attachToMetadataEditor(uri: Uri) {
+        val current = _metadataEditor.value
+        val generation = accountScopeGeneration
+        val sequence = metadataSequence
+        if (!current.open || current.loading || current.saving || current.uploading || !current.canEditBody) return
+        pageJobs["upload:metadata"] = viewModelScope.launch {
+            _metadataEditor.update { it.copy(uploading = true, error = null) }
+            try {
+                val picked = withContext(Dispatchers.IO) { readPickedFile(uri) }
+                val uploaded = repository.uploadFile(picked.name, picked.mimeType, picked.bytes)
+                if (generation != accountScopeGeneration || sequence != metadataSequence) return@launch
+                val isImg = uploaded.width > 0 || UploadLimits.isCompressibleImage(picked.name) ||
+                    picked.mimeType.startsWith("image/")
+                val media = AttachedMedia(
+                    name = uploaded.fileName,
+                    previewUrl = uri.toString(),
+                    uploaded = uploaded,
+                    isImage = isImg,
+                )
+                _metadataEditor.update {
+                    if (!it.open || it.topicId != current.topicId) it
+                    else it.copy(attachments = it.attachments + media, uploading = false)
+                }
+            } catch (error: CancellationException) {
+                throw error
+            } catch (error: Exception) {
+                if (sequence == metadataSequence) {
+                    _metadataEditor.update { it.copy(uploading = false, error = UserErrorMessage.format(error, "上传失败，请稍后重试")) }
+                }
+                handlePageFailure(error) {}
+            }
+        }
+    }
+
+    fun removeMetadataEditorAttachment(id: String) {
+        _metadataEditor.update {
+            if (it.saving) it else it.copy(attachments = it.attachments.filterNot { a -> a.id == id })
+        }
     }
 
     fun updateMetadataCategory(id: Int) {
@@ -8252,7 +8393,7 @@ fun openTopicSearch(topicId: Long, title: String) {
         val tagSequence = ++metadataTagSequence
         val sequence = metadataSequence
         val current = _metadataEditor.value
-        if (!current.open || current.rules?.canTagTopics != true || current.original?.privateMessage == true) return
+        if (!current.open || !current.canEditMetadata || current.rules?.canTagTopics != true || current.original?.privateMessage == true) return
         _metadataEditor.update { it.copy(tagQuery = query, loadingTags = true, tagError = null) }
         metadataTagJob = viewModelScope.launch {
             delay(300L)
@@ -8274,26 +8415,60 @@ fun openTopicSearch(topicId: Long, title: String) {
         val current = _metadataEditor.value
         val original = current.original ?: return
         val rules = current.rules ?: return
-        val patch = current.patch ?: return
         if (!current.canSave) return
         if (current.userId != store.currentUserId() || current.generation != store.sessionGeneration) {
             _metadataEditor.update { it.copy(error = "账号状态已变化，请重新打开编辑") }
             return
         }
+        val patch = current.patch
+        val hasMetaChange = patch?.changed == true
+        val hasBodyChange = current.bodyDirty
+        val firstPostId = current.firstPostId
+        val rawToSubmit = if (hasBodyChange) assembleRaw(current.raw, current.attachments) else null
         val sequence = metadataSequence
         val accountGeneration = accountScopeGeneration
         _metadataEditor.update { it.copy(saving = true, error = null) }
         metadataJob = viewModelScope.launch {
+            var metaSaved = !hasMetaChange
+            var activeOriginal = original
             try {
-                val updated = repository.updateTopicMetadata(original, rules, patch, current.userId, current.generation)
+                if (hasMetaChange && patch != null) {
+                    val updated = repository.updateTopicMetadata(original, rules, patch, current.userId, current.generation)
+                    if (sequence != metadataSequence || accountGeneration != accountScopeGeneration) return@launch
+                    applyTopicMetadata(updated, rules, patch.categoryId != null || patch.tags != null, current.userId)
+                    activeOriginal = updated.copy(
+                        firstPostId = updated.firstPostId ?: original.firstPostId,
+                        firstPostCanEdit = updated.firstPostCanEdit || original.firstPostCanEdit,
+                    )
+                    metaSaved = true
+                    _metadataEditor.update {
+                        it.copy(
+                            original = activeOriginal,
+                            title = activeOriginal.title,
+                            categoryId = activeOriginal.categoryId,
+                            tags = activeOriginal.tags,
+                        )
+                    }
+                }
+                if (hasBodyChange && firstPostId != null && rawToSubmit != null) {
+                    val editedPost = repository.updatePost(firstPostId, rawToSubmit)
+                    if (sequence != metadataSequence || accountGeneration != accountScopeGeneration) return@launch
+                    applyEditedPost(current.topicId, editedPost)
+                }
                 if (sequence != metadataSequence || accountGeneration != accountScopeGeneration) return@launch
-                applyTopicMetadata(updated, rules, patch.categoryId != null || patch.tags != null, current.userId)
                 _metadataEditor.value = TopicMetadataEditorUiState()
-                Toast.makeText(getApplication(), "话题信息已保存", Toast.LENGTH_SHORT).show()
+                val toastText = when {
+                    hasMetaChange && hasBodyChange -> "话题与正文已保存"
+                    hasBodyChange -> "正文已保存"
+                    else -> "话题信息已保存"
+                }
+                Toast.makeText(getApplication(), toastText, Toast.LENGTH_SHORT).show()
             } catch (error: CancellationException) { throw error }
             catch (error: Exception) {
                 if (sequence != metadataSequence || accountGeneration != accountScopeGeneration) return@launch
-                if (error is org.linuxdo.android.net.NetworkTimeoutException || (error is org.linuxdo.android.net.HttpStatusException && error.status >= 500)) {
+                if (!metaSaved && hasMetaChange && patch != null &&
+                    (error is org.linuxdo.android.net.NetworkTimeoutException ||
+                        (error is org.linuxdo.android.net.HttpStatusException && error.status >= 500))) {
                     val confirmed = try { repository.fetchTopicMetadata(current.topicId) }
                         catch (cancel: CancellationException) { throw cancel } catch (_: Exception) { null }
                     val expected = patch.applyTo(original)
@@ -8302,22 +8477,48 @@ fun openTopicSearch(topicId: Long, title: String) {
                         (patch.tags == null || confirmed.tags.sorted() == expected.tags.sorted())
                     if (matches && sequence == metadataSequence && accountGeneration == accountScopeGeneration) {
                         applyTopicMetadata(confirmed!!, rules, patch.categoryId != null || patch.tags != null, current.userId)
-                        _metadataEditor.value = TopicMetadataEditorUiState()
-                        Toast.makeText(getApplication(), "已确认话题信息保存成功", Toast.LENGTH_SHORT).show()
-                        return@launch
+                        if (!hasBodyChange) {
+                            _metadataEditor.value = TopicMetadataEditorUiState()
+                            Toast.makeText(getApplication(), "已确认话题信息保存成功", Toast.LENGTH_SHORT).show()
+                            return@launch
+                        }
+                        metaSaved = true
+                        activeOriginal = confirmed.copy(
+                            firstPostId = confirmed.firstPostId ?: original.firstPostId,
+                            firstPostCanEdit = confirmed.firstPostCanEdit || original.firstPostCanEdit,
+                        )
+                        _metadataEditor.update {
+                            it.copy(
+                                original = activeOriginal,
+                                title = activeOriginal.title,
+                                categoryId = activeOriginal.categoryId,
+                                tags = activeOriginal.tags,
+                            )
+                        }
                     }
                 }
                 if (sequence != metadataSequence || accountGeneration != accountScopeGeneration) return@launch
-                if (error is org.linuxdo.android.net.HttpStatusException && error.status == 403) {
+                if (!metaSaved && error is org.linuxdo.android.net.HttpStatusException && error.status == 403) {
                     _details.update { states -> states[current.topicId]?.let { detail ->
                         states + (current.topicId to detail.copy(topic = detail.topic?.copy(details = detail.topic.details.copy(canEdit = false))))
                     } ?: states }
                     updateCachedTopicDetail(current.topicId, refreshTtl = false)
                 }
-                _metadataEditor.update { it.copy(saving = false,
-                    original = if (error is org.linuxdo.android.net.HttpStatusException && error.status == 403) original.copy(canEdit = false) else original,
-                    error = UserErrorMessage.format(error, "保存失败，请核对后重试")) }
-                handlePageFailure(error) { if (current.userId == store.currentUserId()) openTopicMetadataEditor(current.topicId, preserveInput = true) }
+                val fallbackMsg = if (metaSaved && hasBodyChange) "标题分类已保存，但正文保存失败，请重试" else "保存失败，请核对后重试"
+                _metadataEditor.update {
+                    it.copy(
+                        saving = false,
+                        original = if (!metaSaved && error is org.linuxdo.android.net.HttpStatusException && error.status == 403) {
+                            activeOriginal.copy(canEdit = false)
+                        } else activeOriginal,
+                        error = UserErrorMessage.format(error, fallbackMsg),
+                    )
+                }
+                handlePageFailure(error) {
+                    if (current.userId == store.currentUserId()) {
+                        openTopicMetadataEditor(current.topicId, preserveInput = true, explicitFirstPostId = firstPostId)
+                    }
+                }
             } finally {
                 if (sequence == metadataSequence) _metadataEditor.update { it.copy(saving = false) }
             }

@@ -1278,7 +1278,9 @@ private fun MainNavigation(state: UiState, viewModel: MainViewModel, lifecycle: 
                                                     modifier = Modifier.size(20.dp),
                                                 )
                                             }
-                                            if (detailState.topic?.details?.canEdit == true) {
+                                            val canEditTopicOrFirstPost = detailState.topic?.details?.canEdit == true ||
+                                                detailState.posts.firstOrNull { it.postNumber == 1 }?.canEdit == true
+                                            if (canEditTopicOrFirstPost) {
                                                 Box(
                                                     modifier = Modifier
                                                         .size(40.dp)
@@ -1988,9 +1990,12 @@ private fun MainNavigation(state: UiState, viewModel: MainViewModel, lifecycle: 
                         categories = categories,
                         onTogglePinCategory = viewModel::togglePinCategory,
                         onTitle = viewModel::updateMetadataTitle,
+                        onRawChange = viewModel::updateMetadataRaw,
                         onCategory = viewModel::updateMetadataCategory,
                         onTags = viewModel::updateMetadataTags,
                         onTagQuery = viewModel::searchMetadataTags,
+                        onAttach = viewModel::attachToMetadataEditor,
+                        onRemoveAttachment = viewModel::removeMetadataEditorAttachment,
                         onSave = viewModel::submitTopicMetadata,
                         onRetry = { viewModel.openTopicMetadataEditor(metadataEditor.topicId, preserveInput = true) },
                         onClose = viewModel::closeTopicMetadataEditor,
