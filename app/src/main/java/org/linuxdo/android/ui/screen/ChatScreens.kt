@@ -1505,57 +1505,78 @@ private fun ChatMessageBubble(
             bottomStart = 17.dp,
             bottomEnd = 5.dp,
         )
-        Column(
+        Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(start = 52.dp, end = 12.dp, top = topPadding, bottom = bottomPadding),
-            horizontalAlignment = Alignment.End,
-            verticalArrangement = Arrangement.spacedBy(2.dp),
+                .padding(start = 48.dp, end = 10.dp, top = topPadding, bottom = bottomPadding),
+            verticalAlignment = Alignment.Bottom,
         ) {
-            Box(
-                modifier = Modifier
-                    .clip(bubbleShape)
-                    .background(if (IosTheme.colors.isDark) Color(0xFF1E40AF) else Color(0xFF1D4ED8))
-                    .padding(horizontal = 13.dp, vertical = 8.5.dp),
+            Column(
+                modifier = Modifier.weight(1f),
+                horizontalAlignment = Alignment.End,
+                verticalArrangement = Arrangement.spacedBy(2.dp),
             ) {
-                Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                    if (blocks.isNotEmpty()) {
-                        ChatMarkdownContent(
-                            blocks = blocks,
-                            onAccent = true,
-                            onPicture = onPicture,
-                            onOpenTopic = onOpenTopic,
-                            onOpenExternalUrl = onOpenExternalUrl,
-                        )
-                    }
-                    imageUploads.forEach { upload ->
-                        AsyncImage(
-                            model = upload.absoluteThumbnailUrl(Config.BASE_URL),
-                            contentDescription = upload.originalFilename,
-                            modifier = Modifier
-                                .widthIn(max = 200.dp)
-                                .clip(RoundedCornerShape(10.dp))
-                                .clickable { fullscreenImage = upload },
-                            contentScale = ContentScale.FillWidth,
-                        )
-                    }
-                    DisableSelection {
-                        fileUploads.forEach { upload ->
-                            Text(
-                                text = "📎 ${upload.originalFilename}",
-                                style = TextStyle(fontSize = 13.sp, color = Color.White.copy(alpha = 0.88f)),
+                Box(
+                    modifier = Modifier
+                        .clip(bubbleShape)
+                        .background(if (IosTheme.colors.isDark) Color(0xFF1E40AF) else Color(0xFF1D4ED8))
+                        .padding(horizontal = 13.dp, vertical = 8.5.dp),
+                ) {
+                    Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                        if (blocks.isNotEmpty()) {
+                            ChatMarkdownContent(
+                                blocks = blocks,
+                                onAccent = true,
+                                onPicture = onPicture,
+                                onOpenTopic = onOpenTopic,
+                                onOpenExternalUrl = onOpenExternalUrl,
                             )
+                        }
+                        imageUploads.forEach { upload ->
+                            AsyncImage(
+                                model = upload.absoluteThumbnailUrl(Config.BASE_URL),
+                                contentDescription = upload.originalFilename,
+                                modifier = Modifier
+                                    .widthIn(max = 200.dp)
+                                    .clip(RoundedCornerShape(10.dp))
+                                    .clickable { fullscreenImage = upload },
+                                contentScale = ContentScale.FillWidth,
+                            )
+                        }
+                        DisableSelection {
+                            fileUploads.forEach { upload ->
+                                Text(
+                                    text = "📎 ${upload.originalFilename}",
+                                    style = TextStyle(fontSize = 13.sp, color = Color.White.copy(alpha = 0.88f)),
+                                )
+                            }
                         }
                     }
                 }
+                if (!groupedWithNext && timeStr.isNotBlank()) {
+                    DisableSelection {
+                        Text(
+                            text = timeStr,
+                            style = TextStyle(fontSize = 10.5.sp, color = IosTheme.colors.tertiaryLabel),
+                            modifier = Modifier.padding(end = 4.dp),
+                        )
+                    }
+                }
             }
-            if (!groupedWithNext && timeStr.isNotBlank()) {
-                DisableSelection {
-                    Text(
-                        text = timeStr,
-                        style = TextStyle(fontSize = 10.5.sp, color = IosTheme.colors.tertiaryLabel),
-                        modifier = Modifier.padding(end = 4.dp),
-                    )
+            Spacer(Modifier.width(8.dp))
+            DisableSelection {
+                Box(Modifier.width(30.dp), contentAlignment = Alignment.BottomCenter) {
+                    if (!groupedWithNext) {
+                        UserAvatar(
+                            avatarUrl = avatarUrlOf(user?.avatarTemplate, 72),
+                            username = user?.username,
+                            modifier = Modifier
+                                .size(30.dp)
+                                .clickable(enabled = !user?.username.isNullOrBlank()) {
+                                    user?.username?.let(onOpenUser)
+                                },
+                        )
+                    }
                 }
             }
         }
