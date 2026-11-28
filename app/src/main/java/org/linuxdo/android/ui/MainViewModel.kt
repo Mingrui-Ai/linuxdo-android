@@ -5574,7 +5574,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
-    private val accountDraftStore by lazy { org.linuxdo.android.data.AccountDraftStore(getApplication()) }
+    private val accountDraftStore get() = container.accountDraftStore
     private val draftSyncJobs = mutableMapOf<String, Job>()
     // 打开、关闭或修改内容后递增，迟到的读取不能作用于新的编辑状态。
     private val draftSyncRevisions = mutableMapOf<String, Long>()
@@ -5587,7 +5587,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     private val dismissedDraftConflicts = mutableSetOf<String>()
-    private val draftSyncLocks = mutableMapOf<String, kotlinx.coroutines.sync.Mutex>()
+    private val draftSyncLocks get() = container.draftSyncLocks
     private val _draftConflict = MutableStateFlow<DraftConflictUi?>(null)
     val draftConflict = _draftConflict.asStateFlow()
 
@@ -6206,8 +6206,41 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         if (!current.open || current.submitting || current.savingDraft) return
         persistCreatorDraft()
         _topicCreator.value = TopicCreatorUiState()
+        enqueueCreatorDraftBackup(current.draftKey)
         scheduleDraftSync(current.draftKey)
         loadDrafts(refresh = true, silent = true)
+    }
+
+    /** 输入已同步写入加密本机存储；离开应用只登记后台备份，不关闭编辑现场。 */
+    fun saveCreatorDraftOnBackground() {
+        val current = _topicCreator.value
+        if (current.open && !current.loadingDraft && !current.submitting) {
+            persistCreatorDraft()
+            enqueueCreatorDraftBackup(current.draftKey)
+        }
+        // 返回草稿箱后再退出应用，也要补上之前关闭时断网或未完成的新话题备份。
+        val userId = store.currentUserId()
+        if (userId <= 0 || store.sessionChanging || _accounts.value.switching) return
+        try {
+            accountDraftStore.entries(userId)
+                .filter { it.dirty && it.content.action == "createTopic" && it.key != current.draftKey }
+                .forEach { enqueueCreatorDraftBackup(it.key) }
+            if (!current.open) enqueueCreatorDraftBackup(current.draftKey)
+        } catch (_: Exception) {
+            diagnostics.log("草稿后台备份暂不可读取，保留手机内容")
+        }
+    }
+
+    private fun enqueueCreatorDraftBackup(key: String) {
+        val userId = store.currentUserId()
+        if (userId <= 0 || store.sessionChanging || _accounts.value.switching) return
+        try {
+            if (accountDraftStore.get(userId, key)?.dirty == true) {
+                org.linuxdo.android.service.DraftSyncWorker.enqueue(getApplication(), userId, key)
+            }
+        } catch (_: Exception) {
+            diagnostics.log("草稿后台备份暂未安排，保留手机内容")
+        }
     }
 
     fun attachToTopicCreator(uri: Uri) {
@@ -6234,6 +6267,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                     }
                 }
                 persistCreatorDraft()
+                if (!store.isAppInForeground()) enqueueCreatorDraftBackup(current.draftKey)
             } catch (error: CancellationException) {
                 throw error
             } catch (error: Exception) {

@@ -2,12 +2,12 @@ package org.linuxdo.android.ui.screen
 
 import android.net.Uri
 import android.util.TypedValue
+import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.PickVisualMediaRequest
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.text.KeyboardActions
@@ -21,6 +21,7 @@ import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
@@ -32,7 +33,6 @@ import kotlinx.coroutines.delay
 import org.linuxdo.android.data.DiscourseTagSearchResult
 import org.linuxdo.android.ui.CategoriesUiState
 import org.linuxdo.android.ui.CreatorPollSpan
-import org.linuxdo.android.ui.IosTextAction
 import org.linuxdo.android.ui.LocalEditorSuggestionSource
 import org.linuxdo.android.ui.PollBuilderDialog
 import org.linuxdo.android.ui.PollBuilderSpec
@@ -42,10 +42,9 @@ import org.linuxdo.android.ui.design.IosActivityIndicator
 import org.linuxdo.android.ui.design.IosFullDivider
 import org.linuxdo.android.ui.design.IosNavBar
 import org.linuxdo.android.ui.design.IosTheme
-import org.linuxdo.android.ui.design.composerBackKeys
-import org.linuxdo.android.ui.design.rememberComposerDismiss
 import org.linuxdo.android.ui.nextAvailablePollName
 
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 internal fun TopicCreatorSheet(
     state: TopicCreatorUiState,
@@ -65,10 +64,10 @@ internal fun TopicCreatorSheet(
 ) {
     val colors = IosTheme.colors
     val keyboard = LocalSoftwareKeyboardController.current
+    val focusManager = LocalFocusManager.current
+    val imeVisible = WindowInsets.isImeVisible
     val completionSource = LocalEditorSuggestionSource.current
     var editor by remember { mutableStateOf<RichMarkdownEditorView?>(null) }
-    var contentHeight by remember { mutableIntStateOf(0) }
-    val compactHeight = with(LocalDensity.current) { contentHeight.toDp().coerceIn(44.dp, 180.dp) }
     var expanded by rememberSaveable { mutableStateOf(false) }
     var tab by rememberSaveable { mutableStateOf(ComposerExpandedTab.Edit) }
     val preview = tab == ComposerExpandedTab.Preview
@@ -78,20 +77,29 @@ internal fun TopicCreatorSheet(
     var pollOpen by remember { mutableStateOf(false) }
     var pollTarget by remember { mutableStateOf<Pair<CreatorPollSpan, PollBuilderSpec>?>(null) }
     var gallery by remember { mutableStateOf<Pair<List<ImageViewerItem>, Int>?>(null) }
-    var closeConfirm by remember { mutableStateOf(false) }
     var picking by remember { mutableStateOf(false) }
     val busy = state.submitting || state.loadingDraft || state.savingDraft || state.uploading
 
     fun flushEditor() {
         editor?.exportToMarkdown()?.takeIf { it != state.raw }?.let(onRawChange)
     }
-    val dismiss = rememberComposerDismiss(
-        enabled = menu == null && linkLabel == null && !pollOpen && gallery == null && !closeConfirm,
-        canDismiss = !state.submitting && !state.savingDraft,
-        ignoreKeyboardHide = picking || preview || expanded,
-    ) {
-        flushEditor()
-        if (state.hasUnsavedChanges) closeConfirm = true else onClose()
+    val canHandleBack = menu == null && linkLabel == null && !pollOpen && gallery == null && !picking
+    val dismiss: () -> Unit = {
+        if (canHandleBack && !state.submitting && !state.savingDraft) {
+            flushEditor()
+            keyboard?.hide()
+            editor?.clearFocus()
+            focusManager.clearFocus(force = true)
+            onClose()
+        }
+    }
+    // 整页编辑先让系统处理 IME 返回；收起键盘本身不关闭页面或触发草稿同步。
+    // 部分输入法将返回交给 Activity，此时也只隐藏键盘，再次返回才退出编辑。
+    BackHandler(enabled = canHandleBack) {
+        if (imeVisible) keyboard?.hide() else dismiss()
+    }
+    DisposableEffect(keyboard) {
+        onDispose { keyboard?.hide() }
     }
     val imagePicker = rememberLauncherForActivityResult(ActivityResultContracts.PickVisualMedia()) { uri ->
         picking = false
@@ -113,12 +121,13 @@ internal fun TopicCreatorSheet(
         }
     }
 
-    Column(Modifier.fillMaxSize().background(colors.card).composerBackKeys(dismiss)
+    Column(Modifier.fillMaxSize().background(colors.card)
         // 这是覆盖在导航栈上的整页，空白处的触摸也应落在发帖页。
         .pointerInput(Unit) { awaitPointerEventScope { while (true) awaitPointerEvent() } }
         .windowInsetsPadding(WindowInsets.systemBars.union(WindowInsets.displayCutout).only(WindowInsetsSides.Top)).imePadding()) {
         IosNavBar(
-            title = if (state.isReplyDraft) "回复草稿" else "新话题",
+            title = if (expanded && state.title.isNotBlank()) state.title.trim()
+                else if (state.isReplyDraft) "回复草稿" else "新话题",
             onBack = dismiss,
             trailingWidth = 114.dp,
             trailing = {
@@ -174,7 +183,7 @@ internal fun TopicCreatorSheet(
                     else editor?.post { editor?.requestInputFocus() }
                 }
             }
-            ComposerHeaderIconButton(if (expanded) "恢复默认高度" else "展开正文输入区", { expanded = !expanded }) {
+            ComposerHeaderIconButton(if (expanded) "显示话题信息" else "专注正文编辑", { expanded = !expanded }) {
                 FullscreenToggleIcon(isFullScreen = expanded, tint = colors.secondaryLabel)
             }
         }
@@ -182,19 +191,13 @@ internal fun TopicCreatorSheet(
         val hintColor = colors.tertiaryLabel.toArgb()
         val sizePx = with(LocalDensity.current) { 16.sp.toPx() }
         Box(Modifier.fillMaxWidth().weight(1f).padding(horizontal = 12.dp)) {
-            if (!preview && !expanded) Spacer(Modifier.matchParentSize().clickable(
-                interactionSource = remember { MutableInteractionSource() }, indication = null, onClick = dismiss))
             AndroidView(
-                modifier = when {
-                    preview -> Modifier.size(0.dp)
-                    expanded -> Modifier.fillMaxSize()
-                    else -> Modifier.fillMaxWidth().height(compactHeight)
-                },
+                // 发帖是整页编辑，正文使用工具栏上方的全部余量，长文在原生编辑器内滚动。
+                modifier = if (preview) Modifier.size(0.dp) else Modifier.fillMaxSize(),
                 factory = { ctx -> RichMarkdownEditorView(ctx).apply {
                     hint = "写下正文…"
                     val horizontalPadding = (4 * resources.displayMetrics.density).toInt()
                     setPadding(horizontalPadding, paddingTop, horizontalPadding, paddingBottom)
-                    setOnContentHeightChangeListener { contentHeight = it }
                     setInitialMarkdown(state.raw, state.attachments)
                     setOnMarkdownChangeListener(onRawChange)
                     setOnRemoveAttachmentListener(onRemoveAttachment)
@@ -206,7 +209,6 @@ internal fun TopicCreatorSheet(
                     view.isEnabled = !state.loadingDraft && !state.submitting && !preview
                     view.updateThemeColors(textColor, hintColor)
                     view.setTextSize(TypedValue.COMPLEX_UNIT_PX, sizePx)
-                    view.setOnDismissInputListener(dismiss)
                     view.setCompletionSource(completionSource, categoryId = state.categoryId, topicId = state.replyTopicId)
                 },
             )
@@ -250,13 +252,4 @@ internal fun TopicCreatorSheet(
             })
     }
     gallery?.let { (images, index) -> ImageViewer(images = images, initialIndex = index) { gallery = null } }
-    if (closeConfirm) {
-        androidx.compose.material3.AlertDialog(
-            onDismissRequest = { closeConfirm = false }, containerColor = colors.card,
-            title = { Text("草稿尚未同步", color = colors.label, style = IosTheme.type.headline) },
-            text = { Text("可以先同步到网页，也可以保留在手机，稍后继续编辑。", color = colors.secondaryLabel, style = IosTheme.type.body) },
-            confirmButton = { IosTextAction("保存草稿并退出") { closeConfirm = false; flushEditor(); onSaveDraft(true) } },
-            dismissButton = { IosTextAction("保留手机草稿并退出") { closeConfirm = false; onClose() } },
-        )
-    }
 }

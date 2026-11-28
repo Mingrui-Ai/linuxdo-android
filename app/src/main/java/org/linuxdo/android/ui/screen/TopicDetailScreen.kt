@@ -199,6 +199,7 @@ import android.webkit.MimeTypeMap
 import android.webkit.WebView
 import android.widget.Toast
 import org.linuxdo.android.ui.design.rememberComposerDismiss
+import org.linuxdo.android.ui.design.ComposerImeDismissState
 import org.linuxdo.android.ui.design.composerBackKeys
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
@@ -567,6 +568,15 @@ fun TopicDetailScreen(
         val url = "${Config.BASE_URL}/t/topic/$topicId/${p.postNumber}"
         clipboardManager.setText(AnnotatedString(url))
         noticeToast = "链接已复制到剪贴板"
+    }
+    var dockedComposerHeightPx by remember(topicId) { mutableIntStateOf(0) }
+    var dockedBoostHeightPx by remember(topicId) { mutableIntStateOf(0) }
+    val composerBottomSpace = with(LocalDensity.current) {
+        val heightPx = maxOf(
+            if (composer.open) dockedComposerHeightPx else 0,
+            if (boostTarget != null) dockedBoostHeightPx else 0,
+        )
+        if (heightPx > 0) heightPx.toDp() + 12.dp else 0.dp
     }
     val overlayActive = composer.open || boostTarget != null || pictureGallery != null ||
         manageTarget != null || deleteTarget != null || state.flagDialogPost != null || browserUrl != null
@@ -1374,7 +1384,7 @@ fun TopicDetailScreen(
                         LazyColumn(
                             state = list,
                             modifier = Modifier.fillMaxSize(),
-                            contentPadding = PaddingValues(bottom = 76.dp),
+                            contentPadding = PaddingValues(bottom = maxOf(76.dp, composerBottomSpace)),
                         ) {
                             item("title") {
                                 Column(Modifier.fillMaxWidth().padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -1664,23 +1674,27 @@ fun TopicDetailScreen(
                         onClose = onCloseComposer,
                         onAttach = onAttach,
                         onRemoveAttachment = onRemoveComposerAttachment,
+                        onDockedHeightChange = { dockedComposerHeightPx = it },
                     )
                 }
             }
             boostTarget?.let { target ->
-                BoostSheet(
-                    target = target,
-                    draft = boostDrafts[target.postId].orEmpty(),
-                    onDraftChange = { boostDrafts = HashMap(boostDrafts).apply { put(target.postId, it) } },
-                    busy = writeBusy,
-                    onSend = {
-                        val toSend = boostDrafts[target.postId].orEmpty()
-                        boostTarget = null
-                        boostDrafts = HashMap(boostDrafts).apply { remove(target.postId) }
-                        onBoost(target.postId, toSend)
-                    },
-                    onDismiss = { boostTarget = null },
-                )
+                key(target.postId) {
+                    BoostSheet(
+                        target = target,
+                        draft = boostDrafts[target.postId].orEmpty(),
+                        onDraftChange = { boostDrafts = HashMap(boostDrafts).apply { put(target.postId, it) } },
+                        busy = writeBusy,
+                        onSend = {
+                            val toSend = boostDrafts[target.postId].orEmpty()
+                            boostTarget = null
+                            boostDrafts = HashMap(boostDrafts).apply { remove(target.postId) }
+                            onBoost(target.postId, toSend)
+                        },
+                        onDismiss = { boostTarget = null },
+                        onDockedHeightChange = { dockedBoostHeightPx = it },
+                    )
+                }
             }
         }
     }
@@ -3652,6 +3666,7 @@ private fun PostActions(
     val clipboardManager = LocalClipboardManager.current
     val context = LocalContext.current
     val sortedReactions = remember(post.reactions) { post.sortedReactions }
+    val showInlineEdit = signedIn && post.yours && post.postNumber > 1 && post.canEdit
     if (sortedReactions.isNotEmpty()) {
         val total = sortedReactions.sumOf { it.count.toLong() }
         Row(
@@ -3736,6 +3751,16 @@ private fun PostActions(
                 onClick = onOpenBoost,
             )
         }
+        if (showInlineEdit) {
+            TiebaPostActionButton(
+                label = "编辑",
+                action = PostAction.Edit,
+                selected = false,
+                enabled = !busy,
+                compact = compact,
+                onClick = onEdit,
+            )
+        }
         var showMoreMenu by remember { mutableStateOf(false) }
         Box {
             TiebaPostActionButton(
@@ -3802,7 +3827,7 @@ private fun PostActions(
                             },
                         )
                     }
-                    if (post.canEdit) {
+                    if (post.canEdit && !showInlineEdit) {
                         DropdownMenuItem(
                             text = {
                                 Row(verticalAlignment = Alignment.CenterVertically) {
@@ -4401,6 +4426,7 @@ private fun ReactionBubblePopup(
  * 点击 boost 简评弹出的页内底部输入抽屉。
  * 紧贴软键盘上方，避免原悬浮气泡被弹出键盘遮挡或越界。
  */
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 private fun BoostSheet(
     target: BoostTarget,
@@ -4409,12 +4435,40 @@ private fun BoostSheet(
     busy: Boolean,
     onSend: () -> Unit,
     onDismiss: () -> Unit,
+    onDockedHeightChange: (Int) -> Unit,
 ) {
     val focus = remember { FocusRequester() }
     val keyboardController = LocalSoftwareKeyboardController.current
-    val dismiss = rememberComposerDismiss(canDismiss = !busy, onDismiss = onDismiss)
     var textFieldValue by remember {
         mutableStateOf(TextFieldValue(draft, selection = TextRange(draft.length)))
+    }
+    var docked by rememberSaveable(target.postId) { mutableStateOf(false) }
+    var sheetHeightPx by remember { mutableIntStateOf(0) }
+    val dismiss = rememberComposerDismiss(canDismiss = !busy, ignoreKeyboardHide = true) {
+        textFieldValue.text.takeIf { it != draft }?.let(onDraftChange)
+        onDismiss()
+    }
+    val imeVisible = WindowInsets.isImeVisible
+    val hostView = LocalView.current
+    val lifecycleState by LocalLifecycleOwner.current.lifecycle.currentStateFlow.collectAsState()
+    val dockImeState = remember(target.postId) { ComposerImeDismissState() }
+
+    LaunchedEffect(docked, sheetHeightPx) {
+        onDockedHeightChange(if (docked) sheetHeightPx else 0)
+    }
+    DisposableEffect(target.postId) {
+        onDispose {
+            onDockedHeightChange(0)
+            keyboardController?.hide()
+        }
+    }
+    LaunchedEffect(imeVisible, busy, lifecycleState) {
+        val canDock = !busy && lifecycleState.isAtLeast(Lifecycle.State.RESUMED) && hostView.hasWindowFocus()
+        if (imeVisible) docked = false
+        if (dockImeState.update(imeVisible, canDock)) {
+            textFieldValue.text.takeIf { it != draft }?.let(onDraftChange)
+            docked = true
+        }
     }
 
     LaunchedEffect(draft) {
@@ -4436,29 +4490,24 @@ private fun BoostSheet(
         modifier = Modifier.fillMaxSize().composerBackKeys(dismiss),
         contentAlignment = Alignment.BottomCenter,
     ) {
-        Box(
-            Modifier
-                .fillMaxSize()
-                .background(Color.Black.copy(alpha = 0.45f))
-                .clickable(
-                    interactionSource = remember { MutableInteractionSource() },
-                    indication = null,
-                    onClick = dismiss,
-                ),
-        )
-
-        val density = LocalDensity.current
-        val imeInsets = WindowInsets.ime
-        val navInsets = WindowInsets.navigationBars
+        if (!docked) {
+            Box(
+                Modifier
+                    .fillMaxSize()
+                    .background(Color.Black.copy(alpha = 0.45f))
+                    .clickable(
+                        interactionSource = remember { MutableInteractionSource() },
+                        indication = null,
+                        onClick = dismiss,
+                    ),
+            )
+        }
 
         Column(
             modifier = Modifier
                 .fillMaxWidth()
-                .graphicsLayer {
-                    val imeBottom = imeInsets.getBottom(density)
-                    val navBottom = navInsets.getBottom(density)
-                    translationY = -(imeBottom - navBottom).coerceAtLeast(0).toFloat()
-                }
+                .imePadding()
+                .onSizeChanged { sheetHeightPx = it.height }
                 .clip(RoundedCornerShape(topStart = 14.dp, topEnd = 14.dp))
                 .background(IosTheme.colors.card)
                 .clickable(
@@ -4506,7 +4555,7 @@ private fun BoostSheet(
                 Box(
                     modifier = Modifier
                         .weight(1f)
-                        .heightIn(min = 32.dp, max = 96.dp)
+                        .heightIn(min = 32.dp, max = if (docked) 72.dp else 96.dp)
                         .verticalScroll(rememberScrollState())
                         .padding(vertical = 5.dp),
                     contentAlignment = Alignment.CenterStart,
@@ -4561,9 +4610,11 @@ private fun BoostSheet(
     }
 
     LaunchedEffect(target.postId) {
-        runCatching {
-            focus.requestFocus()
-            keyboardController?.show()
+        if (!docked) {
+            runCatching {
+                focus.requestFocus()
+                keyboardController?.show()
+            }
         }
     }
 }

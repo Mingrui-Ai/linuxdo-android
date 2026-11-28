@@ -198,6 +198,9 @@ class AppContainer(context: Context) {
         }
     }
     val draftStore = DraftStore(context)
+    val accountDraftStore by lazy { org.linuxdo.android.data.AccountDraftStore(appContext) }
+    // 前台编辑/发送与持久后台备份共用锁，避免发布后被迟到的备份复活。
+    val draftSyncLocks = java.util.concurrent.ConcurrentHashMap<String, Mutex>()
     val historyStore = HistoryStore(context)
     private val initialUserAgent: String = resolveUserAgent(context, sessionStore)
     val userAgent: String get() = try {

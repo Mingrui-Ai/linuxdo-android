@@ -126,6 +126,7 @@ class MainActivity : ComponentActivity() {
         val sessionStore = (application as App).container.sessionStore
         (application as App).container.onAppBackground()
         sessionStore.setAppInForeground(false)
+        if (!isChangingConfigurations) viewModel.saveCreatorDraftOnBackground()
         // 退回桌面（最小化）时立即触发一次即时后台未读检查，不留时间空隙
         org.linuxdo.android.service.NotificationWorker.triggerImmediate(appContext)
         // 亮屏最小化：预约兜底闹钟，补上「亮屏时 Doze 闹钟被取消、只剩协程」的缺口。
