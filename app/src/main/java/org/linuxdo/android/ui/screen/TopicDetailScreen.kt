@@ -7999,7 +7999,7 @@ internal object AttachmentDownloadManager {
                 updateIfCurrent {
                     it.copy(
                         stage = AttachmentDownloadStage.FAILED,
-                        statusText = "保存失败：${err.message ?: "网络异常"}",
+                        statusText = "保存失败：${org.linuxdo.android.net.UserErrorMessage.format(err, "网络异常")}",
                         speedBytesPerSec = 0L,
                         pendingCount = remainingPending,
                     )
@@ -8518,7 +8518,7 @@ private suspend fun saveMediaToPublicStorageInternal(
             throw cancelled
         } catch (err: Throwable) {
             if (!asImage) container.diagnostics.log("附件保存异常: ${err.javaClass.simpleName}: ${err.message}")
-            SavedMediaOutcome(false, "保存失败：${err.message ?: "网络异常"}")
+            SavedMediaOutcome(false, "保存失败：${org.linuxdo.android.net.UserErrorMessage.format(err, "网络异常")}")
         } finally {
             activeCallRef.getAndSet(null)?.cancel()
         }

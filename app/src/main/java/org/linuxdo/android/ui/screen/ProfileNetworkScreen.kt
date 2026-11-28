@@ -25,7 +25,7 @@ internal fun ProfileNetworkScreen(
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {
-            state = FollowUiState(username, error = e.message ?: "暂时无法加载")
+            state = FollowUiState(username, error = org.linuxdo.android.net.UserErrorMessage.format(e, "暂时无法加载"))
         }
     }
     FollowListScreen(state, onBack, onRetry = { retry++ }, onOpenUser = onOpenUser,

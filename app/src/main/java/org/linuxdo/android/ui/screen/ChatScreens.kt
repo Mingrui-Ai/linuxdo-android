@@ -1005,7 +1005,10 @@ fun ChatRoomScreen(
             // 错误提示
             if (state.error != null) {
                 Column(Modifier.padding(horizontal = 16.dp, vertical = 8.dp)) {
-                    Text(state.error, color = IosTheme.colors.secondaryLabel)
+                    Text(
+                        org.linuxdo.android.net.UserErrorMessage.sanitize(state.error, "加载失败，请稍后重试"),
+                        color = IosTheme.colors.secondaryLabel,
+                    )
                     org.linuxdo.android.ui.design.NetworkSettingsLink()
                 }
             }

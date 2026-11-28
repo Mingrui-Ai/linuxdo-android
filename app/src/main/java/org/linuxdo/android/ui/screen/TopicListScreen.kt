@@ -3424,6 +3424,9 @@ internal fun ErrorNotice(message: String, retryAtElapsedMs: Long, onRetry: () ->
             seconds = remainingSeconds()
         }
     }
+    val displayMessage = remember(message) {
+        org.linuxdo.android.net.UserErrorMessage.sanitize(message, fallback = "加载失败，请稍后重试")
+    }
     Column(
         Modifier
             .fillMaxWidth()
@@ -3433,7 +3436,7 @@ internal fun ErrorNotice(message: String, retryAtElapsedMs: Long, onRetry: () ->
     ) {
         Text(
             text = when {
-                retryAtElapsedMs == 0L -> message
+                retryAtElapsedMs == 0L -> displayMessage
                 seconds > 0L -> "站点限制了请求，${seconds} 秒后可重试"
                 else -> "等待时间已到，可以重试"
             },

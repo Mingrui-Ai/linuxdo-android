@@ -679,8 +679,7 @@ class BrowserSession(
                         retryingLoginWithHcaptchaToken = false
                         pendingHcaptchaToken = null
                         val resObj = try { JSONObject(body) } catch (_: Exception) { null }
-                        val error = resObj?.optString("error")?.takeIf { it.isNotBlank() }
-                            ?: resObj?.optString("errors")?.takeIf { it.isNotBlank() && it != "[]" && it != "null" }
+                        val error = UserErrorMessage.serverError(body)
                         val user = resObj?.optJSONObject("user")?.optString("username")
 
                         val has2faToken = !cachedSecondFactor.isNullOrBlank()
@@ -699,7 +698,7 @@ class BrowserSession(
                             cb(true, null, false)
                         } else {
                             awaitingSecondFactorLogin = false
-                            cb(false, "登录失败: HTTP $status", false)
+                            cb(false, UserErrorMessage.fromHttpBody(status, body, fallback = "登录失败，请稍后重试"), false)
                         }
                     }
                     "cf_needed", "csrf" -> {
@@ -1525,13 +1524,13 @@ class BrowserSession(
                                         diagnostics.log("CSRF 遇到 Cloudflare 盾 (403)，正在安全弹窗内启动 /challenge 验证...")
                                         launchCfChallenge()
                                     } else {
-                                        submissionCallback(false, "安全防护拦截 (HTTP 403)，请重试或开启网络加速", false)
+                                        submissionCallback(false, "安全防护拦截，请重试或开启网络加速", false)
                                     }
                                 } else if (resp.code == 429) {
                                     val remainingSec = (TopicRepository.rateLimitRemainingMs() / 1000L).coerceAtLeast(1L)
                                     submissionCallback(false, "操作过于频繁，请等待 ${remainingSec} 秒后再试", false)
                                 } else {
-                                    submissionCallback(false, "CSRF 获取失败: HTTP ${resp.code}", false)
+                                    submissionCallback(false, "登录凭据获取失败，请稍后重试", false)
                                 }
                             }
                             return@launch
@@ -1609,7 +1608,7 @@ class BrowserSession(
                                     val remainingSec = (TopicRepository.rateLimitRemainingMs() / 1000L).coerceAtLeast(1L)
                                     submissionCallback(false, "操作过于频繁，请等待 ${remainingSec} 秒后再试", false)
                                 } else {
-                                    submissionCallback(false, "人机验证令牌兑换失败 (HTTP $lastCode)，请重试", false)
+                                    submissionCallback(false, "人机验证未通过，请重试", false)
                                 }
                             }
                             return@launch
@@ -1652,8 +1651,7 @@ class BrowserSession(
                             val msg = if (success) {
                                 "登录邮件已发送至 $email，请查收邮件并点击其中的链接登录"
                             } else {
-                                val err = resObj?.optString("errors") ?: resObj?.optString("error")
-                                err?.takeIf { it.isNotBlank() } ?: "发送失败: HTTP ${resp.code}"
+                                UserErrorMessage.fromHttpBody(resp.code, bodyStr, fallback = "发送登录邮件失败，请稍后重试")
                             }
                             withContext(Dispatchers.Main) {
                                 if (!success && resp.code == 403) {
@@ -1709,8 +1707,8 @@ class BrowserSession(
                             diagnostics.log("邮件令牌兑换响应 HTTP ${resp.code}: ${bodyStr.take(200)}")
 
                             val resObj = try { JSONObject(bodyStr) } catch (_: Exception) { null }
-                            val error = resObj?.optString("error")?.takeIf { it.isNotBlank() }
-                                ?: resObj?.optString("errors")?.takeIf { it.isNotBlank() }
+                            // 仅业务错误提前返回；HTTP 错误继续走下方安全验证、限流及失效链接分支。
+                            val error = UserErrorMessage.serverError(bodyStr)
                             val has2faToken = !secondFactorToken.isNullOrBlank()
                             val secondFactorRequired = isSecondFactorResponse(resObj, has2faToken)
 
@@ -1738,13 +1736,13 @@ class BrowserSession(
                                             diagnostics.log("邮件令牌兑换遇到 Cloudflare 盾 (403)，正在安全弹窗内启动 /challenge 验证...")
                                             launchCfChallenge()
                                         } else {
-                                            submissionCallback(false, "安全防护拦截 (HTTP 403)，请重试或开启网络加速", false)
+                                            submissionCallback(false, "安全防护拦截，请重试或开启网络加速", false)
                                         }
                                     } else if (resp.code == 429) {
                                         val remainingSec = (TopicRepository.rateLimitRemainingMs() / 1000L).coerceAtLeast(1L)
                                         submissionCallback(false, "操作过于频繁，请等待 ${remainingSec} 秒后再试", false)
                                     } else {
-                                        submissionCallback(false, "登录链接无效或已过期 (HTTP ${resp.code})", false)
+                                        submissionCallback(false, "登录链接无效或已过期，请重新获取", false)
                                     }
                                 }
                             }
@@ -1818,13 +1816,13 @@ class BrowserSession(
                                             diagnostics.log("Native 登录遇到 Cloudflare 盾 (403)，正在安全弹窗内启动 /challenge 验证...")
                                             launchCfChallenge()
                                         } else {
-                                            submissionCallback(false, "登录安全防护校验拦截 (HTTP 403)，可开启网络加速完成登录", false)
+                                            submissionCallback(false, "安全防护拦截，可尝试开启网络加速后重新登录", false)
                                         }
                                     } else if (resp.code == 429) {
                                         val remainingSec = (TopicRepository.rateLimitRemainingMs() / 1000L).coerceAtLeast(1L)
                                         submissionCallback(false, "操作过于频繁，请等待 ${remainingSec} 秒后再试", false)
                                     } else {
-                                        submissionCallback(false, "登录失败: HTTP ${resp.code}", false)
+                                        submissionCallback(false, UserErrorMessage.fromHttpBody(resp.code, bodyStr, fallback = "登录失败，请稍后重试"), false)
                                     }
                                 }
                             }
@@ -1833,7 +1831,7 @@ class BrowserSession(
                 } catch (e: Exception) {
                     diagnostics.log("Native 登录异常: ${e.message}")
                     withContext(Dispatchers.Main) {
-                        submissionCallback(false, "登录网络异常: ${e.message ?: "连接失败"}", false)
+                        submissionCallback(false, UserErrorMessage.format(e, "登录网络连接失败，请稍后重试"), false)
                     }
                 } finally {
                     TopicRepository.markPostCompleted()

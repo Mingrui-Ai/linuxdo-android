@@ -602,7 +602,7 @@ internal fun MarkdownComposerSheet(
                     }
                     error?.let { err ->
                         Text(
-                            text = err,
+                            text = org.linuxdo.android.net.UserErrorMessage.sanitize(err, "提交失败，请稍后重试"),
                             style = IosTheme.type.footnote,
                             color = colors.destructive,
                             maxLines = 2,

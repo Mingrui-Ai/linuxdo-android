@@ -777,10 +777,13 @@ fun LoginScreen(
 
     // 错误提示对话框
     if (state.error != null) {
+        val displayError = remember(state.error) {
+            org.linuxdo.android.net.UserErrorMessage.sanitize(state.error, fallback = "登录失败，请稍后重试")
+        }
         AlertDialog(
             onDismissRequest = onDismissError,
             title = { Text(if (state.isRiskOrCaptchaBlocked) "安全验证提示" else "登录失败") },
-            text = { Text(state.error) },
+            text = { Text(displayError) },
             confirmButton = {
                 if (state.isRiskOrCaptchaBlocked) {
                     TextButton(onClick = {

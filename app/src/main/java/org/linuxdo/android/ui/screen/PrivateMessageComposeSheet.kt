@@ -114,7 +114,7 @@ internal fun PrivateMessageComposeSheet(
                     val media = onUploadAttachment(uri)
                     pendingAttachments = pendingAttachments + media
                 } catch (e: Exception) {
-                    error = e.message ?: "图片上传失败"
+                    error = org.linuxdo.android.net.UserErrorMessage.format(e, "图片上传失败")
                 } finally {
                     isUploading = false
                 }
@@ -131,7 +131,7 @@ internal fun PrivateMessageComposeSheet(
                     val media = onUploadAttachment(uri)
                     pendingAttachments = pendingAttachments + media
                 } catch (e: Exception) {
-                    error = e.message ?: "文件上传失败"
+                    error = org.linuxdo.android.net.UserErrorMessage.format(e, "文件上传失败")
                 } finally {
                     isUploading = false
                 }
@@ -199,7 +199,7 @@ internal fun PrivateMessageComposeSheet(
                                     onCreated(topicId, title.trim())
                                     onDismiss()
                                 } catch (exception: Exception) {
-                                    error = exception.message ?: "私信发送失败"
+                                    error = org.linuxdo.android.net.UserErrorMessage.format(exception, "私信发送失败")
                                 } finally {
                                     sending = false
                                 }
