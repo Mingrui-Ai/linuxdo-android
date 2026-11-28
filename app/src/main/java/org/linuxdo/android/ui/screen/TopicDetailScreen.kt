@@ -3657,6 +3657,7 @@ private fun PostActions(
     val clipboardManager = LocalClipboardManager.current
     val context = LocalContext.current
     val sortedReactions = remember(post.reactions) { post.sortedReactions }
+    val showInlineEdit = signedIn && post.yours && post.postNumber > 1 && post.canEdit
     if (sortedReactions.isNotEmpty()) {
         val total = sortedReactions.sumOf { it.count.toLong() }
         Row(
@@ -3741,6 +3742,16 @@ private fun PostActions(
                 onClick = onOpenBoost,
             )
         }
+        if (showInlineEdit) {
+            TiebaPostActionButton(
+                label = "编辑",
+                action = PostAction.Edit,
+                selected = false,
+                enabled = !busy,
+                compact = compact,
+                onClick = onEdit,
+            )
+        }
         var showMoreMenu by remember { mutableStateOf(false) }
         Box {
             TiebaPostActionButton(
@@ -3807,7 +3818,7 @@ private fun PostActions(
                             },
                         )
                     }
-                    if (post.canEdit) {
+                    if (post.canEdit && !showInlineEdit) {
                         DropdownMenuItem(
                             text = {
                                 Row(verticalAlignment = Alignment.CenterVertically) {
