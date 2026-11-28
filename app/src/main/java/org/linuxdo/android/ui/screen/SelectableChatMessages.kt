@@ -103,8 +103,8 @@ internal fun chatContentPlacement(childHeights: List<Int>, messageCount: Int, vi
         }
     }
     val height = maxOf(contentHeight, viewportHeight)
-    val leadingSpace = height - contentHeight
-    return ChatContentPlacement(height, positions.map { it + leadingSpace }, contentHeight <= viewportHeight)
+    // Fill the viewport without shifting short conversations away from the header.
+    return ChatContentPlacement(height, positions, contentHeight <= viewportHeight)
 }
 
 internal fun chatShortDragOffset(current: Float, delta: Float, limit: Float): Float =
