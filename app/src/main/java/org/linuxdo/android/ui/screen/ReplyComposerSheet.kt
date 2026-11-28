@@ -43,6 +43,7 @@ import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
@@ -122,6 +123,11 @@ internal fun ReplyComposerSheet(
     onRemoveAttachment: (String) -> Unit = {},
 ) {
     val target = composer.target ?: return
+    val keyboardController = LocalSoftwareKeyboardController.current
+    // 只有整个回复编辑器真正关闭（成功提交或主动退出）才收起键盘，失败重组不会执行。
+    DisposableEffect(Unit) {
+        onDispose { keyboardController?.hide() }
+    }
     val heading = when (target) {
         is ComposerTarget.NewReply -> "发表评论"
         is ComposerTarget.ReplyTo -> "回复 @${target.username}"
@@ -205,7 +211,7 @@ internal fun MarkdownComposerSheet(
     val dismiss = rememberComposerDismiss(
         enabled = !showPollDialog && !showLinkDialog && previewGallery == null,
         canDismiss = !submitting,
-        // 提交时禁用原生编辑器可能收起键盘，隐藏事件也可能晚于失败提示或下一次输入。
+        // 系统隐藏事件可能晚于失败提示或下一次输入，不能据此丢掉编辑现场。
         // 从点击发表起保留本次编辑现场，成功由调用方关闭；返回、取消和遮罩仍可主动关闭。
         ignoreKeyboardHide = submissionAttempted || busy || error != null ||
             pickingAttachment || isFullScreen || showLinkDialog || showPollDialog,
@@ -245,6 +251,14 @@ internal fun MarkdownComposerSheet(
     LaunchedEffect(editorView, loadingDraft) {
         if (!loadingDraft && editorView != null && !isPreview) {
             editorView?.requestInputFocus()
+        }
+    }
+
+    // 部分输入法可能在请求期间自行失焦；失败后恢复编辑，预览和子弹窗不抢焦点。
+    LaunchedEffect(error, submitting, uploading, isPreview, showLinkDialog, showPollDialog, previewGallery) {
+        if (submissionAttempted && error != null && !busy && !isPreview &&
+            !showLinkDialog && !showPollDialog && previewGallery == null && !pickingAttachment) {
+            editorView?.takeIf { it.isAttachedToWindow && it.hasWindowFocus() }?.requestInputFocus()
         }
     }
 
@@ -480,7 +494,8 @@ internal fun MarkdownComposerSheet(
                         },
                         update = { view ->
                             view.hint = placeholder
-                            view.isEnabled = !busy && !isPreview
+                            view.isEnabled = !isPreview
+                            view.setInputFrozen(busy)
                             view.setOnMarkdownChangeListener(onDraftChange)
                             view.setOnRemoveAttachmentListener(onRemoveAttachment)
                             view.setOnDismissInputListener(dismiss)

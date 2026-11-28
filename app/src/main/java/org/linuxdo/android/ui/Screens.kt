@@ -174,6 +174,7 @@ import android.text.SpannableStringBuilder
 import android.text.Spanned
 import android.text.TextWatcher
 import android.text.Editable
+import android.text.InputFilter
 import android.graphics.Canvas
 import android.graphics.Paint
 import android.graphics.RectF
@@ -6595,6 +6596,18 @@ internal class RichMarkdownEditorView(context: Context) : EditText(context) {
     private var onEditPoll: ((CreatorPollSpan, PollBuilderSpec) -> Unit)? = null
 
     private var isInternalUpdating = false
+    private var isInputFrozen = false
+
+    /** 发送中只冻结内容，保留 enabled、焦点和输入连接，避免系统主动收起输入法。 */
+    fun setInputFrozen(frozen: Boolean) {
+        if (isInputFrozen == frozen) return
+        isInputFrozen = frozen
+        if (frozen) {
+            removeCallbacks(completionRunnable)
+            dismissCompletion()
+        }
+    }
+
     private val density = resources.displayMetrics.density
     private var completionSource: (suspend (EditorCompletionRequest) -> List<EditorSuggestion>)? = null
     private var completionTopicId: Long? = null
@@ -6620,11 +6633,16 @@ internal class RichMarkdownEditorView(context: Context) : EditText(context) {
         inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_FLAG_MULTI_LINE or InputType.TYPE_TEXT_FLAG_CAP_SENTENCES
         setHorizontallyScrolling(false)
 
+        filters = filters + InputFilter { _, _, _, dest, start, end ->
+            // 返回被替换的原内容以拒绝插入、删除和粘贴；保留其中的附件/投票 Span。
+            if (isInputFrozen && !isInternalUpdating) dest.subSequence(start, end) else null
+        }
+
         addTextChangedListener(object : TextWatcher {
             private var beforeSpans: Array<CreatorMediaSpan> = emptyArray()
 
             override fun beforeTextChanged(s: CharSequence?, start: Int, count: Int, after: Int) {
-                if (isInternalUpdating) return
+                if (isInternalUpdating || isInputFrozen) return
                 val sp = s as? Spanned ?: return
                 beforeSpans = sp.getSpans(start, start + count, CreatorMediaSpan::class.java)
             }
@@ -6634,7 +6652,7 @@ internal class RichMarkdownEditorView(context: Context) : EditText(context) {
             override fun afterTextChanged(s: Editable?) {
                 removeCallbacks(contentHeightRunnable)
                 post(contentHeightRunnable)
-                if (isInternalUpdating) return
+                if (isInternalUpdating || isInputFrozen) return
                 if (s != null) {
                     for (pollSpan in s.getSpans(0, s.length, CreatorPollSpan::class.java)) {
                         if (s.getSpanStart(pollSpan) >= s.getSpanEnd(pollSpan)) {
@@ -6712,7 +6730,7 @@ internal class RichMarkdownEditorView(context: Context) : EditText(context) {
 
     private fun currentCompletion(): EditorCompletionToken? {
         val editable = text ?: return null
-        if (!hasFocus() || !isEnabled || isInternalUpdating ||
+        if (!hasFocus() || !isEnabled || isInputFrozen || isInternalUpdating ||
             android.view.inputmethod.BaseInputConnection.getComposingSpanStart(editable) >= 0) return null
         return editorCompletionToken(editable.toString(), selectionStart, selectionEnd)
     }
@@ -6828,6 +6846,7 @@ internal class RichMarkdownEditorView(context: Context) : EditText(context) {
     }
 
     override fun onTouchEvent(event: MotionEvent): Boolean {
+        if (isInputFrozen) return true
         if (event.action == MotionEvent.ACTION_UP) {
             val ed = text
             if (ed != null) {

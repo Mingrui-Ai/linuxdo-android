@@ -5513,7 +5513,12 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 _composer.update { it.copy(submitting = false) }
                 throw error
             } catch (error: Exception) {
-                _composer.update { it.copy(submitting = false, error = error.message ?: "提交失败，请稍后重试") }
+                // 只向编辑器显示服务端给出的原因；HTTP 状态码仍保留在异常和诊断日志中。
+                val message = when (error) {
+                    is HttpStatusException -> error.detail
+                    else -> error.message
+                }?.takeIf { it.isNotBlank() } ?: "提交失败，请稍后重试"
+                _composer.update { it.copy(submitting = false, error = message) }
                 handlePageFailure(error) {}
             }
         }
