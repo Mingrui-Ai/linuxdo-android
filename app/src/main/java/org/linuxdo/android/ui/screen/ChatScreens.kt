@@ -54,6 +54,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberUpdatedState
@@ -838,6 +839,7 @@ fun ChatRoomScreen(
     val channelId = channel.id
     val messages = state.messagesByChannel[channelId].orEmpty()
     val listState = rememberLazyListState()
+    var scrollToBottomRequest by remember(channelId, currentUsername) { mutableIntStateOf(0) }
     var draft by rememberSaveable(channelId) { mutableStateOf("") }
     var showComposerSheet by remember(channelId) { mutableStateOf(false) }
     var composerInitialFullscreen by remember(channelId) { mutableStateOf(false) }
@@ -883,17 +885,20 @@ fun ChatRoomScreen(
     var initialScrollDone by remember(channelId) { mutableStateOf(false) }
     var prevFirstMessageId by remember(channelId) { mutableStateOf<Long?>(null) }
     var prevLastMessageId by remember(channelId) { mutableStateOf<Long?>(null) }
+    var appliedBottomRequest by remember(channelId, currentUsername) { mutableIntStateOf(0) }
     val canLoadMorePast = state.canLoadMorePastByChannel[channelId] ?: true
     val isLoadingPast = state.loadingPastChannelId == channelId
 
-    LaunchedEffect(messages) {
+    LaunchedEffect(messages, scrollToBottomRequest) {
         if (channel.isDirectMessage) return@LaunchedEffect
         if (messages.isEmpty()) return@LaunchedEffect
         val currentFirstId = messages.first().id
         val currentLastId = messages.last().id
-        if (!initialScrollDone) {
+        if (!initialScrollDone || scrollToBottomRequest != appliedBottomRequest) {
             initialScrollDone = true
-            listState.scrollToItem(messages.lastIndex)
+            val headerCount = if (isLoadingPast || (!canLoadMorePast && messages.size >= 50)) 1 else 0
+            listState.scrollToItem(messages.lastIndex + headerCount)
+            appliedBottomRequest = scrollToBottomRequest
         } else if (prevFirstMessageId != null && currentFirstId != prevFirstMessageId) {
             val addedCount = messages.indexOfFirst { it.id == prevFirstMessageId }.takeIf { it > 0 } ?: 0
             if (addedCount > 0) {
@@ -930,6 +935,8 @@ fun ChatRoomScreen(
         val submittedAttachments = pendingAttachments
         val submission = prepareChatMessage(raw, submittedAttachments) ?: return
         onSend(channelId, submission.message, submission.uploadIds) {
+            // 主动发送成功应定位新消息，不受之前阅读位置或输入法收起时序限制。
+            scrollToBottomRequest++
             if (draft == raw) draft = ""
             val sentIds = submittedAttachments.map { it.id }.toSet()
             pendingAttachments = pendingAttachments.filterNot { it.id in sentIds }
@@ -1022,6 +1029,7 @@ fun ChatRoomScreen(
                 key(channelId, currentUsername) {
                     SelectableChatMessages(
                         messageIds = remember(messages) { messages.map { it.id } },
+                        scrollToBottomRequest = scrollToBottomRequest,
                         active = active,
                         loadingPast = isLoadingPast,
                         canLoadPast = canLoadMorePast,

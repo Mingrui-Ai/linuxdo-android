@@ -416,7 +416,11 @@ internal fun MessagesScreen(
                             }
                         }
 
-                        if (section == MessageSection.DirectMessages) {
+                        // 头像栏最左侧已提供新对话；仅在该栏隐藏时保留备用入口。
+                        if (section == MessageSection.DirectMessages &&
+                            (!showDirectMessageQuickBar || dmFilter != DirectMessageFilter.All ||
+                                (showSearch && searchQuery.isNotBlank()))
+                        ) {
                             HeaderActionPill(
                                 text = "+ 新对话",
                                 emphasized = true,

@@ -59,8 +59,9 @@ internal fun chatSelectionScrollRequest(
     viewportHeight: Int,
     selecting: Boolean,
     followThreshold: Int,
+    forceFollowEnd: Boolean = false,
 ): ChatSelectionScrollRequest {
-    if (previous.ids.isEmpty()) return ChatSelectionScrollRequest(followEnd = true)
+    if (forceFollowEnd || previous.ids.isEmpty()) return ChatSelectionScrollRequest(followEnd = true)
     val nextSet = nextIds.toSet()
     val retained = previous.bounds.filter { it.id in nextSet }
     val anchor = retained.firstOrNull { it.bottom > offset } ?: retained.lastOrNull()
@@ -68,7 +69,7 @@ internal fun chatSelectionScrollRequest(
     val appended = previous.ids.last() in nextSet && nextIds.lastOrNull() != previous.ids.last()
     val atEnd = (previous.bounds.lastOrNull()?.bottom ?: 0) - offset - viewportHeight <= followThreshold
     return ChatSelectionScrollRequest(
-        followEnd = !selecting && !prepended && appended && atEnd,
+        followEnd = !selecting && !prepended && (appended || previous.ids == nextIds) && atEnd,
         anchorId = anchor?.id,
         anchorOffset = anchor?.let { offset - it.top } ?: 0,
         fallbackOffset = offset,
@@ -86,6 +87,7 @@ internal fun visibleChatSelectionMessages(bounds: List<ChatMessageBounds>, offse
 @Composable
 internal fun SelectableChatMessages(
     messageIds: List<Long>,
+    scrollToBottomRequest: Int,
     active: Boolean,
     loadingPast: Boolean,
     canLoadPast: Boolean,
@@ -100,25 +102,33 @@ internal fun SelectableChatMessages(
     var viewportHeight by remember { mutableIntStateOf(0) }
     var selecting by remember { mutableStateOf(false) }
     var appliedIds by remember { mutableStateOf<List<Long>?>(null) }
+    var appliedBottomRequest by remember { mutableIntStateOf(0) }
     var geometryCorrection by remember { mutableStateOf<Pair<ChatSelectionLayout, ChatSelectionScrollRequest>?>(null) }
     val threshold = with(LocalDensity.current) { 72.dp.roundToPx() }
     val currentOnVisible by rememberUpdatedState(onMessagesVisible)
     val currentOnLoadPast by rememberUpdatedState(onLoadPast)
     // Capture the old geometry before the new keyed messages are measured.
-    val request = remember(messageIds) {
-        chatSelectionScrollRequest(measured, messageIds, scroll.value, viewportHeight, selecting, threshold)
+    val forceFollowEnd = remember(messageIds, scrollToBottomRequest) {
+        measured.ids.isEmpty() || scrollToBottomRequest != appliedBottomRequest
+    }
+    val request = remember(messageIds, scrollToBottomRequest) {
+        chatSelectionScrollRequest(
+            measured, messageIds, scroll.value, viewportHeight, selecting, threshold, forceFollowEnd,
+        )
     }
 
-    LaunchedEffect(messageIds) {
+    LaunchedEffect(messageIds, scrollToBottomRequest) {
         appliedIds = null
+        geometryCorrection = null
         snapshotFlow { measured.ids == messageIds && viewportHeight > 0 }.first { it }
         val target = request.resolve(measured.bounds, scroll.maxValue, scroll.value)
         if (request.followEnd) {
-            if (!scroll.isScrollInProgress && !selecting) scroll.scrollTo(target)
+            if (forceFollowEnd || (!scroll.isScrollInProgress && !selecting)) scroll.scrollTo(target)
         } else {
             // Geometry compensation must not cancel an ongoing drag/fling.
             scroll.dispatchRawDelta((target - scroll.value).toFloat())
         }
+        appliedBottomRequest = scrollToBottomRequest
         appliedIds = messageIds
     }
     LaunchedEffect(geometryCorrection) {
@@ -187,7 +197,8 @@ internal fun SelectableChatMessages(
                 // without changing IDs. Keep the same visible message at the same pixel offset.
                 if (measured.ids == messageIds && appliedIds == messageIds) {
                     geometryCorrection = next to chatSelectionScrollRequest(
-                        measured, messageIds, scroll.value, viewportHeight, selecting, threshold,
+                        measured, messageIds, scroll.value, viewportHeight,
+                        selecting || scroll.isScrollInProgress, threshold,
                     )
                 }
                 measured = next
