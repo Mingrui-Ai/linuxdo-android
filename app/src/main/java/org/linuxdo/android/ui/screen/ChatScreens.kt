@@ -36,7 +36,9 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.InlineTextContent
 import androidx.compose.foundation.text.appendInlineContent
-import androidx.compose.foundation.text.selection.SelectionContainer
+import androidx.compose.foundation.text.selection.DisableSelection
+import org.linuxdo.android.ui.design.ContinuousTextSelection
+import androidx.compose.runtime.key
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Close
@@ -868,7 +870,7 @@ fun ChatRoomScreen(
     }
 
     LaunchedEffect(active, channelId, messages, channel.membership?.lastReadMessageId) {
-        if (!active) return@LaunchedEffect
+        if (!active || channel.isDirectMessage) return@LaunchedEffect
         snapshotFlow { listState.layoutInfo.visibleItemsInfo.mapNotNull { it.key as? Long }.maxOrNull() }
             .distinctUntilChanged().collectLatest { lastVisible ->
                 if (lastVisible != null) {
@@ -885,6 +887,7 @@ fun ChatRoomScreen(
     val isLoadingPast = state.loadingPastChannelId == channelId
 
     LaunchedEffect(messages) {
+        if (channel.isDirectMessage) return@LaunchedEffect
         if (messages.isEmpty()) return@LaunchedEffect
         val currentFirstId = messages.first().id
         val currentLastId = messages.last().id
@@ -911,6 +914,7 @@ fun ChatRoomScreen(
 
     val firstVisibleIndex by remember { derivedStateOf { listState.firstVisibleItemIndex } }
     LaunchedEffect(firstVisibleIndex, canLoadMorePast, isLoadingPast, initialScrollDone) {
+        if (channel.isDirectMessage) return@LaunchedEffect
         if (firstVisibleIndex <= 2 && canLoadMorePast && !isLoadingPast && messages.isNotEmpty() && initialScrollDone) {
             onLoadPast(channelId)
         }
@@ -934,6 +938,56 @@ fun ChatRoomScreen(
                 composerInitialFullscreen = false
                 keyboard?.hide()
             }
+        }
+    }
+
+    @Composable
+    fun MessageEntry(index: Int, message: ChatMessageSummary) {
+        val prev = messages.getOrNull(index - 1)
+        val next = messages.getOrNull(index + 1)
+        val showDivider = shouldShowTimeDivider(prev?.createdAt, message.createdAt)
+        val sameAsPrev = !showDivider && isSameBubbleGroup(prev, message)
+        val sameAsNext = next != null && isSameBubbleGroup(message, next)
+        val isMe = currentUsername != null && message.user?.username == currentUsername
+
+        Column(Modifier.fillMaxWidth()) {
+            if (showDivider) {
+                DisableSelection {
+                    val dividerLabel = remember(message.createdAt) {
+                        formatChatTimeDivider(message.createdAt)
+                    }
+                    if (dividerLabel.isNotBlank()) {
+                        Box(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(top = 8.dp, bottom = 6.dp),
+                            contentAlignment = Alignment.Center,
+                        ) {
+                            Text(
+                                text = dividerLabel,
+                                style = IosTheme.type.caption.copy(fontSize = 11.sp, fontWeight = FontWeight.Medium),
+                                color = IosTheme.colors.secondaryLabel,
+                                modifier = Modifier
+                                    .clip(RoundedCornerShape(99.dp))
+                                    .background(IosTheme.colors.fieldBackground)
+                                    .padding(horizontal = 10.dp, vertical = 3.dp),
+                            )
+                        }
+                    }
+                }
+            }
+            ChatMessageBubble(
+                message = message,
+                isMe = isMe,
+                emojiUrls = emojiUrls,
+                showSenderName = showSenderNames && !sameAsPrev,
+                groupedWithPrevious = sameAsPrev,
+                groupedWithNext = sameAsNext,
+                onPicture = { images, idx -> chatGallery = images to idx },
+                onOpenTopic = onOpenTopic,
+                onOpenExternalUrl = onOpenExternalUrl,
+                onOpenUser = onOpenUser,
+            )
         }
     }
 
@@ -963,6 +1017,29 @@ fun ChatRoomScreen(
             if (state.loadingChannelId == channelId && messages.isEmpty()) {
                 Box(Modifier.weight(1f).fillMaxWidth(), contentAlignment = Alignment.Center) {
                     IosActivityIndicator(diameter = 24.dp, color = IosTheme.colors.accent)
+                }
+            } else if (channel.isDirectMessage) {
+                key(channelId, currentUsername) {
+                    SelectableChatMessages(
+                        messageIds = remember(messages) { messages.map { it.id } },
+                        active = active,
+                        loadingPast = isLoadingPast,
+                        canLoadPast = canLoadMorePast,
+                        onLoadPast = { onLoadPast(channelId) },
+                        onMessagesVisible = { onMessagesVisible(channelId, it) },
+                        modifier = Modifier.weight(1f).fillMaxWidth(),
+                        header = {
+                            if (isLoadingPast || (!canLoadMorePast && messages.size >= 50)) {
+                                Box(Modifier.fillMaxWidth().padding(vertical = 8.dp), contentAlignment = Alignment.Center) {
+                                    if (isLoadingPast) {
+                                        IosActivityIndicator(diameter = 18.dp, color = IosTheme.colors.accent)
+                                    } else {
+                                        Text("已加载全部历史消息", style = IosTheme.type.caption, color = IosTheme.colors.secondaryLabel)
+                                    }
+                                }
+                            }
+                        },
+                    ) { index -> MessageEntry(index, messages[index]) }
                 }
             } else {
                 LazyColumn(
@@ -1002,50 +1079,7 @@ fun ChatRoomScreen(
                     }
 
                     itemsIndexed(messages, key = { _, message -> message.id }) { index, message ->
-                        val prev = messages.getOrNull(index - 1)
-                        val next = messages.getOrNull(index + 1)
-                        val showDivider = shouldShowTimeDivider(prev?.createdAt, message.createdAt)
-                        val sameAsPrev = !showDivider && isSameBubbleGroup(prev, message)
-                        val sameAsNext = next != null && isSameBubbleGroup(message, next)
-                        val isMe = currentUsername != null && message.user?.username == currentUsername
-
-                        Column(Modifier.fillMaxWidth()) {
-                            if (showDivider) {
-                                val dividerLabel = remember(message.createdAt) {
-                                    formatChatTimeDivider(message.createdAt)
-                                }
-                                if (dividerLabel.isNotBlank()) {
-                                    Box(
-                                        modifier = Modifier
-                                            .fillMaxWidth()
-                                            .padding(top = 8.dp, bottom = 6.dp),
-                                        contentAlignment = Alignment.Center,
-                                    ) {
-                                        Text(
-                                            text = dividerLabel,
-                                            style = IosTheme.type.caption.copy(fontSize = 11.sp, fontWeight = FontWeight.Medium),
-                                            color = IosTheme.colors.secondaryLabel,
-                                            modifier = Modifier
-                                                .clip(RoundedCornerShape(99.dp))
-                                                .background(IosTheme.colors.fieldBackground)
-                                                .padding(horizontal = 10.dp, vertical = 3.dp),
-                                        )
-                                    }
-                                }
-                            }
-                            ChatMessageBubble(
-                                message = message,
-                                isMe = isMe,
-                                emojiUrls = emojiUrls,
-                                showSenderName = showSenderNames && !sameAsPrev,
-                                groupedWithPrevious = sameAsPrev,
-                                groupedWithNext = sameAsNext,
-                                onPicture = { images, idx -> chatGallery = images to idx },
-                                onOpenTopic = onOpenTopic,
-                                onOpenExternalUrl = onOpenExternalUrl,
-                                onOpenUser = onOpenUser,
-                            )
-                        }
+                        MessageEntry(index, message)
                     }
                 }
             }
@@ -1497,20 +1531,24 @@ private fun ChatMessageBubble(
                             contentScale = ContentScale.FillWidth,
                         )
                     }
-                    fileUploads.forEach { upload ->
-                        Text(
-                            text = "📎 ${upload.originalFilename}",
-                            style = TextStyle(fontSize = 13.sp, color = Color.White.copy(alpha = 0.88f)),
-                        )
+                    DisableSelection {
+                        fileUploads.forEach { upload ->
+                            Text(
+                                text = "📎 ${upload.originalFilename}",
+                                style = TextStyle(fontSize = 13.sp, color = Color.White.copy(alpha = 0.88f)),
+                            )
+                        }
                     }
                 }
             }
             if (!groupedWithNext && timeStr.isNotBlank()) {
-                Text(
-                    text = timeStr,
-                    style = TextStyle(fontSize = 10.5.sp, color = IosTheme.colors.tertiaryLabel),
-                    modifier = Modifier.padding(end = 4.dp),
-                )
+                DisableSelection {
+                    Text(
+                        text = timeStr,
+                        style = TextStyle(fontSize = 10.5.sp, color = IosTheme.colors.tertiaryLabel),
+                        modifier = Modifier.padding(end = 4.dp),
+                    )
+                }
             }
         }
     } else {
@@ -1548,17 +1586,19 @@ private fun ChatMessageBubble(
 
             Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
                 if (showSenderName) {
-                    val displayName = user?.name?.takeIf { it.isNotBlank() } ?: user?.username.orEmpty()
-                    if (displayName.isNotBlank()) {
-                        Text(
-                            text = displayName,
-                            style = TextStyle(fontSize = 11.5.sp, fontWeight = FontWeight.Medium, color = IosTheme.colors.secondaryLabel),
-                            modifier = Modifier
-                                .padding(start = 4.dp)
-                                .clickable(enabled = !user?.username.isNullOrBlank()) {
-                                    user?.username?.let(onOpenUser)
-                                },
-                        )
+                    DisableSelection {
+                        val displayName = user?.name?.takeIf { it.isNotBlank() } ?: user?.username.orEmpty()
+                        if (displayName.isNotBlank()) {
+                            Text(
+                                text = displayName,
+                                style = TextStyle(fontSize = 11.5.sp, fontWeight = FontWeight.Medium, color = IosTheme.colors.secondaryLabel),
+                                modifier = Modifier
+                                    .padding(start = 4.dp)
+                                    .clickable(enabled = !user?.username.isNullOrBlank()) {
+                                        user?.username?.let(onOpenUser)
+                                    },
+                            )
+                        }
                     }
                 }
 
@@ -1594,21 +1634,25 @@ private fun ChatMessageBubble(
                                 contentScale = ContentScale.FillWidth,
                             )
                         }
-                        fileUploads.forEach { upload ->
-                            Text(
-                                text = "📎 ${upload.originalFilename}",
-                                style = TextStyle(fontSize = 13.sp, color = IosTheme.colors.secondaryLabel),
-                            )
+                        DisableSelection {
+                            fileUploads.forEach { upload ->
+                                Text(
+                                    text = "📎 ${upload.originalFilename}",
+                                    style = TextStyle(fontSize = 13.sp, color = IosTheme.colors.secondaryLabel),
+                                )
+                            }
                         }
                     }
                 }
 
                 if (!groupedWithNext && timeStr.isNotBlank()) {
-                    Text(
-                        text = timeStr,
-                        style = TextStyle(fontSize = 10.5.sp, color = IosTheme.colors.tertiaryLabel),
-                        modifier = Modifier.padding(start = 4.dp),
-                    )
+                    DisableSelection {
+                        Text(
+                            text = timeStr,
+                            style = TextStyle(fontSize = 10.5.sp, color = IosTheme.colors.tertiaryLabel),
+                            modifier = Modifier.padding(start = 4.dp),
+                        )
+                    }
                 }
             }
         }
@@ -1638,6 +1682,7 @@ private fun ChatMarkdownContent(
     val dividerColor = if (onAccent) Color.White.copy(alpha = 0.28f) else colors.separator
     val allImages = remember(blocks) { extractChatBubbleImages(blocks) }
 
+    ContinuousTextSelection(onCopied = {}, onQuote = null) {
     Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
         blocks.forEach { block ->
             when (block) {
@@ -1668,22 +1713,20 @@ private fun ChatMarkdownContent(
                 }
 
                 is CookedBlock.Code -> {
-                    SelectionContainer {
-                        Text(
-                            text = block.text,
-                            fontFamily = FontFamily.Monospace,
-                            style = TextStyle(
-                                fontSize = 12.8.sp,
-                                lineHeight = 18.sp,
-                                color = textColor,
-                            ),
-                            modifier = Modifier
-                                .clip(RoundedCornerShape(8.dp))
-                                .background(codeBg)
-                                .horizontalScroll(rememberScrollState())
-                                .padding(horizontal = 10.dp, vertical = 8.dp),
-                        )
-                    }
+                    Text(
+                        text = block.text,
+                        fontFamily = FontFamily.Monospace,
+                        style = TextStyle(
+                            fontSize = 12.8.sp,
+                            lineHeight = 18.sp,
+                            color = textColor,
+                        ),
+                        modifier = Modifier
+                            .clip(RoundedCornerShape(8.dp))
+                            .background(codeBg)
+                            .horizontalScroll(rememberScrollState())
+                            .padding(horizontal = 10.dp, vertical = 8.dp),
+                    )
                 }
 
                 is CookedBlock.Quote -> {
@@ -1719,10 +1762,12 @@ private fun ChatMarkdownContent(
                             verticalAlignment = Alignment.CenterVertically,
                             horizontalArrangement = Arrangement.spacedBy(5.dp),
                         ) {
-                            Text(
-                                text = if (expanded) "▾" else "▸",
-                                style = TextStyle(fontSize = 12.sp, fontWeight = FontWeight.Bold, color = secondaryColor),
-                            )
+                            DisableSelection {
+                                Text(
+                                    text = if (expanded) "▾" else "▸",
+                                    style = TextStyle(fontSize = 12.sp, fontWeight = FontWeight.Bold, color = secondaryColor),
+                                )
+                            }
                             ChatBubbleRichParagraph(
                                 runs = block.summary.ifEmpty { listOf(InlineText("总结")) },
                                 onAccent = onAccent,
@@ -1782,7 +1827,7 @@ private fun ChatMarkdownContent(
                     }
                 }
 
-                is CookedBlock.Picture -> {
+                is CookedBlock.Picture -> DisableSelection {
                     val idx = allImages.indexOfFirst { it.url == block.originalUrl || it.previewUrl == block.url }.coerceAtLeast(0)
                     AsyncImage(
                         model = block.url,
@@ -1800,7 +1845,7 @@ private fun ChatMarkdownContent(
                     )
                 }
 
-                is CookedBlock.ImageGrid -> {
+                is CookedBlock.ImageGrid -> DisableSelection {
                     Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
                         block.pictures.forEach { pic ->
                             val idx = allImages.indexOfFirst { it.url == pic.originalUrl || it.previewUrl == pic.url }.coerceAtLeast(0)
@@ -1822,7 +1867,7 @@ private fun ChatMarkdownContent(
                     }
                 }
 
-                is CookedBlock.Onebox -> {
+                is CookedBlock.Onebox -> DisableSelection {
                     Column(
                         modifier = Modifier
                             .clip(RoundedCornerShape(8.dp))
@@ -1848,7 +1893,7 @@ private fun ChatMarkdownContent(
                     }
                 }
 
-                is CookedBlock.Video -> {
+                is CookedBlock.Video -> DisableSelection {
                     Text(
                         text = "🎬 ${block.title}",
                         style = TextStyle(fontSize = 13.5.sp, color = textColor, textDecoration = TextDecoration.Underline),
@@ -1856,7 +1901,7 @@ private fun ChatMarkdownContent(
                     )
                 }
 
-                is CookedBlock.Audio -> {
+                is CookedBlock.Audio -> DisableSelection {
                     Text(
                         text = "🎵 ${block.title}",
                         style = TextStyle(fontSize = 13.5.sp, color = textColor, textDecoration = TextDecoration.Underline),
@@ -1864,7 +1909,7 @@ private fun ChatMarkdownContent(
                     )
                 }
 
-                is CookedBlock.Poll -> {
+                is CookedBlock.Poll -> DisableSelection {
                     Column(
                         modifier = Modifier
                             .clip(RoundedCornerShape(8.dp))
@@ -1895,6 +1940,7 @@ private fun ChatMarkdownContent(
                 }
             }
         }
+    }
     }
 }
 
@@ -2004,14 +2050,12 @@ private fun ChatBubbleRichParagraph(
         Modifier
     }
 
-    SelectionContainer {
-        Text(
-            text = annotated,
-            style = TextStyle(fontSize = 14.8.sp, color = textColor, lineHeight = 20.5.sp),
-            inlineContent = inline,
-            modifier = spoilerModifier,
-        )
-    }
+    Text(
+        text = annotated,
+        style = TextStyle(fontSize = 14.8.sp, color = textColor, lineHeight = 20.5.sp),
+        inlineContent = inline,
+        modifier = spoilerModifier,
+    )
 }
 
 private fun extractChatBubbleImages(blocks: List<CookedBlock>): List<ImageViewerItem> {
