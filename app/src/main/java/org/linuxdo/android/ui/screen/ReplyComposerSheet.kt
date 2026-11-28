@@ -185,6 +185,7 @@ internal fun MarkdownComposerSheet(
     var isFullScreen by rememberSaveable(sessionKey) { mutableStateOf(initialFullScreen) }
     var expandedTab by rememberSaveable(sessionKey) { mutableStateOf(ComposerExpandedTab.Edit) }
     var quickMdOpen by rememberSaveable(sessionKey) { mutableStateOf(false) }
+    var submissionAttempted by rememberSaveable(sessionKey) { mutableStateOf(false) }
     var openSubToolbar by remember { mutableStateOf<ComposerSubToolbar?>(null) }
 
     var showLinkDialog by remember { mutableStateOf(false) }
@@ -204,10 +205,21 @@ internal fun MarkdownComposerSheet(
     val dismiss = rememberComposerDismiss(
         enabled = !showPollDialog && !showLinkDialog && previewGallery == null,
         canDismiss = !submitting,
-        ignoreKeyboardHide = pickingAttachment || isFullScreen || showLinkDialog || showPollDialog,
+        // 提交时禁用原生编辑器可能收起键盘，隐藏事件也可能晚于失败提示或下一次输入。
+        // 从点击发表起保留本次编辑现场，成功由调用方关闭；返回、取消和遮罩仍可主动关闭。
+        ignoreKeyboardHide = submissionAttempted || busy || error != null ||
+            pickingAttachment || isFullScreen || showLinkDialog || showPollDialog,
     ) {
         editorView?.exportToMarkdown()?.let(onDraftChange)
         onClose()
+    }
+
+    fun submitDraft() {
+        // 在调用方更新 submitting/error 之前置位，兼容同一帧内立即返回的校验失败。
+        submissionAttempted = true
+        val raw = editorView?.exportToMarkdown() ?: draft
+        onDraftChange(raw)
+        onSubmit(raw)
     }
 
     // 切换回编辑态时确保同步展开态子菜单与键盘焦点
@@ -395,11 +407,7 @@ internal fun MarkdownComposerSheet(
                         label = sendLabel,
                         enabled = canSubmit,
                         submitting = submitting,
-                        onClick = {
-                            val raw = editorView?.exportToMarkdown() ?: draft
-                            onDraftChange(raw)
-                            onSubmit(raw)
-                        },
+                        onClick = ::submitDraft,
                     )
                 } else {
                     ComposerHeaderIconButton(
@@ -652,11 +660,7 @@ internal fun MarkdownComposerSheet(
                         label = sendLabel,
                         enabled = canSubmit,
                         submitting = submitting,
-                        onClick = {
-                            val raw = editorView?.exportToMarkdown() ?: draft
-                            onDraftChange(raw)
-                            onSubmit(raw)
-                        },
+                        onClick = ::submitDraft,
                     )
                 }
             }
