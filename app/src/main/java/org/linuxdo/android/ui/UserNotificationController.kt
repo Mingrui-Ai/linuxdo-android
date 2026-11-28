@@ -42,7 +42,7 @@ internal class UserNotificationController(
         } catch (cancelled: CancellationException) {
             throw cancelled
         } catch (failure: Exception) {
-            if (request == revision) mutableState.value = state.value.copy(fresh = false, error = failure.message ?: "读取通知设置失败")
+            if (request == revision) mutableState.value = state.value.copy(fresh = false, error = org.linuxdo.android.net.UserErrorMessage.format(failure, "读取通知设置失败"))
         } finally {
             if (request == revision) mutableState.value = state.value.copy(loading = false)
         }
@@ -67,7 +67,7 @@ internal class UserNotificationController(
             if (request == revision) mutableState.value = before.copy(loading = false, fresh = false)
             throw cancelled
         } catch (failure: Exception) {
-            if (request == revision) mutableState.value = before.copy(loading = false, fresh = false, error = failure.message ?: "通知设置保存失败")
+            if (request == revision) mutableState.value = before.copy(loading = false, fresh = false, error = org.linuxdo.android.net.UserErrorMessage.format(failure, "通知设置保存失败"))
             return false
         } finally {
             if (request == revision) mutableState.value = state.value.copy(saving = false)

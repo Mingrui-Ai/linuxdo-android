@@ -110,7 +110,7 @@ internal class ProfileEditorViewModel(application: Application) : AndroidViewMod
                 _state.value=ProfileEditorUiState(data=loaded,values=loaded.values)
                 publish(loaded,guard)
             } catch (e: CancellationException) { throw e }
-            catch (e: Exception) { finish(token) { it.copy(error=e.message ?: "资料加载失败") } }
+            catch (e: Exception) { finish(token) { it.copy(error = org.linuxdo.android.net.UserErrorMessage.format(e, "资料加载失败")) } }
             finally { finish(token) { it.copy(loading=false) } }
         }
     }
@@ -217,7 +217,8 @@ internal class ProfileEditorViewModel(application: Application) : AndroidViewMod
                 verifySaved()
             } catch (e: CancellationException) { throw e }
             catch (e: Exception) {
-                finish(token) { it.copy(error=(if(attempted) "保存结果尚未确认，修改已保留。" else "")+(e.message ?: "保存失败，请重试")) }
+                val reason = org.linuxdo.android.net.UserErrorMessage.format(e, "保存失败，请重试")
+                finish(token) { it.copy(error = (if (attempted) "保存结果尚未确认，修改已保留。" else "") + reason) }
                 // A failed response may have reached the server. Re-read before deciding what needs retrying.
                 if (attempted) try { verifySaved() }
                 catch(e: CancellationException) { throw e } catch(_: Exception) { }
@@ -329,7 +330,7 @@ internal class ProfileEditorViewModel(application: Application) : AndroidViewMod
                 }
                 _state.update { current -> current.copy(values=current.values+(field to value),notice="图片已上传，保存后应用",data=if(field=="avatar") current.data?.copy(avatars=current.data.avatars+ProfileChoice(value,"新上传头像",result.url)) else current.data) }
             } catch (e: CancellationException) { throw e }
-            catch (e: Exception) { finish(token) { it.copy(error=e.message ?: "图片上传失败") } }
+            catch (e: Exception) { finish(token) { it.copy(error = org.linuxdo.android.net.UserErrorMessage.format(e, "图片上传失败")) } }
             finally { finish(token) { it.copy(uploading=null) } }
         }
     }
@@ -347,7 +348,7 @@ internal class ProfileEditorViewModel(application: Application) : AndroidViewMod
                 val result=repository.profileEditorRead("/search.json?q="+URLEncoder.encode("${query.trim()} status:public", "UTF-8"),userId,generation)
                 guard(); if (revision==searchRevision) _state.update { it.copy(topicResults=result.objects("topics").map { t -> ProfileChoice(t.text("id"),t.text("title")) }) }
             } catch (e: CancellationException) { throw e }
-            catch(e: Exception) { if(revision==searchRevision) finish(token) { it.copy(topicError=e.message ?: "话题搜索失败") } }
+            catch(e: Exception) { if(revision==searchRevision) finish(token) { it.copy(topicError = org.linuxdo.android.net.UserErrorMessage.format(e, "话题搜索失败")) } }
             finally { if(revision==searchRevision) finish(token) { it.copy(searching=false) } }
         }
     }

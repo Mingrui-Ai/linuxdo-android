@@ -112,7 +112,11 @@ fun UserCardBottomSheet(
                                                 } catch (cancelled: CancellationException) {
                                                     throw cancelled
                                                 } catch (failure: Exception) {
-                                                    Toast.makeText(context, failure.message ?: "关注操作失败", Toast.LENGTH_SHORT).show()
+                                                    Toast.makeText(
+                                    context,
+                                    org.linuxdo.android.net.UserErrorMessage.format(failure, "关注操作失败"),
+                                    Toast.LENGTH_SHORT,
+                                ).show()
                                                 } finally { followUpdating = false }
                                             }
                                         }

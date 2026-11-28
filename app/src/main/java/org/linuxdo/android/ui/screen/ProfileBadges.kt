@@ -127,7 +127,7 @@ fun ProfileBadgesScreen(
         } catch (e: kotlinx.coroutines.CancellationException) {
             throw e
         } catch (e: Exception) {
-            error = e.message ?: "徽章加载失败"
+            error = org.linuxdo.android.net.UserErrorMessage.format(e, "徽章加载失败")
         } finally {
             loading = false
             userRefreshing = false

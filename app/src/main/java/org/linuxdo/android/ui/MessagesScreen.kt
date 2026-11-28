@@ -811,7 +811,7 @@ private fun NewDirectMessageSheet(
         } catch (e: kotlinx.coroutines.CancellationException) {
             throw e
         } catch (e: Exception) {
-            searchError = e.message ?: "搜索用户失败"
+            searchError = org.linuxdo.android.net.UserErrorMessage.format(e, "搜索用户失败")
             results = emptyList()
         } finally {
             searching = false

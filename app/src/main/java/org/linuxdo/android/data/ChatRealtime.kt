@@ -97,7 +97,9 @@ class ChatRealtime(
         refreshJob = scope.launch {
             try { refreshSnapshot(store.sessionGeneration, explicit = true) }
             catch (cancelled: CancellationException) { throw cancelled }
-            catch (error: Exception) { _state.update { it.copy(error = error.message ?: "聊天列表刷新失败") } }
+            catch (error: Exception) {
+                _state.update { it.copy(error = org.linuxdo.android.net.UserErrorMessage.format(error, "聊天列表刷新失败")) }
+            }
         }
     }
 

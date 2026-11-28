@@ -131,6 +131,7 @@ import org.linuxdo.android.data.AutoRefreshInterval
 import org.linuxdo.android.data.NotificationPollInterval
 import org.linuxdo.android.data.NotificationScope
 import org.linuxdo.android.net.HttpStatusException
+import org.linuxdo.android.net.UserErrorMessage
 import org.linuxdo.android.data.resolveTopicFloor
 import org.linuxdo.android.data.resolveLoadedTopicFloor
 import org.linuxdo.android.net.LoginRejectedException
@@ -1095,7 +1096,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                             checkSession()
                             val pause = siteFailureDelayMs(e)
                             ldcBackoffUntil = System.currentTimeMillis() + pause
-                            _ldcState.update { it.copy(error = "积分预热暂缓: ${e.message}") }
+                            _ldcState.update { it.copy(error = "积分预热暂缓：${UserErrorMessage.format(e, "请稍后重试")}") }
                             diagnostics.log("积分预热遇限流，中止本轮后续社区分预热: ${e.message}")
                             return@launch
                         } catch (e: Exception) {
@@ -1103,7 +1104,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                             val pause = siteFailureDelayMs(e)
                             ldcBackoffUntil = System.currentTimeMillis() + pause
                             if (pause <= 60_000L) retryAfterMs = maxOf(retryAfterMs, pause)
-                            _ldcState.update { it.copy(error = "积分预热暂缓: ${e.message}") }
+                            _ldcState.update { it.copy(error = "积分预热暂缓：${UserErrorMessage.format(e, "请稍后重试")}") }
                             diagnostics.log("积分预热暂缓: ${e.message}")
                         }
                     }
@@ -2506,7 +2507,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                             it.copy(
                                 showWebLoginDialog = false,
                                 loading = false,
-                                error = errorMsg ?: "登录失败，请重试。",
+                                error = UserErrorMessage.sanitize(errorMsg, "登录失败，请重试"),
                             )
                         }
                     }
@@ -2610,7 +2611,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                         showWebLoginDialog = false,
                         sendingCode = false,
                         emailSent = success,
-                        error = if (success) null else (errorMsg ?: "登录邮件发送失败，请重试。"),
+                        error = if (success) null else UserErrorMessage.sanitize(errorMsg, "登录邮件发送失败，请重试"),
                     )
                 }
                 if (success) diagnostics.log("登录邮件已发送（内联安全认证链路）")
@@ -2680,7 +2681,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                             it.copy(
                                 showWebLoginDialog = false,
                                 loading = false,
-                                error = errorMsg ?: "登录链接无效或已过期，请重试或重新获取验证码。",
+                                error = UserErrorMessage.sanitize(errorMsg, "登录链接无效或已过期，请重试或重新获取验证码"),
                             )
                         }
                     }
@@ -2853,7 +2854,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                     it.copy(
                         webAuthLoading = false,
                         webAuthMessage = null,
-                        error = e.message ?: "网页授权登录失败，请重试",
+                        error = UserErrorMessage.format(e, "网页授权登录失败，请重试"),
                     )
                 }
             }
@@ -3538,7 +3539,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 throw error
             } catch (error: Exception) {
                 if (_userCard.value.user == null) {
-                    _userCard.value = UserCardUiState(error = error.message ?: "资料加载失败", loading = false)
+                    _userCard.value = UserCardUiState(error = UserErrorMessage.format(error, "资料加载失败"), loading = false)
                 } else {
                     _userCard.value = _userCard.value.copy(loading = false)
                 }
@@ -3575,7 +3576,11 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             } catch (e: kotlinx.coroutines.CancellationException) {
                 throw e
             } catch (e: Exception) {
-                android.widget.Toast.makeText(getApplication(), "发起私聊失败: ${e.message ?: "网络异常"}", android.widget.Toast.LENGTH_LONG).show()
+                android.widget.Toast.makeText(
+                    getApplication(),
+                    "发起私聊失败：${UserErrorMessage.format(e, "请稍后重试")}",
+                    android.widget.Toast.LENGTH_LONG,
+                ).show()
             }
         }
     }
@@ -3645,7 +3650,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             } catch (error: CancellationException) {
                 throw error
             } catch (error: Exception) {
-                _followList.update { it.copy(loading = false, error = error.message ?: "关注列表加载失败") }
+                _followList.update { it.copy(loading = false, error = UserErrorMessage.format(error, "关注列表加载失败")) }
             }
         }
     }
@@ -3670,7 +3675,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 throw error
             } catch (error: Exception) {
                 if (generation == accountScopeGeneration) {
-                    Toast.makeText(getApplication(), error.message ?: "消息免打扰设置失败", Toast.LENGTH_LONG).show()
+                    Toast.makeText(getApplication(), UserErrorMessage.format(error, "消息免打扰设置失败"), Toast.LENGTH_LONG).show()
                     handlePageFailure(error) { setChatChannelMuted(channelId, muted) }
                 }
             } finally {
@@ -3737,7 +3742,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             } catch (error: CancellationException) {
                 throw error
             } catch (error: Exception) {
-                _chat.update { it.copy(loadingChannelId = null, error = error.message ?: "聊天消息加载失败") }
+                _chat.update { it.copy(loadingChannelId = null, error = UserErrorMessage.format(error, "聊天消息加载失败")) }
             }
         }
     }
@@ -3793,7 +3798,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 throw error
             } catch (error: Exception) {
                 if (generation == accountScopeGeneration && pageJobs["chatSend"] === coroutineContext[Job]) {
-                    _chat.update { it.copy(error = error.message ?: "消息发送失败") }
+                    _chat.update { it.copy(error = UserErrorMessage.format(error, "消息发送失败")) }
                 }
             }
         }
@@ -3826,7 +3831,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             } catch (error: CancellationException) {
                 throw error
             } catch (error: Exception) {
-                val msg = error.message ?: "附件上传失败"
+                val msg = UserErrorMessage.format(error, "附件上传失败")
                 _chat.update { it.copy(error = msg) }
                 onError(msg)
                 handlePageFailure(error) {}
@@ -3947,7 +3952,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 checkSession()
                 connectSilentBackoffUntil = System.currentTimeMillis() + siteFailureDelayMs(e)
                 if (!isSilent) {
-                    _trustReport.update { it.copy(loading = false, error = e.message ?: "加载升级进度失败") }
+                    _trustReport.update { it.copy(loading = false, error = UserErrorMessage.format(e, "加载升级进度失败")) }
                 }
             } finally {
                 if (!isSilent && runCatching { checkSession() }.isSuccess) {
@@ -4166,7 +4171,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 val isExpired = (e as? HttpStatusException)?.status == 401
                 ldcBackoffUntil = System.currentTimeMillis() + siteFailureDelayMs(e)
                 if (!isSilent) {
-                    val msg = if (isExpired) "积分授权已过期或未登录" else (e.message ?: "加载积分数据失败")
+                    val msg = if (isExpired) "积分授权已过期或未登录" else UserErrorMessage.format(e, "加载积分数据失败")
                     _ldcState.update { it.copy(loading = false, error = msg, isExpired = isExpired) }
                 }
             } finally {
@@ -4206,7 +4211,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             } catch (error: CancellationException) {
                 throw error
             } catch (error: Exception) {
-                _profile.update { it + (section to previous.copy(error = error.message ?: "加载失败")) }
+                _profile.update { it + (section to previous.copy(error = UserErrorMessage.format(error, "加载失败"))) }
                 handlePageFailure(error) { loadProfile(section, refresh = true) }
             } finally {
                 if (section != ProfileSection.Notifications || (isActive && _notificationFilter.value == filter)) {
@@ -4536,7 +4541,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 if (!silent) {
                     _details.update { states ->
                         states[id]?.let {
-                            states + (id to it.copy(error = error.message ?: "刷新失败", failedLoad = DetailLoad.Topic,
+                            states + (id to it.copy(error = UserErrorMessage.format(error, "刷新失败"), failedLoad = DetailLoad.Topic,
                                 failedPostNumber = null, retryAtElapsedMs = 0L))
                         } ?: states
                     }
@@ -4762,7 +4767,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                     val latest = states[id] ?: return@update states
                     // 等待期间可能切换了作者或收到了新回复，失败只更新重试所需的字段。
                     states + (id to latest.copy(
-                        error = error.message ?: "加载失败",
+                        error = UserErrorMessage.format(error, "加载失败"),
                         failedPostNumber = requestPostNumber,
                         retryAtElapsedMs = if (error is RateLimitException) SystemClock.elapsedRealtime() + error.retryAfterMs else 0L,
                         failedLoad = when {
@@ -4863,7 +4868,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             } catch (error: Exception) {
                 if (generation != accountScopeGeneration || pageJobs["topic:$topicId"] !== coroutineContext[Job]) return@launch
                 _details.update { states -> states[topicId]?.let {
-                    states + (topicId to it.copy(error = error.message ?: "切换排序失败，请重试", failedPostNumber = null, retryAtElapsedMs = 0L,
+                    states + (topicId to it.copy(error = UserErrorMessage.format(error, "切换排序失败，请重试"), failedPostNumber = null, retryAtElapsedMs = 0L,
                         pendingCommentOrder = null, failedCommentOrder = target, failedLoad = DetailLoad.Order))
                 } ?: states }
                 handlePageFailure(error) { setCommentOrder(topicId, target) }
@@ -5263,7 +5268,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 throw error
             } catch (error: Exception) {
                 _details.update { states -> states[topicId]?.let {
-                    states + (topicId to it.copy(reactionErrors = it.reactionErrors + (postId to (error.message ?: "回应失败"))))
+                    states + (topicId to it.copy(reactionErrors = it.reactionErrors + (postId to UserErrorMessage.format(error, "回应失败"))))
                 } ?: states }
                 // toggle 不是幂等操作,验证后只刷新状态,不自动重放写请求。
                 handlePageFailure(error) { loadTopic(topicId, retry = true) }
@@ -5311,7 +5316,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             } catch (error: Exception) {
                 _composer.update {
                     if (it.target == target) it.copy(loadingDraft = false,
-                        error = error.message ?: "原文加载失败，请关闭后重试") else it
+                        error = UserErrorMessage.format(error, "原文加载失败，请关闭后重试")) else it
                 }
             }
         }
@@ -5394,7 +5399,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             } catch (error: CancellationException) {
                 throw error
             } catch (error: Exception) {
-                _composer.update { it.copy(uploading = false, error = error.message ?: "上传失败，请稍后重试") }
+                _composer.update { it.copy(uploading = false, error = UserErrorMessage.format(error, "上传失败，请稍后重试")) }
                 handlePageFailure(error) {}
             }
         }
@@ -5513,7 +5518,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 _composer.update { it.copy(submitting = false) }
                 throw error
             } catch (error: Exception) {
-                _composer.update { it.copy(submitting = false, error = error.message ?: "提交失败，请稍后重试") }
+                _composer.update { it.copy(submitting = false, error = UserErrorMessage.format(error, "提交失败，请稍后重试")) }
                 handlePageFailure(error) {}
             }
         }
@@ -5953,7 +5958,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 _drafts.update {
                     it.copy(
                         loading = false,
-                        error = if (silent && it.loaded) null else (error.message ?: "草稿加载失败"),
+                        error = if (silent && it.loaded) null else UserErrorMessage.format(error, "草稿加载失败"),
                     )
                 }
                 if (!silent) {
@@ -5993,7 +5998,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 _drafts.update {
                     it.copy(
                         deletingKeys = it.deletingKeys - draft.draftKey,
-                        error = error.message ?: "删除草稿失败",
+                        error = UserErrorMessage.format(error, "删除草稿失败"),
                     )
                 }
                 handlePageFailure(error) {}
@@ -6232,7 +6237,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             } catch (error: CancellationException) {
                 throw error
             } catch (error: Exception) {
-                _topicCreator.update { it.copy(uploading = false, error = error.message ?: "上传失败，请稍后重试") }
+                _topicCreator.update { it.copy(uploading = false, error = UserErrorMessage.format(error, "上传失败，请稍后重试")) }
                 handlePageFailure(error) {}
             }
         }
@@ -6327,7 +6332,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             } catch (error: CancellationException) {
                 throw error
             } catch (error: Exception) {
-                _topicCreator.update { it.copy(submitting = false, error = error.message ?: "发布失败，请稍后重试") }
+                _topicCreator.update { it.copy(submitting = false, error = UserErrorMessage.format(error, "发布失败，请稍后重试")) }
                 handlePageFailure(error) {}
             }
         }
@@ -6816,7 +6821,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 throw error
             } catch (error: Exception) {
                 _details.update { states -> states[topicId]?.let {
-                    states + (topicId to it.copy(flagError = error.message ?: "举报提交失败，请稍后再试"))
+                    states + (topicId to it.copy(flagError = UserErrorMessage.format(error, "举报提交失败，请稍后再试")))
                 } ?: states }
                 handlePageFailure(error) {}
             } finally {
@@ -6896,7 +6901,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 throw error
             } catch (error: Exception) {
                 if (!silent && sameAccount()) {
-                    Toast.makeText(getApplication(), error.message ?: "通知级别设置失败，已恢复原状态", Toast.LENGTH_LONG).show()
+                    Toast.makeText(getApplication(), UserErrorMessage.format(error, "通知级别设置失败，已恢复原状态"), Toast.LENGTH_LONG).show()
                     handlePageFailure(error) {}
                 }
             } finally {
@@ -7134,7 +7139,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             } catch (error: CancellationException) {
                 throw error
             } catch (error: Exception) {
-                _details.update { states -> states[topicId]?.let { states + (topicId to it.copy(error = error.message ?: "回复加载失败")) } ?: states }
+                _details.update { states -> states[topicId]?.let { states + (topicId to it.copy(error = UserErrorMessage.format(error, "回复加载失败"))) } ?: states }
                 handlePageFailure(error) { loadReplies(topicId, postId) }
             } finally {
                 _details.update { states -> states[topicId]?.let { states + (topicId to it.copy(loadingReplies = it.loadingReplies - activeLoadingIds)) } ?: states }
@@ -7352,7 +7357,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             } catch (error: CancellationException) {
                 throw error
             } catch (error: Exception) {
-                _categories.value = current.copy(error = error.message ?: "加载失败")
+                _categories.value = current.copy(error = UserErrorMessage.format(error, "加载失败"))
                 handlePageFailure(error) { loadCategories(retry = true) }
             } finally {
                 _categories.update { it.copy(loading = false) }
@@ -7946,7 +7951,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 if (!isActive || accountGeneration != accountScopeGeneration) return@launch
                 _categoryTopics.update { states ->
                     val latest = states[id] ?: return@update states
-                    states + (id to latest.copy(initialLoading = false, error = error.message ?: "加载失败"))
+                    states + (id to latest.copy(initialLoading = false, error = UserErrorMessage.format(error, "加载失败")))
                 }
                 handlePageFailure(error) { loadCategory(id, slug, refresh = !more, more = more) }
             } finally {
@@ -8011,7 +8016,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 throw error
             } catch (error: Exception) {
                 if (generation != accountScopeGeneration) return@launch
-                _userTopicStates.update { it + (key to previous.copy(initialLoading = false, error = error.message ?: "加载失败")) }
+                _userTopicStates.update { it + (key to previous.copy(initialLoading = false, error = UserErrorMessage.format(error, "加载失败"))) }
                 handlePageFailure(error) { loadUserTopics(username, isBookmark, refresh = !more, more = more, queryOverride = queryOverride) }
             } finally {
                 if (generation == accountScopeGeneration) {
@@ -8059,7 +8064,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                     it + (stateKey to current.copy(
                         loading = false,
                         initialLoading = false,
-                        error = error.message ?: "加载列表失败",
+                        error = UserErrorMessage.format(error, "加载列表失败"),
                     ))
                 }
             } finally {
@@ -8124,7 +8129,7 @@ fun openTopicSearch(topicId: Long, title: String) {
         } catch (error: CancellationException) { throw error }
         catch (error: Exception) {
             if (sequence != topicSearchSequence || generation != accountScopeGeneration) return
-            _topicSearch.update { it.copy(loading = false, loadingMore = false, error = error.message ?: "帖内搜索失败") }
+            _topicSearch.update { it.copy(loading = false, loadingMore = false, error = UserErrorMessage.format(error, "帖内搜索失败")) }
             handlePageFailure(error) { updateTopicSearch(current.query, current.order) }
         }
     }
@@ -8168,7 +8173,7 @@ fun openTopicSearch(topicId: Long, title: String) {
             } catch (error: CancellationException) { throw error }
             catch (error: Exception) {
                 if (sequence != metadataSequence) return@launch
-                _metadataEditor.update { it.copy(loading = false, error = error.message ?: "编辑信息加载失败") }
+                _metadataEditor.update { it.copy(loading = false, error = UserErrorMessage.format(error, "编辑信息加载失败")) }
                 handlePageFailure(error) { if (userId == store.currentUserId()) openTopicMetadataEditor(topicId, preserveInput = true) }
             }
         }
@@ -8225,7 +8230,7 @@ fun openTopicSearch(topicId: Long, title: String) {
             } catch (error: CancellationException) { throw error }
             catch (error: Exception) {
                 if (sequence == metadataSequence && tagSequence == metadataTagSequence) _metadataEditor.update {
-                    it.copy(loadingTags = false, tagOptions = emptyList(), tagError = error.message ?: "标签加载失败，请重试")
+                    it.copy(loadingTags = false, tagOptions = emptyList(), tagError = UserErrorMessage.format(error, "标签加载失败，请重试"))
                 }
             }
         }
@@ -8277,7 +8282,7 @@ fun openTopicSearch(topicId: Long, title: String) {
                 }
                 _metadataEditor.update { it.copy(saving = false,
                     original = if (error is org.linuxdo.android.net.HttpStatusException && error.status == 403) original.copy(canEdit = false) else original,
-                    error = error.message ?: "保存失败，请核对后重试") }
+                    error = UserErrorMessage.format(error, "保存失败，请核对后重试")) }
                 handlePageFailure(error) { if (current.userId == store.currentUserId()) openTopicMetadataEditor(current.topicId, preserveInput = true) }
             } finally {
                 if (sequence == metadataSequence) _metadataEditor.update { it.copy(saving = false) }
@@ -8400,7 +8405,7 @@ fun openTopicSearch(topicId: Long, title: String) {
             throw error
         } catch (error: Exception) {
             if (sequence != searchSequence || accountGeneration != accountScopeGeneration) return
-            _search.update { it.copy(results = it.results.copy(initialLoading = false, loadingMore = false, error = error.message ?: "搜索失败")) }
+            _search.update { it.copy(results = it.results.copy(initialLoading = false, loadingMore = false, error = UserErrorMessage.format(error, "搜索失败"))) }
             handlePageFailure(error) { updateSearch(_search.value.query) }
         }
     }
@@ -8663,7 +8668,7 @@ fun openTopicSearch(topicId: Long, title: String) {
                 _state.update {
                     it.copy(
                         screen = Screen.List,
-                        latest = it.latest.copy(initialLoading = false, error = error.message),
+                        latest = it.latest.copy(initialLoading = false, error = UserErrorMessage.format(error, "加载失败，请稍后重试")),
                     )
                 }
             }
@@ -8900,7 +8905,7 @@ fun openTopicSearch(topicId: Long, title: String) {
             } catch (error: CancellationException) {
                 throw error
             } catch (error: Exception) {
-                _tags.update { it.copy(loading = false, error = error.message ?: "加载失败") }
+                _tags.update { it.copy(loading = false, error = UserErrorMessage.format(error, "加载失败")) }
                 handlePageFailure(error) { loadTags(retry = true) }
             }
         }
@@ -8941,7 +8946,7 @@ fun openTopicSearch(topicId: Long, title: String) {
                 throw error
             } catch (error: Exception) {
                 if (!isActive || accountGeneration != accountScopeGeneration) return@launch
-                _tagTopics.update { it + (tag to previous.copy(initialLoading = false, error = error.message ?: "加载失败")) }
+                _tagTopics.update { it + (tag to previous.copy(initialLoading = false, error = UserErrorMessage.format(error, "加载失败"))) }
                 handlePageFailure(error) { loadTagTopics(tag, refresh = !more, more = more) }
             } finally {
                 if (isActive && accountGeneration == accountScopeGeneration) _tagTopics.update { states -> states[tag]?.let {
@@ -9407,7 +9412,7 @@ fun openTopicSearch(topicId: Long, title: String) {
                     it.copy(
                         switching = false,
                         error = if (rollbackError == null) {
-                            failureMessage ?: error.message ?: "账号切换失败"
+                            failureMessage ?: UserErrorMessage.format(error, "账号切换失败")
                         } else {
                             "账号恢复尚未完成，请稍后重试"
                         },
@@ -9813,7 +9818,7 @@ fun openTopicSearch(topicId: Long, title: String) {
             } catch (error: CancellationException) {
                 throw error
             } catch (error: Exception) {
-                _accounts.update { it.copy(error = "退出未完成：${error.message}") }
+                _accounts.update { it.copy(error = "退出未完成：${UserErrorMessage.format(error, "请稍后重试")}") }
                 runCatching { store.requireSessionRecovery() }
                     .onFailure { diagnostics.log("退出恢复标记暂未落盘，保持当前请求暂停") }
                 sessionStorageNeedsRetry = true
@@ -10241,21 +10246,21 @@ fun openTopicSearch(topicId: Long, title: String) {
         } catch (error: RateLimitException) {
             if (!isCurrent()) return
             diagnostics.log("列表受限流冷却保护，保留已有内容并提示重试: ${error.message}")
-            settleFeedLoading(feed, error.message ?: "请求过于频繁，请稍后重试", pageLoadFailed = page > 0,
+            settleFeedLoading(feed, UserErrorMessage.format(error, "请求过于频繁，请稍后重试"), pageLoadFailed = page > 0,
                 retryAtElapsedMs = SystemClock.elapsedRealtime() + error.retryAfterMs)
         } catch (error: HttpStatusException) {
             if (!isCurrent()) return
             val msg = if (error.status == 403 && _state.value.username == null) {
                 "请先登录账号后查看${feed.label}"
             } else {
-                error.message ?: "加载失败 (HTTP ${error.status})"
+                UserErrorMessage.format(error, "加载失败，请稍后重试")
             }
-            diagnostics.log("加载 ${feed.label} 失败: $msg")
+            diagnostics.log("加载 ${feed.label} 失败: ${error.diagnosticMessage}")
             settleFeedLoading(feed, msg, pageLoadFailed = page > 0)
         } catch (error: Exception) {
             if (!isCurrent()) return
             diagnostics.log("加载 ${feed.label} 异常: ${error.message}")
-            settleFeedLoading(feed, error.message ?: error.javaClass.simpleName, pageLoadFailed = page > 0)
+            settleFeedLoading(feed, UserErrorMessage.format(error, "加载失败，请稍后重试"), pageLoadFailed = page > 0)
         } finally {
             if (loadingFeeds.remove(feed, requestJob) && requestScopeGeneration == accountScopeGeneration) {
                 // 包括独立取消：没有在途任务时，不能留下阻止下一次加载的转圈状态。

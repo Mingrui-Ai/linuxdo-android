@@ -448,7 +448,7 @@ fun UserProfileScreen(
         } catch (error: kotlinx.coroutines.CancellationException) {
             throw error
         } catch (e: Exception) {
-            profileError = e.message ?: "资料加载失败"
+            profileError = org.linuxdo.android.net.UserErrorMessage.format(e, "资料加载失败")
         } finally {
             profileCompleted = generation
         }
@@ -464,7 +464,7 @@ fun UserProfileScreen(
         } catch (e: kotlinx.coroutines.CancellationException) {
             throw e
         } catch (e: Exception) {
-            summaryError = e.message ?: "加载总结失败"
+            summaryError = org.linuxdo.android.net.UserErrorMessage.format(e, "加载总结失败")
         } finally {
             summaryLoading = false
             summaryCompleted = generation
@@ -519,7 +519,7 @@ fun UserProfileScreen(
         } catch (e: kotlinx.coroutines.CancellationException) {
             throw e
         } catch (e: Exception) {
-            error = e.message ?: "加载数据失败"
+            error = org.linuxdo.android.net.UserErrorMessage.format(e, "加载数据失败")
         } finally {
             loading = false
             contentCompleted = generation
@@ -568,7 +568,7 @@ fun UserProfileScreen(
             } catch (e: kotlinx.coroutines.CancellationException) {
                 throw e
             } catch (e: Exception) {
-                error = e.message ?: "加载更多失败"
+                error = org.linuxdo.android.net.UserErrorMessage.format(e, "加载更多失败")
             } finally {
                 loading = false
             }
@@ -621,7 +621,11 @@ fun UserProfileScreen(
                         } catch (cancelled: kotlinx.coroutines.CancellationException) {
                             throw cancelled
                         } catch (failure: Exception) {
-                            Toast.makeText(context, failure.message ?: "关注操作失败", Toast.LENGTH_SHORT).show()
+                            Toast.makeText(
+                                context,
+                                org.linuxdo.android.net.UserErrorMessage.format(failure, "关注操作失败"),
+                                Toast.LENGTH_SHORT,
+                            ).show()
                         } finally { followUpdating = false }
                     }
                 }

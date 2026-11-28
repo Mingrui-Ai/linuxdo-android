@@ -3407,9 +3407,16 @@ class TopicRepository(
                 if (result.status == 403) {
                     notify403OrChallenged("mutate $path 403")
                 }
-                val message = if (result.status >= 500) "结果未确认，请刷新楼层后检查提交状态"
-                    else parseErrorBody(result.body).serverErrorMessage() ?: "操作未提交，请稍后重试"
-                throw HttpStatusException(result.status, message)
+                val message = if (result.status >= 500) {
+                    "结果未确认，请刷新楼层后检查提交状态"
+                } else {
+                    org.linuxdo.android.net.UserErrorMessage.fromHttpBody(
+                        result.status,
+                        result.body,
+                        fallback = "操作未提交，请稍后重试",
+                    )
+                }
+                throw HttpStatusException(result.status, message, diagnosticDetail = result.body.take(160))
             }
             return result.body
         }
@@ -5286,7 +5293,11 @@ class TopicRepository(
                 json.parseToJsonElement(loginResult.body).jsonObject
             } catch (e: Exception) {
                 if (loginResult.status in 200..299) return@withLock true
-                throw HttpStatusException(loginResult.status, "HTTP ${loginResult.status}: ${loginResult.body.take(150)}")
+                throw HttpStatusException(
+                    loginResult.status,
+                    org.linuxdo.android.net.UserErrorMessage.fromHttpBody(loginResult.status, loginResult.body, fallback = "登录失败，请稍后重试"),
+                    diagnosticDetail = loginResult.body.take(150),
+                )
             }
             val error = responseObj["error"]?.jsonPrimitive?.contentOrNull
                 ?: responseObj["message"]?.jsonPrimitive?.contentOrNull
@@ -5324,10 +5335,15 @@ class TopicRepository(
                 throw LoginRejectedException(error)
             }
             if (loginResult.status !in 200..299) {
-                throw HttpStatusException(loginResult.status, "HTTP ${loginResult.status}: ${loginResult.body.take(150)}")
+                throw HttpStatusException(
+                    loginResult.status,
+                    org.linuxdo.android.net.UserErrorMessage.fromHttpBody(loginResult.status, loginResult.body, fallback = "登录失败，请稍后重试"),
+                    diagnosticDetail = loginResult.body.take(150),
+                )
             }
             if (responseObj["user"] == null) {
-                throw LoginRejectedException("登录未返回有效用户凭据，响应: ${loginResult.body.take(150)}")
+                diagnostics.log("登录响应缺少 user 字段: ${loginResult.body.take(150)}")
+                throw LoginRejectedException("登录未返回有效用户凭据，请稍后重试")
             }
             true
         }
@@ -5376,7 +5392,13 @@ class TopicRepository(
             }
             if (result.status == 403) throw RiskControlException(403, "发送登录邮件触发风控 (403)")
             if (result.status == 0) throw NetworkTimeoutException()
-            if (result.status !in 200..299) throw HttpStatusException(result.status, result.body.take(120))
+            if (result.status !in 200..299) {
+                throw HttpStatusException(
+                    result.status,
+                    org.linuxdo.android.net.UserErrorMessage.fromHttpBody(result.status, result.body, fallback = "发送登录邮件失败，请稍后重试"),
+                    diagnosticDetail = result.body.take(160),
+                )
+            }
         }
     }
 
@@ -5944,7 +5966,11 @@ class TopicRepository(
                         }
                         result.status == 403 -> {
                             if (isMainSite) notify403OrChallenged("request $path 403")
-                            throw HttpStatusException(result.status, result.body.take(120))
+                            throw HttpStatusException(
+                                result.status,
+                                org.linuxdo.android.net.UserErrorMessage.fromHttpBody(result.status, result.body),
+                                diagnosticDetail = result.body.take(160),
+                            )
                         }
                         result.status in 200..299 -> {
                             if (isMainSite) onMainSiteGetSucceeded(ticket, sessionStore)
@@ -5957,7 +5983,12 @@ class TopicRepository(
                             delay(BACKOFF_BASE_MS shl attempt)
                             attempt++
                         }
-                        else -> throw HttpStatusException(result.status, result.body.take(120), result.retryAfterSeconds)
+                        else -> throw HttpStatusException(
+                            result.status,
+                            org.linuxdo.android.net.UserErrorMessage.fromHttpBody(result.status, result.body),
+                            result.retryAfterSeconds,
+                            diagnosticDetail = result.body.take(160),
+                        )
                     }
                 } finally {
                     if (!probeSettled) {
