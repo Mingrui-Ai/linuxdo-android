@@ -221,6 +221,16 @@ enum class ApiQuotaPool(
             automaticBackoff.restore(SystemClock.elapsedRealtime(), remaining)
         }
         fun automaticBackoffMs(): Long = automaticBackoff.remaining(SystemClock.elapsedRealtime())
+
+        @Synchronized
+        fun deferAutomaticRequestsFor(waitMs: Long) {
+            automaticBackoff.restore(SystemClock.elapsedRealtime(), waitMs)
+            saveAutomaticDeadline()
+        }
+
+        private fun saveAutomaticDeadline() {
+            backoffPreferences?.edit()?.putLong(AUTOMATIC_DEADLINE, System.currentTimeMillis() + automaticBackoffMs())?.apply()
+        }
         private val foregroundReads = java.util.concurrent.atomic.AtomicInteger()
         fun automaticReadDelayMs(): Long {
             val quietMs = if (foregroundReads.get() > 0) FOREGROUND_QUIET_MS
@@ -258,7 +268,7 @@ enum class ApiQuotaPool(
         @Synchronized
         fun onServerRateLimited(globalCooldownMs: Long, cfChallenge: Boolean) {
             automaticBackoff.record(SystemClock.elapsedRealtime(), globalCooldownMs)
-            backoffPreferences?.edit()?.putLong(AUTOMATIC_DEADLINE, System.currentTimeMillis() + automaticBackoffMs())?.apply()
+            saveAutomaticDeadline()
             entries.forEach { it.penalize(globalCooldownMs, cfChallenge) }
         }
     }

@@ -209,7 +209,7 @@ class NotificationKeepAliveService : Service() {
                     delay(20_000L)
                     val store = LinuxDoPushSdk.getConfig().sessionProvider(this@NotificationKeepAliveService)
                     store.setPendingTestReplayTag("浅睡20s实测")
-                    NotificationWorker.pollOnceWithLagRetry(this@NotificationKeepAliveService, store)
+                    NotificationWorker.pollAfterWake(this@NotificationKeepAliveService, store)
                 } finally {
                     releaseWakeLockSafely()
                 }
@@ -242,7 +242,7 @@ class NotificationKeepAliveService : Service() {
                     delay(15_000L)
                     val store = LinuxDoPushSdk.getConfig().sessionProvider(this@NotificationKeepAliveService)
                     store.setPendingTestReplayTag("退回桌面15s实测")
-                    NotificationWorker.pollOnceWithLagRetry(this@NotificationKeepAliveService, store)
+                    NotificationWorker.pollAfterWake(this@NotificationKeepAliveService, store)
                 } finally {
                     releaseWakeLockSafely()
                 }
@@ -296,7 +296,7 @@ class NotificationKeepAliveService : Service() {
                 }
                 if (store.isBackgroundNotificationEnabled() && store.hasSession()) {
                     val completed = withTimeoutOrNull(QUICK_POLL_TIMEOUT_MS) {
-                        NotificationWorker.pollOnceWithLagRetry(this@NotificationKeepAliveService, store)
+                        NotificationWorker.pollAfterWake(this@NotificationKeepAliveService, store)
                     }
                     if (completed == null) {
                         logService("亮屏抢跑超时 ${QUICK_POLL_TIMEOUT_MS / 1000}s，已放弃本轮")
@@ -327,7 +327,7 @@ class NotificationKeepAliveService : Service() {
 
                 acquireShortWakeLock(12_000L)
                 try {
-                    NotificationWorker.pollOnceWithLagRetry(this@NotificationKeepAliveService, currentStore)
+                    NotificationWorker.pollAfterWake(this@NotificationKeepAliveService, currentStore)
                 } finally {
                     releaseWakeLockSafely()
                 }
@@ -383,7 +383,7 @@ class NotificationKeepAliveService : Service() {
             try {
                 val store = LinuxDoPushSdk.getConfig().sessionProvider(this@NotificationKeepAliveService)
                 if (store.isBackgroundNotificationEnabled() && store.hasSession()) {
-                    NotificationWorker.pollOnceWithLagRetry(this@NotificationKeepAliveService, store)
+                    NotificationWorker.pollAfterWake(this@NotificationKeepAliveService, store)
                 }
             } finally {
                 if (!isScreenInteractive(this@NotificationKeepAliveService)) {
@@ -690,7 +690,7 @@ class DozeAlarmReceiver : BroadcastReceiver() {
 
         CoroutineScope(SupervisorJob() + Dispatchers.IO).launch {
             try {
-                NotificationWorker.pollOnceWithLagRetry(appContext, sessionStore)
+                NotificationWorker.pollAfterWake(appContext, sessionStore)
             } finally {
                 NotificationHelper.logDiagnostic(appContext, "alarm.finished", "[闹钟] 本次检查结束 耗时=${(SystemClock.elapsedRealtime() - startedAt) / 1000}s", true)
                 runCatching {
@@ -728,7 +728,7 @@ class DozeAlarmReceiver : BroadcastReceiver() {
         }
         CoroutineScope(SupervisorJob() + Dispatchers.IO).launch {
             try {
-                NotificationWorker.pollOnceWithLagRetry(appContext, sessionStore)
+                NotificationWorker.pollAfterWake(appContext, sessionStore)
             } finally {
                 runCatching {
                     if (wakeLock?.isHeld == true) wakeLock.release()

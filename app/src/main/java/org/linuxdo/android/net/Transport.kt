@@ -1,6 +1,7 @@
 package org.linuxdo.android.net
 
 import org.linuxdo.android.Config
+import java.io.IOException
 
 enum class NetworkPath(val label: String) {
     OKHTTP("A: OkHttp"),
@@ -18,6 +19,7 @@ data class TransportResult(
     val sentSessionTokenHash: String? = null,
     /** 响应抵达时的系统单调时钟（elapsedRealtime）；0 表示未采集。 */
     val receivedAtElapsedMs: Long = 0L,
+    val connectionFailure: IOException? = null,
 )
 
 interface Transport {
@@ -102,10 +104,17 @@ class NeedsInteractiveVerification(
 ) : Exception(message)
 
 /**
- * 请求压根没到服务器(建连失败、DNS 失败、读超时)。
- * Transport 把这类失败统一表示成 status = 0,上层据此换成用户能看懂的提示。
+ * 客户端没有取得完整的 HTTP 响应（如 DNS、TLS 或读超时）；这不表示服务端一定没收到请求。
+ * 保留旧异常类型供调用方识别网络失败，提示和 cause 则区分具体原因。
  */
-class NetworkTimeoutException : Exception("连接超时，请检查网络")
+class NetworkTimeoutException(cause: IOException? = null) : Exception(
+    when (cause) {
+        null -> "连接超时，请检查网络"
+        is javax.net.ssl.SSLException, is java.net.SocketTimeoutException,
+        is java.net.UnknownHostException, is java.net.SocketException -> UserErrorMessage.format(cause)
+        else -> "网络连接中断，请稍后重试"
+    }, cause,
+)
 
 /**
  * 服务端明确拒绝了登录(token 失效、待审核、二次验证不通过等)。
@@ -197,6 +206,14 @@ class RiskControlException(
     override val message: String = "触发安全风控 (403)",
 ) : RuntimeException(message)
 object HttpHeaderUtils {
+    /** 只有限流或暂不可用的响应缺少有效等待头时才读取错误正文。 */
+    fun responseRetryAfterSeconds(response: okhttp3.Response, errorBody: () -> String?): Long? {
+        val header = response.header("Retry-After")
+        if (response.code != 429 && response.code != 503) return parseRetryAfter(header)
+        return extractRetryAfterSeconds(header, response.header("X-RateLimit-Reset") ?: response.header("RateLimit-Reset"))
+            ?: parseRetryAfterFromBody(errorBody())
+    }
+
     /** 无有效服务端提示时使用本地默认值；先限制秒数，避免毫秒换算溢出。 */
     fun rateLimitCooldownMs(retryAfterSeconds: Long?, defaultMs: Long): Long =
         retryAfterSeconds?.takeIf { it > 0L }?.coerceIn(1L, 86_400L)?.times(1_000L) ?: defaultMs

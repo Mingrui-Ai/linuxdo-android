@@ -171,6 +171,25 @@ cd linuxdo-android
 
 在最终安装的 APK 上，8 个本地传输用例全部通过，涵盖写入、上传、带挑战标记的 429、90 秒冷却下的并发请求、回应额度、正常成功及账户读取。网络使用替身，测试未向论坛提交写操作。上述数字只覆盖指定接口和观测时段。
 
+后台通知还有一条独立的重试路径：旧版在普通 403、没有等待时间的 503 或连接失败后，会在 1.5 秒后再拉取一次。现在每次唤醒只允许一次通知拉取，拉取前检查未读额度；仅在成功处理通知后才检查是否需要补拉聊天。收到 429 或 503 时，后台通知会读取服务端的等待时间；普通首页读取遇到带等待时间的 503 也会立即结束本次请求，并暂停主站自动读取。原生连接在收到 HTTP 响应前失败时，界面会区分 TLS 握手、DNS 和超时；`ech_config_missing` 表示未取得 ECH 配置，本身不能证明网站返回了限流。
+
+在同一台模拟器上注入 `503 / Retry-After: 180`：连续唤醒两次，通知请求由 4 次降至 1 次；单次首页加载由 3 次降至 1 次。后台通知也分别识别了 429 正文的 180 秒和 `RateLimit-Reset` 头的 90 秒。随后连接真实站点，01:56:10 冷启动首页仍收到一次带 `cf-mitigated: challenge` 的 429；保持等待，01:57:45 手动重试一次返回 200，页面重新显示帖子。客户端可以减少重复请求，站点仍可独立限流。
+
+<details>
+<summary>在专用 Android 模拟器复测通知与网络错误（12 项）</summary>
+
+在仓库根目录运行下面的 PowerShell 命令。测试设备应当联网；测试进程使用本地 OkHttp 拦截器提供响应，各组独立启动，不需要登录或访问论坛。`-r` 保留已有测试版的数据。
+
+```powershell
+$serial = '你的测试模拟器序列号'
+.\gradlew.bat -I qa/network-poll/tests.init.gradle :app:assembleDebug :app:assembleDebugAndroidTest
+adb -s $serial install -r app/build/outputs/apk/debug/app-debug.apk
+adb -s $serial install -r app/build/outputs/apk/androidTest/debug/app-debug-androidTest.apk
+.\qa\network-poll\check.ps1 -DeviceSerial $serial
+```
+
+</details>
+
 ## 📜 授权与致谢
 
 原作者 **xuemk** 已于 2026 年 11 月 23 日[明确授权非商业修改、公开维护与免费分发衍生 APK](https://github.com/xuemk/linuxdo-android/issues/15#issuecomment-7101351472)。本项目遵循 [LinuxDo Android Non-Commercial License](./LICENSE)（非商业、无广告、保留原作者署名与独立包名/签名/图标），第三方依赖遵循各自许可证。

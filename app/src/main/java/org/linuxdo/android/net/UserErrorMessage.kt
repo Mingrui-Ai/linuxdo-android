@@ -69,7 +69,7 @@ object UserErrorMessage {
                 val sec = ((error.retryAfterMs + 999L) / 1_000L).coerceAtLeast(1L)
                 "请求过于频繁，请在 ${sec} 秒后重试"
             }
-            is NetworkTimeoutException -> "连接超时，请检查网络"
+            is NetworkTimeoutException -> error.message ?: fallback
             is NeedsInteractiveVerification -> "安全验证已过期，请完成人机验证"
             is LoginRejectedException -> cleanUserText(error.message) ?: "登录失败，请检查账号信息后重试"
             is SecondFactorRequiredException -> cleanUserText(error.message) ?: "该账号已开启两步验证，请输入验证码"
@@ -81,7 +81,9 @@ object UserErrorMessage {
             is SocketTimeoutException -> "连接超时，请检查网络后重试"
             is UnknownHostException -> "无法连接到服务器，请检查网络或 DNS 设置"
             is ConnectException -> "无法连接到服务器，请检查网络后重试"
-            is SSLException -> "安全连接建立失败，请检查网络或切换网络模式"
+            is SSLException -> if (error.message?.contains("ech_config_missing", ignoreCase = true) == true) {
+                "未能获取 ECH 配置，安全连接建立失败，请稍后重试"
+            } else "安全连接建立失败，请检查网络或切换网络模式"
             is SocketException -> "网络连接已中断，请稍后重试"
             is SerializationException -> "服务器返回的数据格式异常，请稍后重试"
             is IOException -> formatIoMessage(error.message, fallback)

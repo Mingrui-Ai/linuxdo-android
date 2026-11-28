@@ -457,8 +457,14 @@ class TopicRepository(
             return ex.retryAfterMs
         }
         if (challenged && status in listOf(403, 503)) {
-            ApiQuotaPool.onServerRateLimited(60_000L, cfChallenge = true)
-            return 60_000L
+            val waitMs = maxOf(60_000L, HttpHeaderUtils.rateLimitCooldownMs(retryAfterSeconds, 0L))
+            ApiQuotaPool.onServerRateLimited(waitMs, cfChallenge = true)
+            return waitMs
+        }
+        if (status == 503 && (retryAfterSeconds ?: 0L) > 0L) {
+            val waitMs = HttpHeaderUtils.rateLimitCooldownMs(retryAfterSeconds, 0L)
+            ApiQuotaPool.deferAutomaticRequestsFor(waitMs)
+            return waitMs
         }
         return 0L
     }
@@ -3084,6 +3090,7 @@ class TopicRepository(
             }
             if (result.status == 0) {
                 // 路径 B 的"不支持上传"也走这里,它把原因放在 body 里。
+                result.connectionFailure?.let { throw NetworkTimeoutException(it) }
                 throw result.body.takeIf { it.isNotBlank() && !it.startsWith("java.") }
                     ?.let { LoginRejectedException(it) } ?: NetworkTimeoutException()
             }
@@ -3289,7 +3296,7 @@ class TopicRepository(
                 notify403OrChallenged("mutate $path challenged")
                 throw NeedsInteractiveVerification("安全验证已过期，请完成人机验证", failedClearanceFp = result.sentClearanceFp)
             }
-            if (result.status == 0) throw NetworkTimeoutException()
+            if (result.status == 0) throw NetworkTimeoutException(result.connectionFailure)
             if ((result.status == 403 || result.status == 422) && !csrfRefreshed &&
                 (result.body.contains("BAD CSRF", ignoreCase = true) || result.body.contains("csrf", ignoreCase = true))
             ) {
@@ -5210,7 +5217,7 @@ class TopicRepository(
                 throw NeedsInteractiveVerification("登录请求被 Cloudflare 拦截 (403 挑战)")
             }
             if (loginResult.status == 403) throw RiskControlException(403, "登录请求触发风控 (403)")
-            if (loginResult.status == 0) throw NetworkTimeoutException()
+            if (loginResult.status == 0) throw NetworkTimeoutException(loginResult.connectionFailure)
             val responseObj = try {
                 json.parseToJsonElement(loginResult.body).jsonObject
             } catch (e: Exception) {
@@ -5313,7 +5320,7 @@ class TopicRepository(
                 throw HttpStatusException(429, "发送登录邮件过于频繁，请稍后再试", result.retryAfterSeconds)
             }
             if (result.status == 403) throw RiskControlException(403, "发送登录邮件触发风控 (403)")
-            if (result.status == 0) throw NetworkTimeoutException()
+            if (result.status == 0) throw NetworkTimeoutException(result.connectionFailure)
             if (result.status !in 200..299) {
                 throw HttpStatusException(
                     result.status,
@@ -5356,7 +5363,7 @@ class TopicRepository(
             throw HttpStatusException(429, "获取凭据过于频繁，请稍后再试", result.retryAfterSeconds)
         }
         if (result.status == 403) throw RiskControlException(403, "获取登录凭证触发风控 (403)")
-        if (result.status == 0) throw NetworkTimeoutException()
+        if (result.status == 0) throw NetworkTimeoutException(result.connectionFailure)
         if (result.status !in 200..299) throw HttpStatusException(result.status, "无法获取 CSRF token")
         return json.parseToJsonElement(result.body).jsonObject["csrf"]
             ?.jsonPrimitive?.contentOrNull
@@ -5418,7 +5425,7 @@ class TopicRepository(
                 throw NeedsInteractiveVerification("邮件登录请求被 Cloudflare 拦截")
             }
             if (result.status == 403) throw RiskControlException(403, "验证码登录触发风控 (403)")
-            if (result.status == 0) throw NetworkTimeoutException()
+            if (result.status == 0) throw NetworkTimeoutException(result.connectionFailure)
 
         val body = runCatching { json.parseToJsonElement(result.body).jsonObject }.getOrNull()
         val serverError = body?.get("error")?.jsonPrimitive?.contentOrNull?.takeIf { it.isNotBlank() }
@@ -5837,6 +5844,10 @@ class TopicRepository(
                     }
                     val receivedAt = result.receivedAtElapsedMs.takeIf { it > 0L } ?: SystemClock.elapsedRealtime()
                     diagnostics.recordStatus(transport.name, result.status, path)
+                    if (result.status == 503 && (result.retryAfterSeconds ?: 0L) > 0L) {
+                        if (isMainSite) ApiQuotaPool.deferAutomaticRequestsFor(HttpHeaderUtils.rateLimitCooldownMs(result.retryAfterSeconds, 0L))
+                        throw HttpStatusException(503, "站点服务暂不可用，请在 ${result.retryAfterSeconds} 秒后重试", result.retryAfterSeconds)
+                    }
                     if (!isMainSite && result.status == 429) {
                         val challenged = result.challenged || ChallengeDetector.isChallenge429(result.status, result.cfMitigated, result.body)
                         if (challenged) noteRequestClearanceChallenged(result.sentClearanceFp, path)
@@ -5900,8 +5911,8 @@ class TopicRepository(
                             return result.body
                         }
                         // 连不上服务器时重试只是让用户多等十几秒,直接报错;5xx 才是值得重试的服务端抖动。
-                        result.status == 0 -> throw NetworkTimeoutException()
-                        retryAllowed && result.status >= 500 && attempt < MAX_RETRIES -> {
+                        result.status == 0 -> throw NetworkTimeoutException(result.connectionFailure)
+                        retryAllowed && result.status >= 500 && (result.retryAfterSeconds ?: 0L) <= 0L && attempt < MAX_RETRIES -> {
                             delay(BACKOFF_BASE_MS shl attempt)
                             attempt++
                         }

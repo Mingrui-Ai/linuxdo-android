@@ -1,0 +1,10 @@
+// Opt in with -I qa/network-poll/tests.init.gradle. The app APK is unchanged.
+gradle.beforeProject { project ->
+    if (project.path == ':app') {
+        project.pluginManager.withPlugin('com.android.application') {
+            def android = project.extensions.getByName('android')
+            android.defaultConfig.testInstrumentationRunner = 'localqa.PollChecks'
+            android.sourceSets.getByName('androidTest').java.srcDir(new File(project.rootDir, 'qa/network-poll/src'))
+        }
+    }
+}

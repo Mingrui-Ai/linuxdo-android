@@ -154,13 +154,12 @@ class OkHttpTransport(
         } catch (cancelled: CancellationException) {
             throw cancelled
         } catch (error: IOException) {
-            // status=0 会被上层统一换成"连接超时"，真实异常只在这里还看得到。
             val cause = error.cause?.let { " ← ${it.javaClass.simpleName}: ${it.message.orEmpty()}" }.orEmpty()
             diagnostics.log(
                 "[A: OkHttp] ${request.method} ${request.url.encodedPath} 网络失败: " +
                     "${error.javaClass.simpleName}: ${error.message.orEmpty()}$cause | 链路 $label",
             )
-            TransportResult(0, error.message.orEmpty(), false)
+            TransportResult(0, error.message.orEmpty(), false, connectionFailure = error)
         }
     }
 
@@ -189,15 +188,7 @@ class OkHttpTransport(
                         response.use { resp ->
                             val text = resp.body?.string().orEmpty()
                             val mitigated = resp.header("cf-mitigated")
-                            val retryAfter = if (resp.code == 429 || resp.code == 503) {
-                                HttpHeaderUtils.extractRetryAfterSeconds(
-                                    retryAfterHeader = resp.header("Retry-After"),
-                                    resetHeader = resp.header("x-ratelimit-reset"),
-                                    body = text,
-                                )
-                            } else {
-                                HttpHeaderUtils.parseRetryAfter(resp.header("Retry-After"))
-                            }
+                            val retryAfter = HttpHeaderUtils.responseRetryAfterSeconds(resp) { text }
                             val transportResult = TransportResult(
                                 status = resp.code,
                                 body = text,

@@ -40,7 +40,7 @@ class NotificationWorker(
         if (!session.isBackgroundNotificationEnabled() || !session.hasSession()) {
             return@withContext Result.success()
         }
-        pollOnceWithLagRetry(context, session)
+        pollAfterWake(context, session)
         Result.success()
     }
 
@@ -117,7 +117,9 @@ class NotificationWorker(
         ): Boolean {
             val cfMitigated = response.header("cf-mitigated")
             val challenged = cfMitigated?.contains("challenge", ignoreCase = true) == true
-            val retryAfter = HttpHeaderUtils.parseRetryAfter(response.header("Retry-After"))
+            val retryAfter = HttpHeaderUtils.responseRetryAfterSeconds(response) {
+                try { response.peekBody(4_096L).string() } catch (_: java.io.IOException) { null }
+            }
             val sentClearanceFp = response.request.tag(org.linuxdo.android.net.ActiveSessionRequest::class.java)?.sentClearanceFp ?: "-"
             val path = response.request.url.encodedPath
             val repoCooldownMs = sessionStore.recordBackgroundPollResponse(
@@ -127,7 +129,8 @@ class NotificationWorker(
                 retryAfterSeconds = retryAfter,
                 sentClearanceFp = sentClearanceFp,
             )
-            if (response.code != 429 && !(challenged && response.code in listOf(403, 503))) return false
+            if (response.code != 429 && !(response.code == 503 && (retryAfter ?: 0L) > 0L) &&
+                !(challenged && response.code in listOf(403, 503))) return false
             val cooldownMs = maxOf(
                 repoCooldownMs,
                 HttpHeaderUtils.rateLimitCooldownMs(retryAfter, if (challenged) 60_000L else 10_000L),
@@ -183,7 +186,7 @@ class NotificationWorker(
             }.getOrDefault(false)
         }
 
-        suspend fun pollOnceWithLagRetry(context: Context, sessionStore: PushSessionProvider) = withContext(Dispatchers.IO) {
+        suspend fun pollAfterWake(context: Context, sessionStore: PushSessionProvider) = withContext(Dispatchers.IO) {
             if (!sessionStore.hasSession()) return@withContext
             val pollingSession = PollSessionProvider(sessionStore)
             if (shouldDeferPoll(context, pollingSession)) return@withContext
@@ -196,15 +199,10 @@ class NotificationWorker(
             if (waitCount > 0) {
                 NotificationHelper.logDiagnostic(context, "push.network.wait", "[后台拉取] 等待网络=${waitCount * 400}ms 联网能力=${isNetworkConnected(context)}")
             }
-            val firstOk = pollOnce(context, pollingSession, isFinalAttempt = false)
-            if (!firstOk) {
-                if (shouldDeferPoll(context, pollingSession)) return@withContext
-                NotificationHelper.logDiagnostic(context, "push.retry", "[后台拉取] 首次失败，1.5秒后重试一次")
-                delay(1500L)
-                if (shouldDeferPoll(context, pollingSession)) return@withContext
-                pollOnce(context, pollingSession, isFinalAttempt = true)
+            if (!isNetworkConnected(context)) return@withContext
+            if (pollOnce(context, pollingSession) && !shouldDeferPoll(context, pollingSession)) {
+                (context.applicationContext as? org.linuxdo.android.App)?.container?.chatRealtime?.pollWhenDisconnected()
             }
-            (context.applicationContext as? org.linuxdo.android.App)?.container?.chatRealtime?.pollWhenDisconnected()
         }
 
         private fun fetchPostExcerpt(
@@ -254,21 +252,19 @@ class NotificationWorker(
             }
         }
 
-        suspend fun pollOnce(
+        private suspend fun pollOnce(
             context: Context,
-            sessionStore: PushSessionProvider,
-            isFinalAttempt: Boolean = true,
+            sessionStore: PollSessionProvider,
         ): Boolean {
             if (!pollMutex.tryLock()) {
                 NotificationHelper.logDiagnostic(
                     context, "push.skip.concurrent",
                     "[后台拉取] 另一轮拉取正在执行中，跳过本次重入触发",
                 )
-                return true
+                return false
             }
             return try {
-                val pollingSession = sessionStore as? PollSessionProvider ?: PollSessionProvider(sessionStore)
-                pollOnceExclusive(context, pollingSession, isFinalAttempt)
+                pollOnceExclusive(context, sessionStore)
             } catch (ce: CancellationException) {
                 NotificationHelper.logDiagnostic(
                     context, "push.cancelled",
@@ -300,10 +296,9 @@ class NotificationWorker(
         private suspend fun pollOnceExclusive(
             context: Context,
             sessionStore: PollSessionProvider,
-            isFinalAttempt: Boolean,
         ): Boolean {
-            if (!sessionStore.hasSession()) return true
-            if (shouldDeferPoll(context, sessionStore)) return true
+            if (!sessionStore.hasSession()) return false
+            if (shouldDeferPoll(context, sessionStore)) return false
             val config = LinuxDoPushSdk.getConfig()
             val httpClient = config.httpClientProvider()
             val baseUrl = config.baseUrl
@@ -318,24 +313,27 @@ class NotificationWorker(
                     .header("X-Requested-With", "XMLHttpRequest")
                     .build()
 
-                if (shouldDeferPoll(context, sessionStore)) return true
-                if (!sessionStore.tryAcquireBackgroundPoll(includeUnreadQuota = !isFinalAttempt)) {
+                if (shouldDeferPoll(context, sessionStore)) return false
+                if (!sessionStore.tryAcquireBackgroundPoll(includeUnreadQuota = true)) {
                     NotificationHelper.logDiagnostic(context, "push.defer", "[后台拉取] 主站统一频率或限流冷却退让，暂缓本轮")
-                    return true
+                    return false
                 }
                 httpClient.newCall(request).execute().use { response ->
                     sessionStore.checkCurrent()
                     NotificationHelper.logDiagnostic(
                         context, "push.http",
-                        "[后台拉取] 通知接口 HTTP=${response.code} 最后尝试=$isFinalAttempt",
+                        "[后台拉取] 通知接口 HTTP=${response.code}",
                     )
-                    if (deferAfterResponse(context, sessionStore, response)) return true
+                    if (deferAfterResponse(context, sessionStore, response)) return false
                     if (response.code in listOf(401, 403, 503)) {
-                        val isLast = isFinalAttempt || response.code == 401
-                        val blockedTag = if (isLast) sessionStore.getPendingTestReplayTag() else null
+                        val blockedTag = sessionStore.getPendingTestReplayTag()
                         if (!blockedTag.isNullOrBlank()) {
                             sessionStore.setPendingTestReplayTag(null)
-                            val reason = if (response.code == 401) "（会话失效）" else "（安全挑战）"
+                            val reason = when (response.code) {
+                                401 -> "（会话失效）"
+                                403 -> "（访问被拒绝）"
+                                else -> "（服务暂不可用）"
+                            }
                             sessionStore.commit { NotificationHelper.showNotification(
                                 context = context,
                                 notificationId = System.currentTimeMillis() % 1_000_000L,
@@ -343,24 +341,24 @@ class NotificationWorker(
                                 content = "服务端返回 HTTP ${response.code}$reason",
                             ) }
                         }
-                        return response.code == 401
+                        return false
                     }
                     if (!response.isSuccessful) return false
                     val body = response.body?.string() ?: run {
                         NotificationHelper.logDiagnostic(context, "push.response", "[后台拉取] 响应体为空，未更新通知")
-                        return true
+                        return false
                     }
                     sessionStore.checkCurrent()
                     if (body.trimStart().startsWith("<")) {
                         NotificationHelper.logDiagnostic(context, "push.response", "[后台拉取] 收到HTML而非JSON，可能需要安全验证；未更新通知")
-                        return true
+                        return false
                     }
 
                     val keys = pushJsonKeys()
                     val root = JSONObject(body)
                     val notifications = root.optJSONArray(keys.notifications) ?: run {
                         NotificationHelper.logDiagnostic(context, "push.response", "[后台拉取] JSON缺少通知数组字段，未更新通知")
-                        return true
+                        return false
                     }
                     val notificationScope = sessionStore.getNotificationScope()
 
@@ -654,12 +652,12 @@ class NotificationWorker(
                 }
             } catch (error: PollSessionChangedException) {
                 NotificationHelper.logDiagnostic(context, "push.session.changed", "[后台拉取] 账号已切换，丢弃旧轮次结果")
-                return true
+                return false
             } catch (error: CancellationException) {
                 NotificationHelper.logDiagnostic(
                     context,
                     "push.cancelled",
-                    "[后台拉取] 本轮被取消 最后尝试=$isFinalAttempt " +
+                    "[后台拉取] 本轮被取消 " +
                         "耗时=${SystemClock.elapsedRealtime() - startedAt}ms，游标与去重状态未提交",
                     force = true,
                 )
