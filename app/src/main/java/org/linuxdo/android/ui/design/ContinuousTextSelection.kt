@@ -15,6 +15,7 @@ import androidx.compose.runtime.compositionLocalOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberUpdatedState
+import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.ClipEntry
 import androidx.compose.ui.platform.Clipboard
 import androidx.compose.ui.platform.LocalClipboard
@@ -28,6 +29,7 @@ private data object QuoteSelectionKey
 internal fun ContinuousTextSelection(
     onCopied: (String) -> Unit,
     onQuote: ((String) -> Unit)?,
+    modifier: Modifier = Modifier,
     content: @Composable () -> Unit,
 ) {
     if (LocalContinuousSelection.current) {
@@ -55,7 +57,7 @@ internal fun ContinuousTextSelection(
         LocalTextContextMenuToolbarProvider provides toolbarProvider,
         LocalTextContextMenuDropdownProvider provides dropdownProvider,
     ) {
-        SelectionContainer(content = content)
+        SelectionContainer(modifier = modifier, content = content)
     }
 }
 
