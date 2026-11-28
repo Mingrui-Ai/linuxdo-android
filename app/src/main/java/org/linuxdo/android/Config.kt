@@ -35,18 +35,7 @@ object Config {
     /** 静默更新遭遇风控/错误时的熔断退避时长（30分钟内不再静默重试） */
     const val CONNECT_SILENT_REFRESH_BACKOFF_MS = 30 * 60 * 1_000L
 
-    /**
-     * 后台静默预热升级进度与积分的等待时长。冷启动时首次预热不早于进程启动后 2 分钟：
-     * 首屏列表、头像、未读、CSRF 都挤在开头，此时再打 connect / credit 极易被 CF 质询。
-     * 账号切换等后续触发至少再等这么久。
-     */
-    const val CONNECT_IDLE_WARMUP_DELAY_MS = 30_000L
-    const val CONNECT_FIRST_WARMUP_AFTER_START_MS = 2 * 60 * 1_000L
-
-    /** 本地还没有升级进度 / 积分缓存时，进程启动后多久内不允许手动拉取（交给后台首轮预热） */
-    const val CONNECT_FIRST_FETCH_LOCK_MS = 10 * 60 * 1_000L
-
-    const val UNREAD_POLL_INTERVAL_MS = 20_000L
+    const val UNREAD_POLL_INTERVAL_MS = 60_000L
 
     /** TCP/TLS 建连超时。连不上服务器时要尽快报错,而不是让用户干等。 */
     const val CONNECT_TIMEOUT_MS = 10_000L

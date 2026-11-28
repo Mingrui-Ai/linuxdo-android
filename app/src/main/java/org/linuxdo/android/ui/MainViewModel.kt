@@ -952,7 +952,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         val queuedAt = SystemClock.elapsedRealtime()
         return ldcFetchGate.withLock {
             checkSession()
-            // 同一轮已排队请求共享成功或失败，避免预热失败后手动请求紧接着重复 OAuth。
+            // 同一轮已排队请求共享成功或失败，避免多个入口紧接着重复授权。
             ldcLastAttempt?.takeIf { it.first >= queuedAt }?.let { return@withLock it.second.getOrThrow() }
             try {
                 val info = readSiteWithAuthorization(
@@ -990,143 +990,6 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         return true
     }
 
-    private fun sinceProcessStartMs(): Long =
-        SystemClock.elapsedRealtime() - android.os.Process.getStartElapsedRealtime()
-
-    /**
-     * 距离当前登录会话进入首页的时长：新安装用户在登录页填写账号密码与人机验证往往耗时 1~2 分钟，
-     * 若只按进程启动时间计时，刚登录进首页 30 秒就会立刻触发子站连环 OAuth 预热，正撞在首屏请求峰值上。
-     */
-    private fun sinceSessionStartMs(): Long {
-        val base = maxOf(android.os.Process.getStartElapsedRealtime(), lastAuthenticatedSeedAt)
-        return (SystemClock.elapsedRealtime() - base).coerceAtLeast(0L)
-    }
-
-    /**
-     * 本地无缓存时的首拉锁：进程启动后 [Config.CONNECT_FIRST_FETCH_LOCK_MS] 内不允许手动拉取，
-     * 交给 [scheduleIdleConnectWarmup] 在启动 2 分钟后错峰取第一份。返回剩余锁定毫秒，0 表示放行。
-     */
-    private fun connectFirstFetchLockRemainingMs(hasCache: Boolean): Long {
-        if (hasCache) return 0L
-        return (Config.CONNECT_FIRST_FETCH_LOCK_MS - sinceProcessStartMs()).coerceAtLeast(0L)
-    }
-
-    private fun connectFirstFetchLockMessage(remainingMs: Long): String {
-        val minutes = ((remainingMs + 59_999L) / 60_000L).coerceAtLeast(1L)
-        return "首次获取正在错峰，后台会尝试获取；约 $minutes 分钟后可手动刷新"
-    }
-
-    private var idleWarmupJob: Job? = null
-
-    private fun scheduleIdleConnectWarmup() {
-        if (idleWarmupJob?.isActive == true) return
-        val username = _state.value.username ?: return
-        val checkSession = connectSessionCheck(username)
-        idleWarmupJob = viewModelScope.launch {
-            // 冷启动/刚登录首轮不早于进首页 2 分钟，彻底避开首屏列表、分类、标签与头像请求峰值；之后的触发至少再等 30 秒
-            delay(maxOf(
-                Config.CONNECT_IDLE_WARMUP_DELAY_MS,
-                Config.CONNECT_FIRST_WARMUP_AFTER_START_MS - sinceSessionStartMs(),
-            ))
-            suspend fun awaitQuietWindow() {
-                checkSession()
-                while (!store.isAppInForeground() || store.isClearanceRecoveryInProgress() || repository.isRateLimitCoolingDown()) {
-                    delay(maxOf(5_000L, TopicRepository.rateLimitRemainingMs()))
-                    checkSession()
-                }
-            }
-            repeat(2) { round ->
-                awaitQuietWindow()
-                var retryAfterMs = 0L
-                var didNetworkCall = false
-                val now = System.currentTimeMillis()
-                val cachedTrust = repository.getCachedTrustReport(username)
-                if (cachedTrust == null || now - cachedTrust.second >= Config.TRUST_REPORT_CACHE_TTL_MS) {
-                    if (now >= connectSilentBackoffUntil) {
-                        didNetworkCall = true
-                        try {
-                            val fresh = repository.readAfterShortCooldown { checkSession(); repository.fetchTrustReport(present = false) }
-                            checkSession()
-                            if (fresh != null) {
-                                val updateTime = System.currentTimeMillis()
-                                repository.saveCachedTrustReport(username, fresh)
-                                _trustReport.update { it.copy(report = fresh, cachedAt = updateTime, error = null) }
-                            }
-                        } catch (e: CancellationException) {
-                            throw e
-                        } catch (e: org.linuxdo.android.net.RateLimitException) {
-                            checkSession()
-                            val pause = siteFailureDelayMs(e)
-                            connectSilentBackoffUntil = System.currentTimeMillis() + pause
-                            diagnostics.log("等级预热遇限流，本轮预热提前退避")
-                            return@launch
-                        } catch (e: Exception) {
-                            checkSession()
-                            val pause = siteFailureDelayMs(e)
-                            connectSilentBackoffUntil = System.currentTimeMillis() + pause
-                            if (pause <= 60_000L) retryAfterMs = maxOf(retryAfterMs, pause)
-                            diagnostics.log("等级预热暂缓: ${e.message}")
-                        }
-                    }
-                }
-
-                // 若前一步发起了跨站请求，拉长间隔到 25 秒再继续下一个子站，防止连环 OAuth 触发 429
-                delay(if (didNetworkCall) 25_000L else 6_000L)
-                if (repository.isRateLimitCoolingDown()) {
-                    diagnostics.log("检测到主站限流冷却，中止本轮后台等级与积分预热")
-                    return@launch
-                }
-                awaitQuietWindow()
-
-                // 2. 检查等级积分是否超过 6 小时
-                var didLdcNetworkCall = false
-                val cachedLdc = repository.getCachedLdcUserInfo(username)
-                if (cachedLdc == null || System.currentTimeMillis() - cachedLdc.second >= Config.LDC_USER_INFO_CACHE_TTL_MS) {
-                    if (System.currentTimeMillis() >= ldcBackoffUntil) {
-                        didLdcNetworkCall = true
-                        try {
-                            val fresh = fetchAuthorizedLdc(username, checkSession)
-                            checkSession()
-                            val updateTime = System.currentTimeMillis()
-                            repository.saveCachedLdcUserInfo(username, fresh)
-                            _ldcState.update { it.copy(userInfo = fresh, cachedAt = updateTime, error = null) }
-                        } catch (e: CancellationException) {
-                            throw e
-                        } catch (e: org.linuxdo.android.net.RateLimitException) {
-                            checkSession()
-                            val pause = siteFailureDelayMs(e)
-                            ldcBackoffUntil = System.currentTimeMillis() + pause
-                            _ldcState.update { it.copy(error = "积分预热暂缓：${UserErrorMessage.format(e, "请稍后重试")}") }
-                            diagnostics.log("积分预热遇限流，中止本轮后续社区分预热: ${e.message}")
-                            return@launch
-                        } catch (e: Exception) {
-                            checkSession()
-                            val pause = siteFailureDelayMs(e)
-                            ldcBackoffUntil = System.currentTimeMillis() + pause
-                            if (pause <= 60_000L) retryAfterMs = maxOf(retryAfterMs, pause)
-                            _ldcState.update { it.copy(error = "积分预热暂缓：${UserErrorMessage.format(e, "请稍后重试")}") }
-                            diagnostics.log("积分预热暂缓: ${e.message}")
-                        }
-                    }
-                }
-
-                // LDC OAuth/读取后与 CDK OAuth 错峰至少 25 秒，且若刚进入冷却立即收手
-                delay(if (didLdcNetworkCall) 25_000L else 6_000L)
-                if (repository.isRateLimitCoolingDown()) {
-                    diagnostics.log("检测到主站限流冷却，跳过本轮 CDK 社区分预热")
-                    return@launch
-                }
-                awaitQuietWindow()
-                loadCdkScore(fromWarmup = true)
-                cdkScoreJob?.join()
-                checkSession()
-                val cdkRemaining = cdkScoreBackoffUntil - System.currentTimeMillis()
-                if (cdkRemaining in 1L..60_000L) retryAfterMs = maxOf(retryAfterMs, cdkRemaining)
-                if (round > 0 || retryAfterMs <= 0L || repository.isRateLimitCoolingDown()) return@launch
-                delay(maxOf(30_000L, retryAfterMs))
-            }
-        }
-    }
     private val _chat = MutableStateFlow(ChatUiState())
     val chat: StateFlow<ChatUiState> = _chat.asStateFlow()
     private val _chatEmojiUrls = MutableStateFlow<Map<String, String>>(emptyMap())
@@ -1593,19 +1456,16 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         if (autoProbeVisible == visible && activeCategory == category) return
         homePageExit?.complete(Unit)
         homePageExit = if (visible && category == null) CompletableDeferred() else null
-        val wasVisible = autoProbeVisible
         autoProbeVisible = visible
         activeCategory = category
         incomingProbeGeneration++
-        // 从不可见到可见（切换回前台或列表）时快速延迟 3 秒触发一次探测
-        val initialDelay = if (!wasVisible && visible) 3_000L else 3_000L
-        restartAutoProbeLoop(initialDelay)
+        restartAutoProbeLoop()
     }
 
     private fun canProbeIncomingTopics(): Boolean = autoProbeVisible &&
         _state.value.screen == Screen.List && !store.sessionChanging && !_accounts.value.switching
 
-    private fun restartAutoProbeLoop(initialDelayMs: Long? = 3_000L) {
+    private fun restartAutoProbeLoop() {
         autoProbeJob?.cancel()
         val interval = store.getAutoRefreshInterval()
         if (interval == AutoRefreshInterval.OFF || !canProbeIncomingTopics()) {
@@ -1613,16 +1473,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             return
         }
         autoProbeJob = viewModelScope.launch {
-            var firstRound = true
             while (isActive) {
-                val delayTime = if (firstRound && initialDelayMs != null) {
-                    firstRound = false
-                    initialDelayMs
-                } else {
-                    firstRound = false
-                    interval.nextDelayMs()
-                }
-                delay(delayTime)
+                delay(interval.nextDelayMs())
                 if (!canProbeIncomingTopics()) break
                 val currentCategory = activeCategory
                 if (currentCategory != null) {
@@ -3280,7 +3132,6 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 if (store.currentUserId() > 0 && !store.sessionChanging && !_accounts.value.switching &&
                     !repository.isRateLimitCoolingDown() && ApiQuotaPool.automaticReadDelayMs() == 0L) {
                     drainReadOutbox()
-                    loadHistory(refresh = true, silent = true)
                     refreshActiveReadState()
                 }
                 delay(30_000L)
@@ -3295,7 +3146,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             if (topicId in topicLiveScrolling || pageJobs["read-state:$topicId"]?.isActive == true) return@forEach
             val detail = _details.value[topicId] ?: return@forEach
             val visible = currentVisiblePostsByTopic[topicId].orEmpty().toSet()
-            val ids = detail.posts.filter { it.postNumber in visible }.map { it.id }
+            val ids = detail.posts.filter { it.postNumber in visible && !it.read && !it.yours }.map { it.id }
             if (ids.isEmpty()) return@forEach
             pageJobs["read-state:$topicId"] = viewModelScope.launch {
                 try {
@@ -3393,7 +3244,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         _history.update { it.copy(entries = container.historyStore.syncedEntries()) }
     }
 
-    fun loadHistory(refresh: Boolean = true, silent: Boolean = false) {
+    fun loadHistory(refresh: Boolean = true) {
         val userId = store.currentUserId()
         if (userId <= 0 || store.sessionChanging || _accounts.value.switching || _history.value.loading) return
         if (!refresh && !_history.value.hasMore) return
@@ -3411,7 +3262,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                     categoryName = item.category?.name, categoryColor = item.category?.color,
                     totalReplies = item.topic.totalReplies,
                 ) }
-                val merged = container.historyStore.mergeRemote(userId, entries, reset = refresh, preserveOlder = silent)
+                val merged = container.historyStore.mergeRemote(userId, entries, reset = refresh)
                 result.items.forEach { item -> item.topic.lastReadPostNumber?.let { container.reading.recordLastSeenPost(item.topic.id, it) } }
                 val byId = result.items.associate { it.topic.id to it.topic }
                 mapTopicLists { list -> list.copy(items = list.items.map { item ->
@@ -3420,8 +3271,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                         lastReadPostNumber = maxOf(item.topic.lastReadPostNumber ?: 0, remote.lastReadPostNumber ?: 0))) } ?: item
                 }) }
                 _history.update { it.copy(entries = merged, loading = false,
-                    hasMore = if (silent && it.page > 0) it.hasMore else result.hasMore,
-                    page = if (silent) maxOf(it.page, page) else page) }
+                    hasMore = result.hasMore, page = page) }
             } catch (error: CancellationException) { throw error }
             catch (error: Exception) {
                 if (generation == accountScopeGeneration) _history.update { it.copy(loading = false, error = "同步失败，已保留手机记录，请稍后重试") }
@@ -3904,15 +3754,6 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             }
         }
 
-        // 本地还没有任何升级进度缓存：启动 10 分钟内不允许前台拉取，等后台首轮预热
-        val firstFetchLockMs = connectFirstFetchLockRemainingMs(hasCache = cached != null)
-        if (firstFetchLockMs > 0L) {
-            if (!current.loading) {
-                _trustReport.update { it.copy(error = connectFirstFetchLockMessage(firstFetchLockMs)) }
-            }
-            return
-        }
-
         // 2. 如果不是手动刷新（首次进入或后台触发）
         if (!refresh) {
             if (current.loading) return
@@ -3962,15 +3803,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
-    /**
-     * 加载社区分(CDK score)，展示在「我的」头部。
-     *
-     * 只读缓存不发请求；缓存过期(6 小时)才静默联网，且受三道保护：
-     * 1. 本地没有缓存时，自动加载交给后台预热([fromWarmup])错峰取；主动打开侧栏/点击获取可按需加载；
-     * 2. 短冷却到期后仅补取一次，真正授权/挑战失败才长期退避；
-     * 3. 仅 CDK 返回 401(无会话)才做一次 OAuth 握手，握手结果是 Cookie，平时不重复握手。
-     */
-    fun loadCdkScore(fromWarmup: Boolean = false, userInitiated: Boolean = false) {
+    /** 打开个人侧栏、资料页或社区分时读取，优先使用当前账号的缓存。 */
+    fun loadCdkScore() {
         if (cdkAuthorizationOpen) return
         val username = _state.value.username ?: return
         val checkSession = connectSessionCheck(username)
@@ -3988,12 +3822,11 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         }
         if (current.score != null && now - current.cachedAt < Config.CDK_SCORE_CACHE_TTL_MS) return
         if (now < cdkScoreBackoffUntil) {
-            if (userInitiated) _cdkScore.update { it.copy(error = if (it.needsAuthorization) {
+            _cdkScore.update { it.copy(error = if (it.needsAuthorization) {
                 "请点击“验证并获取”完成社区分授权"
             } else "社区分服务暂缓访问，请约 ${((cdkScoreBackoffUntil - now + 59_999L) / 60_000L)} 分钟后重试") }
             return
         }
-        if (current.score == null && !fromWarmup && !userInitiated && connectFirstFetchLockRemainingMs(hasCache = false) > 0L) return
         if (cdkScoreJob?.isActive == true) return
         cdkScoreJob = viewModelScope.launch {
             _cdkScore.update { it.copy(loading = true, error = null) }
@@ -4116,15 +3949,6 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 _ldcState.update { it.copy(userInfo = fromDisk.first, cachedAt = fromDisk.second) }
                 cached = fromDisk
             }
-        }
-
-        // 本地还没有任何积分缓存：启动 10 分钟内不允许前台拉取，等后台首轮预热
-        val firstFetchLockMs = connectFirstFetchLockRemainingMs(hasCache = cached != null)
-        if (firstFetchLockMs > 0L) {
-            if (!current.loading) {
-                _ldcState.update { it.copy(error = connectFirstFetchLockMessage(firstFetchLockMs), isExpired = false) }
-            }
-            return
         }
 
         // 2. 如果不是手动刷新
@@ -8570,7 +8394,6 @@ fun openTopicSearch(topicId: Long, title: String) {
                 val user = repository.fetchCurrentUserDetails(present = false)
                 if (user == null || store.sessionGeneration != expectedGen) return@launch
                 applyAuthenticatedUserSeed(user)
-                scheduleIdleConnectWarmup()
                 if (_profile.value[ProfileSection.Summary]?.loaded != true) {
                     loadProfile(ProfileSection.Summary)
                 }
@@ -8645,7 +8468,6 @@ fun openTopicSearch(topicId: Long, title: String) {
                     _state.update { it.copy(username = cachedUser, screen = Screen.List) }
                     browser.prewarmCfClearanceIfNeeded("会话缓存启动")
                     resumeAfterVerification?.also { resumeAfterVerification = null }?.invoke()
-                    scheduleIdleConnectWarmup()
                     warmFollowedUsernames(cachedUser)
                     viewModelScope.launch {
                         delay(2000L)
@@ -8687,7 +8509,6 @@ fun openTopicSearch(topicId: Long, title: String) {
                     _state.update { it.copy(username = username, screen = Screen.List) }
                     browser.prewarmCfClearanceIfNeeded("登录完成启动")
                     resumeAfterVerification?.also { resumeAfterVerification = null }?.invoke()
-                    scheduleIdleConnectWarmup()
                     restartAutoProbeLoop()
                 }
             } catch (error: CancellationException) {
@@ -9798,8 +9619,6 @@ fun openTopicSearch(topicId: Long, title: String) {
         cdkScoreBackoffUntil = 0L
         cdkAuthorizationOpen = false
         _cdkScore.value = CdkScoreUiState()
-        idleWarmupJob?.cancel()
-        idleWarmupJob = null
         autoProbeJob?.cancel()
         autoProbeJob = null
         _history.value = HistoryUiState(entries = emptyList())

@@ -89,9 +89,9 @@ class HistoryStore(context: Context) {
     }
 
     @Synchronized
-    fun mergeRemote(userId: Long, incoming: List<ReadingHistoryEntry>, reset: Boolean, preserveOlder: Boolean = false): List<ReadingHistoryEntry> {
+    fun mergeRemote(userId: Long, incoming: List<ReadingHistoryEntry>, reset: Boolean): List<ReadingHistoryEntry> {
         val key = "remote_$userId"
-        val previous = if (reset && !preserveOlder) emptyList() else preferences.getString(key, null)?.let {
+        val previous = if (reset) emptyList() else preferences.getString(key, null)?.let {
             json.decodeFromString<List<ReadingHistoryEntry>>(it)
         }.orEmpty()
         val merged = (if (reset) incoming + previous else previous + incoming).distinctBy { it.topicId }

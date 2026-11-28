@@ -197,15 +197,14 @@ private fun AppShellContent(viewModel: MainViewModel, browser: BrowserSession, s
     LaunchedEffect(lifecycle, state.screen, state.latest.initialLoading, notificationPollInterval, customRealtimeSeconds) {
         if (state.screen == Screen.List && !state.latest.initialLoading) lifecycle.repeatOnLifecycle(Lifecycle.State.STARTED) {
             viewModel.refreshUnread()
-            // 前台未读角标与后台通知设置解耦：可见时始终按 10 秒基线轮询，
-            // 只有“实时”且自定义间隔更短时才加快，下限 5 秒避免触发限频。
+            // 普通前台每分钟更新角标，实时模式沿用原有的自定义间隔。
             val pollDelayMs = when (notificationPollInterval) {
                 NotificationPollInterval.REALTIME ->
-                    (customRealtimeSeconds * 1000L).coerceIn(5_000L, Config.UNREAD_POLL_INTERVAL_MS)
+                    (customRealtimeSeconds * 1000L).coerceIn(5_000L, 20_000L)
                 else -> Config.UNREAD_POLL_INTERVAL_MS
             }
             while (true) {
-                // 限流冷却期间直接睡到解封，不再每 10 秒空转一次
+                // 站点要求等待更久时按冷却期限休眠。
                 delay(viewModel.nextUnreadPollDelayMs(pollDelayMs))
                 viewModel.refreshUnread()
             }
@@ -1566,8 +1565,8 @@ private fun MainNavigation(state: UiState, viewModel: MainViewModel, lifecycle: 
                                         cdkScoreLoading = drawerScore.loading,
                                         cdkScoreError = drawerScore.error,
                                         cdkScoreNeedsAuthorization = drawerScore.needsAuthorization,
-                                        onLoadCdkScore = { viewModel.loadCdkScore(userInitiated = true) },
-                                        onReloadCdkScore = { viewModel.loadCdkScore(userInitiated = true) },
+                                        onLoadCdkScore = { viewModel.loadCdkScore() },
+                                        onReloadCdkScore = { viewModel.loadCdkScore() },
                                         onOpenCdkWebsite = { globalBrowserUrl = "https://cdk.linux.do/" },
                                         scrollToTopRequest = scrollToTopRequest,
                                         onBack = if (stack.canPop) ({ stack.pop(); Unit }) else null,
@@ -2087,7 +2086,7 @@ private fun MainNavigation(state: UiState, viewModel: MainViewModel, lifecycle: 
                 drawerScope.launch { drawerState.close(); viewModel.addAccount() }
             })
     }
-    if (showDrawerScore) CommunityScoreDialog(drawerScore.score, { viewModel.loadCdkScore(userInitiated = true) },
+    if (showDrawerScore) CommunityScoreDialog(drawerScore.score, { viewModel.loadCdkScore() },
         drawerScore.loading, drawerScore.error,
         onOpenWebsite = {
             showDrawerScore = false
@@ -2160,7 +2159,7 @@ private fun MainNavigation(state: UiState, viewModel: MainViewModel, lifecycle: 
             },
             onOpenCommunityScore = if (userCard.isSelf) ({
                 viewModel.closeUserCard()
-                viewModel.loadCdkScore(userInitiated = true)
+                viewModel.loadCdkScore()
                 showDrawerScore = true
             }) else null,
         )

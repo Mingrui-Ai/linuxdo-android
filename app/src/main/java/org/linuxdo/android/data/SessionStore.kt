@@ -1341,7 +1341,7 @@ class SessionStore(context: Context) : org.linuxdo.android.net.DohConfigProvider
             val legacy = plainPrefs.getBoolean(KEY_AUTO_REFRESH_INCOMING, false)
             return if (legacy) AutoRefreshInterval.MIN_1 else AutoRefreshInterval.OFF
         }
-        return AutoRefreshInterval.SEC_20
+        return AutoRefreshInterval.MIN_1
     }
 
     fun setAutoRefreshInterval(interval: AutoRefreshInterval) {

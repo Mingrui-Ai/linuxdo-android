@@ -324,7 +324,7 @@ class TopicRepository(
         return try {
             read().also { checkSiteSession(userId, generation) }
         } catch (limited: RateLimitException) {
-            if (limited.retryAfterMs !in 1L..15_000L) throw limited
+            if (limited.alreadyRecorded || limited.retryAfterMs !in 1L..15_000L) throw limited
             delay(limited.retryAfterMs)
             checkSiteSession(userId, generation)
             read().also { checkSiteSession(userId, generation) }
@@ -577,7 +577,7 @@ class TopicRepository(
 
     /** 与网页 /my/activity/read 共用的账号已读列表，按服务端最近访问顺序分页。 */
     suspend fun fetchReadHistory(page: Int = 0): TopicPage =
-        toPage(json.decodeFromString(request("/read.json?page=$page", present = false)), awaitCategories = false)
+        toPage(json.decodeFromString(request("/read.json?page=$page", retryAllowed = false)), awaitCategories = false)
 
     suspend fun fetchLatest(page: Int, awaitCategories: Boolean = true, present: Boolean = true): TopicPage =
         fetchFeed(HomeFeedType.Latest, page, awaitCategories, present = present)
@@ -3036,13 +3036,11 @@ class TopicRepository(
         UploadLimits.rejectReason(fileName, bytes.size.toLong())?.let { throw LoginRejectedException(it) }
         var revalidated = false
         var csrfRefreshed = false
-        var rateLimitRetried = false
         var authRestored = false
         while (true) {
             beforeAttempt()
             checkWriteSession(expectedUserId, expectedGeneration)
             val csrf = obtainCsrf(forceRefresh = csrfRefreshed)
-            var roundSnapshot = currentRateLimitRound()
             val result = postGate.withLock {
                 throttlePost(burst = true)
                 checkWriteSession(expectedUserId, expectedGeneration)
@@ -3052,7 +3050,6 @@ class TopicRepository(
                 try {
                     checkWriteSession(expectedUserId, expectedGeneration)
                     beforeAttempt()
-                    roundSnapshot = ticket.round
                     val transport = transportProvider()
                     transport.upload(
                         "/uploads.json", csrf, fileName, mimeType, bytes,
@@ -3061,36 +3058,16 @@ class TopicRepository(
                             put("synchronous", "true")
                             if (uploadType == "avatar") put("user_id", expectedUserId.toString())
                         },
-                    ).also { status = it.status }
+                    ).also { response ->
+                        status = response.status
+                        diagnostics.recordStatus(transport.name, status, "/uploads.json")
+                        if (status == 429) throw writeRateLimitError("/uploads.json", response, ticket.round, expectedGeneration)
+                    }
                 } finally {
                     lastPostRequestAt = SystemClock.elapsedRealtime()
-                    if (status == 429) releaseInFlight(ticket) else settleWriteTicket(ticket, status, sessionStore)
+                    settleWriteTicket(ticket, status, sessionStore)
+                    checkWriteSession(expectedUserId, expectedGeneration)
                 }
-            }
-            val receivedAt = result.receivedAtElapsedMs.takeIf { it > 0L } ?: SystemClock.elapsedRealtime()
-            try {
-                checkWriteSession(expectedUserId, expectedGeneration)
-                diagnostics.recordStatus(transportProvider().name, result.status, "/uploads")
-                if (result.status == 429) {
-                    val cfChallenge = isCfChallengeBody(result.body)
-                    val cooldownEx = enterRateLimitCooldown(
-                        path = "/uploads.json",
-                        retryAfterSeconds = result.retryAfterSeconds,
-                        cfChallenge = cfChallenge,
-                        requestRound = roundSnapshot,
-                        requestGeneration = expectedGeneration ?: -1L,
-                        receivedAtElapsedMs = receivedAt,
-                    )
-                    val waitSec = result.retryAfterSeconds ?: 3L
-                    if (!cfChallenge && !rateLimitRetried && waitSec in 1L..AUTO_RETRY_MAX_WAIT_SECONDS) {
-                        rateLimitRetried = true
-                        delay(waitSec * 1_000L)
-                        continue
-                    }
-                    throw cooldownEx
-                }
-            } finally {
-                if (result.status == 429) releaseGetProbeForRound(roundSnapshot)
             }
             if (result.challenged) {
                 cachedCsrfToken = null
@@ -3245,17 +3222,7 @@ class TopicRepository(
             JsonObject(mapOf("id" to JsonPrimitive(postId))).toString())
     }
 
-    /**
-     * 发写请求。
-     *
-     * 被 CF 挑战时先静默重验证再重发一次,而不是直接把用户丢进全屏验证页 ——
-     * 看了半小时帖子点个赞刚好撞上 cf_clearance 过期,是很常见的。
-     *
-     * 重放是安全的:CF 的挑战是在边缘拦下的(cf-mitigated: challenge),源站压根没收到这个请求,
-     * 所以不存在"已经执行了又执行一次"。但**必须连 CSRF 一起重取** —— 重验证会在 WebView 里
-     * 重新加载首页,Discourse 可能借机换掉 _forum_session,旧 token 就失效了。
-     * 只重试一次,再挑战就交给用户出面。
-     */
+    /** 站内写操作串行发送，收到 429 即结束本次提交。 */
     private suspend fun mutate(
         path: String,
         method: String,
@@ -3269,13 +3236,11 @@ class TopicRepository(
         val expectedGeneration = sessionStore?.sessionGeneration
         var revalidated = false
         var csrfRefreshed = false
-        var rateLimitRetried = false
         var authRestored = false
         while (true) {
             checkWriteSession(expectedUserId, expectedGeneration)
             beforeAttempt()
             val csrf = obtainCsrf(forceRefresh = csrfRefreshed)
-            var roundSnapshot = currentRateLimitRound()
             val mainSite = requestHost(path) == Config.HOST
             val result = postGate.withLock {
                 throttlePost(burst = true)
@@ -3286,79 +3251,17 @@ class TopicRepository(
                 var status = -1
                 try {
                     checkWriteSession(expectedUserId, expectedGeneration)
-                    roundSnapshot = ticket?.round ?: currentRateLimitRound()
                     val transport = transportProvider()
-                    transport.write(path, method, body, csrf, contentType).also { status = it.status }
+                    transport.write(path, method, body, csrf, contentType).also { response ->
+                        status = response.status
+                        diagnostics.recordStatus(transport.name, status, path)
+                        if (status == 429) throw writeRateLimitError(path, response, ticket?.round ?: -1L, expectedGeneration, reactionToggle)
+                    }
                 } finally {
                     lastPostRequestAt = SystemClock.elapsedRealtime()
-                    // 429 由下方冷却逻辑按轮次结算探针，其余结果在这里结算。
-                    if (ticket != null) {
-                        if (status == 429) releaseInFlight(ticket) else settleWriteTicket(ticket, status, sessionStore)
-                    }
+                    if (ticket != null) settleWriteTicket(ticket, status, sessionStore)
+                    checkWriteSession(expectedUserId, expectedGeneration)
                 }
-            }
-            val receivedAt = result.receivedAtElapsedMs.takeIf { it > 0L } ?: SystemClock.elapsedRealtime()
-            try {
-                checkWriteSession(expectedUserId, expectedGeneration)
-                diagnostics.recordStatus(transportProvider().name, result.status, path)
-                if (result.status == 429) {
-                    val cfChallenge = ChallengeDetector.isChallenge429(result.status, result.cfMitigated, result.body) ||
-                        isCfChallengeBody(result.body)
-                    if (cfChallenge) {
-                        // 速率型挑战：凭据仍有效。仅在携带过期值时换新值重放，或当前无凭据(sent=-)时静默补签一次，否则递增冷却。
-                        // 服务端已给出等待时间时不换值重放、不补签，直接按截止时间冷却。
-                        val serverWait = (result.retryAfterSeconds ?: 0L) > 0L
-                        if (requestHost(path) == Config.HOST && !revalidated && !serverWait && sessionStore?.sessionChanging != true) {
-                            if (isCarriedClearanceStale(result.sentClearanceFp)) {
-                                cachedCsrfToken = null
-                                revalidated = true
-                                csrfRefreshed = true
-                                continue
-                            }
-                            if (result.sentClearanceFp == "-" && !isRateLimitCoolingDown() &&
-                                transportProvider().revalidate(path, "-", requestHost = Config.HOST)
-                            ) {
-                                cachedCsrfToken = null
-                                revalidated = true
-                                csrfRefreshed = true
-                                continue
-                            }
-                        }
-                        throw enterChallenge429Cooldown(
-                            path = path,
-                            retryAfterSeconds = result.retryAfterSeconds,
-                            sentClearanceFp = result.sentClearanceFp,
-                            requestRound = roundSnapshot,
-                            requestGeneration = expectedGeneration ?: -1L,
-                            receivedAtElapsedMs = receivedAt,
-                        )
-                    }
-                    // Discourse 的点赞额度属于帖子回应。全站请求限流和 Cloudflare 响应继续走原有冷却。
-                    if (reactionToggle && !result.challenged &&
-                        result.cfMitigated?.contains("challenge", ignoreCase = true) != true
-                    ) {
-                        val error = parseErrorBody(result.body)
-                        if ((error?.get("error_type") as? JsonPrimitive)?.contentOrNull == "rate_limit") {
-                            throw ReactionRateLimitException(error.serverErrorMessage() ?: "回应次数已达上限，请稍后重试")
-                        }
-                    }
-                    val cooldownEx = enterRateLimitCooldown(
-                        path = path,
-                        retryAfterSeconds = result.retryAfterSeconds,
-                        requestRound = roundSnapshot,
-                        requestGeneration = expectedGeneration ?: -1L,
-                        receivedAtElapsedMs = receivedAt,
-                    )
-                    val waitSec = result.retryAfterSeconds ?: 3L
-                    if (!rateLimitRetried && waitSec in 1L..AUTO_RETRY_MAX_WAIT_SECONDS) {
-                        rateLimitRetried = true
-                        delay(waitSec * 1_000L)
-                        continue
-                    }
-                    throw cooldownEx
-                }
-            } finally {
-                if (result.status == 429 && mainSite) releaseGetProbeForRound(roundSnapshot)
             }
             if (result.challenged || (result.status == 403 && ChallengeDetector.isChallenge(result.status, "", result.body))) {
                 if (requestHost(path) != Config.HOST) {
@@ -3422,6 +3325,23 @@ class TopicRepository(
             }
             return result.body
         }
+    }
+
+    /** 写操作收到 429 后，在交还发送位置前登记冷却，重试由用户发起。 */
+    private fun writeRateLimitError(
+        path: String, result: TransportResult, round: Long, generation: Long?, reactionToggle: Boolean = false,
+    ): Exception {
+        val challenged = ChallengeDetector.isChallenge429(result.status, result.cfMitigated, result.body) || isCfChallengeBody(result.body)
+        if (challenged) return enterChallenge429Cooldown(path, result.retryAfterSeconds, result.sentClearanceFp,
+            round, generation ?: -1L, result.receivedAtElapsedMs)
+        if (reactionToggle && !result.challenged && result.cfMitigated?.contains("challenge", ignoreCase = true) != true) {
+            val error = parseErrorBody(result.body)
+            if ((error?.get("error_type") as? JsonPrimitive)?.contentOrNull == "rate_limit") {
+                return ReactionRateLimitException(error.serverErrorMessage() ?: "回应次数已达上限，请稍后重试")
+            }
+        }
+        return enterRateLimitCooldown(path, result.retryAfterSeconds, requestRound = round,
+            requestGeneration = generation ?: -1L, receivedAtElapsedMs = result.receivedAtElapsedMs)
     }
 
     private class ReactionRateLimitException(message: String) : Exception(message)
