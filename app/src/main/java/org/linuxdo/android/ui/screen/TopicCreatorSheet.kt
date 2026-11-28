@@ -33,7 +33,6 @@ import kotlinx.coroutines.delay
 import org.linuxdo.android.data.DiscourseTagSearchResult
 import org.linuxdo.android.ui.CategoriesUiState
 import org.linuxdo.android.ui.CreatorPollSpan
-import org.linuxdo.android.ui.IosTextAction
 import org.linuxdo.android.ui.LocalEditorSuggestionSource
 import org.linuxdo.android.ui.PollBuilderDialog
 import org.linuxdo.android.ui.PollBuilderSpec
@@ -78,21 +77,20 @@ internal fun TopicCreatorSheet(
     var pollOpen by remember { mutableStateOf(false) }
     var pollTarget by remember { mutableStateOf<Pair<CreatorPollSpan, PollBuilderSpec>?>(null) }
     var gallery by remember { mutableStateOf<Pair<List<ImageViewerItem>, Int>?>(null) }
-    var closeConfirm by remember { mutableStateOf(false) }
     var picking by remember { mutableStateOf(false) }
     val busy = state.submitting || state.loadingDraft || state.savingDraft || state.uploading
 
     fun flushEditor() {
         editor?.exportToMarkdown()?.takeIf { it != state.raw }?.let(onRawChange)
     }
-    val canHandleBack = menu == null && linkLabel == null && !pollOpen && gallery == null && !closeConfirm && !picking
+    val canHandleBack = menu == null && linkLabel == null && !pollOpen && gallery == null && !picking
     val dismiss: () -> Unit = {
         if (canHandleBack && !state.submitting && !state.savingDraft) {
             flushEditor()
             keyboard?.hide()
             editor?.clearFocus()
             focusManager.clearFocus(force = true)
-            if (state.hasUnsavedChanges) closeConfirm = true else onClose()
+            onClose()
         }
     }
     // 整页编辑先让系统处理 IME 返回；收起键盘本身不关闭页面或触发草稿同步。
@@ -128,7 +126,8 @@ internal fun TopicCreatorSheet(
         .pointerInput(Unit) { awaitPointerEventScope { while (true) awaitPointerEvent() } }
         .windowInsetsPadding(WindowInsets.systemBars.union(WindowInsets.displayCutout).only(WindowInsetsSides.Top)).imePadding()) {
         IosNavBar(
-            title = if (state.isReplyDraft) "回复草稿" else "新话题",
+            title = if (expanded && state.title.isNotBlank()) state.title.trim()
+                else if (state.isReplyDraft) "回复草稿" else "新话题",
             onBack = dismiss,
             trailingWidth = 114.dp,
             trailing = {
@@ -253,13 +252,4 @@ internal fun TopicCreatorSheet(
             })
     }
     gallery?.let { (images, index) -> ImageViewer(images = images, initialIndex = index) { gallery = null } }
-    if (closeConfirm) {
-        androidx.compose.material3.AlertDialog(
-            onDismissRequest = { closeConfirm = false }, containerColor = colors.card,
-            title = { Text("草稿尚未同步", color = colors.label, style = IosTheme.type.headline) },
-            text = { Text("可以先同步到网页，也可以保留在手机，稍后继续编辑。", color = colors.secondaryLabel, style = IosTheme.type.body) },
-            confirmButton = { IosTextAction("保存草稿并退出") { closeConfirm = false; flushEditor(); onSaveDraft(true) } },
-            dismissButton = { IosTextAction("保留手机草稿并退出") { closeConfirm = false; onClose() } },
-        )
-    }
 }

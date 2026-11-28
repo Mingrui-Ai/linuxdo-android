@@ -2885,7 +2885,7 @@ class TopicRepository(
     /**
      * 删除服务端草稿（DELETE /drafts/{draft_key}.json）。
      */
-    suspend fun deleteDraft(draftKey: String, sequence: Long = 0L) {
+    suspend fun deleteDraft(draftKey: String, sequence: Long = 0L, beforeAttempt: () -> Unit = {}) {
         require(draftKey.isNotBlank()) { "草稿标识不能为空" }
         suspend fun doDelete(seq: Long) {
             val payload = JsonObject(
@@ -2898,26 +2898,28 @@ class TopicRepository(
                 "/drafts/${encode(draftKey)}.json?draft_key=${encode(draftKey)}&sequence=$seq",
                 "DELETE",
                 payload,
+                beforeAttempt = beforeAttempt,
             )
         }
-        val current = fetchDraft(draftKey)
+        val current = fetchDraft(draftKey, beforeAttempt)
         check(current.sequence == sequence) { "草稿已在其他设备更新，请刷新后再删除" }
         doDelete(sequence)
-        check(fetchDraft(draftKey).content == null) { "草稿已在其他设备更新，已保留最新版本，请刷新" }
+        check(fetchDraft(draftKey, beforeAttempt).content == null) { "草稿已在其他设备更新，已保留最新版本，请刷新" }
     }
 
-    suspend fun fetchDraft(key: String): RemoteDraft {
-        val response = objectRequest("/drafts/${encode(key)}.json?_=${java.util.UUID.randomUUID()}")
+    suspend fun fetchDraft(key: String, beforeAttempt: () -> Unit = {}): RemoteDraft {
+        beforeAttempt()
+        val response = objectRequest("/drafts/${encode(key)}.json?_=${java.util.UUID.randomUUID()}", beforeDispatch = beforeAttempt)
         val data = (response["draft"] as? JsonPrimitive)?.contentOrNull
         val content = data?.takeIf { it.isNotBlank() }?.let { decodeSyncedDraft(key, it) }
         return RemoteDraft(response.number("draft_sequence") ?: 0L, content, data)
     }
 
     /** 保留网页草稿的扩展字段，用原 sequence 提交，409 绝不自动覆盖。 */
-    suspend fun saveSyncedDraft(key: String, sequence: Long, content: SyncedDraftContent, remoteData: String?): Long {
+    suspend fun saveSyncedDraft(key: String, sequence: Long, content: SyncedDraftContent, remoteData: String?, beforeAttempt: () -> Unit = {}): Long {
         val body = JsonObject(mapOf("draft_key" to JsonPrimitive(key), "sequence" to JsonPrimitive(sequence),
             "data" to JsonPrimitive(encodeSyncedDraft(content, remoteData)))).toString()
-        val result = json.parseToJsonElement(mutate("/drafts.json", "POST", body)).jsonObject
+        val result = json.parseToJsonElement(mutate("/drafts.json", "POST", body, beforeAttempt = beforeAttempt)).jsonObject
         return result.number("draft_sequence") ?: error("草稿保存结果未确认，请稍后重试")
     }
 

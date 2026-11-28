@@ -20,6 +20,7 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.WindowInsets
@@ -29,6 +30,7 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.ime
 import androidx.compose.foundation.layout.imePadding
+import androidx.compose.foundation.layout.isImeVisible
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -45,6 +47,7 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
@@ -67,6 +70,8 @@ import androidx.compose.ui.graphics.drawscope.scale
 import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
+import androidx.compose.ui.platform.LocalView
+import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontStyle
@@ -82,6 +87,8 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.withContext
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.compose.LocalLifecycleOwner
 import org.linuxdo.android.ui.ComposerTarget
 import org.linuxdo.android.ui.ComposerUiState
 import org.linuxdo.android.ui.CreatorPollSpan
@@ -93,6 +100,7 @@ import org.linuxdo.android.ui.design.IosActivityIndicator
 import org.linuxdo.android.ui.design.IosFullDivider
 import org.linuxdo.android.ui.design.IosLoadingBox
 import org.linuxdo.android.ui.design.IosTheme
+import org.linuxdo.android.ui.design.ComposerImeDismissState
 import org.linuxdo.android.ui.design.composerBackKeys
 import org.linuxdo.android.ui.design.rememberComposerDismiss
 import org.linuxdo.android.ui.html.CookedBlock
@@ -121,6 +129,7 @@ internal fun ReplyComposerSheet(
     onClose: () -> Unit,
     onAttach: (Uri) -> Unit,
     onRemoveAttachment: (String) -> Unit = {},
+    onDockedHeightChange: (Int) -> Unit = {},
 ) {
     val target = composer.target ?: return
     val keyboardController = LocalSoftwareKeyboardController.current
@@ -150,6 +159,8 @@ internal fun ReplyComposerSheet(
         error = composer.error,
         topicId = target.topicId,
         allowPoll = true,
+        dockOnKeyboardHide = true,
+        onDockedHeightChange = onDockedHeightChange,
         onDraftChange = onDraftChange,
         onSubmit = { raw ->
             onDraftChange(raw)
@@ -161,6 +172,7 @@ internal fun ReplyComposerSheet(
     )
 }
 
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 internal fun MarkdownComposerSheet(
     sessionKey: Any,
@@ -179,11 +191,13 @@ internal fun MarkdownComposerSheet(
     topicId: Long? = null,
     allowPoll: Boolean = true,
     initialFullScreen: Boolean = false,
+    dockOnKeyboardHide: Boolean = false,
     onDraftChange: (String) -> Unit,
     onSubmit: (String) -> Unit,
     onClose: () -> Unit,
     onAttach: (Uri) -> Unit,
     onRemoveAttachment: (String) -> Unit = {},
+    onDockedHeightChange: (Int) -> Unit = {},
 ) {
     val completionSource = LocalEditorSuggestionSource.current
     val keyboardController = LocalSoftwareKeyboardController.current
@@ -192,6 +206,8 @@ internal fun MarkdownComposerSheet(
     var expandedTab by rememberSaveable(sessionKey) { mutableStateOf(ComposerExpandedTab.Edit) }
     var quickMdOpen by rememberSaveable(sessionKey) { mutableStateOf(false) }
     var submissionAttempted by rememberSaveable(sessionKey) { mutableStateOf(false) }
+    var docked by rememberSaveable(sessionKey) { mutableStateOf(false) }
+    var sheetHeightPx by remember { mutableIntStateOf(0) }
     var openSubToolbar by remember { mutableStateOf<ComposerSubToolbar?>(null) }
 
     var showLinkDialog by remember { mutableStateOf(false) }
@@ -202,7 +218,7 @@ internal fun MarkdownComposerSheet(
 
     var editorView by remember(sessionKey) { mutableStateOf<RichMarkdownEditorView?>(null) }
     var editorContentHeight by remember(sessionKey) { mutableIntStateOf(0) }
-    val compactEditorHeight = with(LocalDensity.current) { editorContentHeight.toDp().coerceIn(48.dp, 152.dp) }
+    val compactEditorHeight = with(LocalDensity.current) { editorContentHeight.toDp().coerceIn(48.dp, if (docked) 72.dp else 152.dp) }
     var pickingAttachment by remember { mutableStateOf(false) }
 
     val isPreview = isFullScreen && expandedTab == ComposerExpandedTab.Preview
@@ -213,11 +229,35 @@ internal fun MarkdownComposerSheet(
         canDismiss = !submitting,
         // 系统隐藏事件可能晚于失败提示或下一次输入，不能据此丢掉编辑现场。
         // 从点击发表起保留本次编辑现场，成功由调用方关闭；返回、取消和遮罩仍可主动关闭。
-        ignoreKeyboardHide = submissionAttempted || busy || error != null ||
+        ignoreKeyboardHide = dockOnKeyboardHide || submissionAttempted || busy || error != null ||
             pickingAttachment || isFullScreen || showLinkDialog || showPollDialog,
     ) {
         editorView?.exportToMarkdown()?.let(onDraftChange)
         onClose()
+    }
+
+    val imeVisible = WindowInsets.isImeVisible
+    val hostView = LocalView.current
+    val lifecycleState by LocalLifecycleOwner.current.lifecycle.currentStateFlow.collectAsState()
+    val dockImeState = remember(sessionKey) { ComposerImeDismissState() }
+    LaunchedEffect(docked, sheetHeightPx) {
+        onDockedHeightChange(if (docked) sheetHeightPx else 0)
+    }
+    DisposableEffect(sessionKey) {
+        onDispose { onDockedHeightChange(0) }
+    }
+    LaunchedEffect(imeVisible, busy, isPreview, showLinkDialog, showPollDialog, previewGallery, pickingAttachment, lifecycleState) {
+        val canDock = dockOnKeyboardHide && !submitting && !loadingDraft && !isPreview && !showLinkDialog && !showPollDialog &&
+            previewGallery == null && !pickingAttachment && lifecycleState.isAtLeast(Lifecycle.State.RESUMED) && hostView.hasWindowFocus()
+        if (imeVisible) docked = false
+        if (dockImeState.update(imeVisible, canDock)) {
+            editorView?.exportToMarkdown()?.takeIf { it != draft }?.let(onDraftChange)
+            docked = true
+            isFullScreen = false
+            expandedTab = ComposerExpandedTab.Edit
+            quickMdOpen = false
+            openSubToolbar = null
+        }
     }
 
     fun submitDraft() {
@@ -249,7 +289,7 @@ internal fun MarkdownComposerSheet(
 
     // 弹框打开时立刻聚焦输入框并呼出软键盘，消除额外延迟避免卡顿感
     LaunchedEffect(editorView, loadingDraft) {
-        if (!loadingDraft && editorView != null && !isPreview) {
+        if (!loadingDraft && editorView != null && !isPreview && !docked) {
             editorView?.requestInputFocus()
         }
     }
@@ -312,17 +352,19 @@ internal fun MarkdownComposerSheet(
             .composerBackKeys(dismiss),
         contentAlignment = Alignment.BottomCenter,
     ) {
-        // 背景半透明暗色遮罩，点击收起弹层
-        Box(
-            Modifier
-                .fillMaxSize()
-                .background(Color.Black.copy(alpha = if (isFullScreen) 0.55f else 0.42f))
-                .clickable(
-                    interactionSource = remember { MutableInteractionSource() },
-                    indication = null,
-                    onClick = dismiss,
-                ),
-        )
+        // 键盘自己的收起按钮留下置底输入框；移除遮罩后可继续滚动阅读帖子。
+        if (!docked) {
+            Box(
+                Modifier
+                    .fillMaxSize()
+                    .background(Color.Black.copy(alpha = if (isFullScreen) 0.55f else 0.42f))
+                    .clickable(
+                        interactionSource = remember { MutableInteractionSource() },
+                        indication = null,
+                        onClick = dismiss,
+                    ),
+            )
+        }
 
         val sheetHeightModifier = if (isFullScreen) {
             Modifier
@@ -339,6 +381,7 @@ internal fun MarkdownComposerSheet(
             modifier = Modifier
                 .fillMaxWidth()
                 .then(sheetHeightModifier)
+                .onSizeChanged { sheetHeightPx = it.height }
                 .clip(RoundedCornerShape(topStart = 18.dp, topEnd = 18.dp))
                 .background(colors.card)
                 .clickable(
@@ -426,7 +469,13 @@ internal fun MarkdownComposerSheet(
                 } else {
                     ComposerHeaderIconButton(
                         contentDescription = "展开全屏编辑器",
-                        onClick = { isFullScreen = true },
+                        onClick = {
+                            isFullScreen = true
+                            if (docked) {
+                                docked = false
+                                editorView?.requestInputFocus()
+                            }
+                        },
                     ) {
                         ComposerCollapseExpandIcon(expanded = false, tint = colors.label)
                     }
@@ -489,7 +538,7 @@ internal fun MarkdownComposerSheet(
                                     }
                                 }
                                 editorView = this
-                                post { requestInputFocus() }
+                                if (!docked) post { requestInputFocus() }
                             }
                         },
                         update = { view ->

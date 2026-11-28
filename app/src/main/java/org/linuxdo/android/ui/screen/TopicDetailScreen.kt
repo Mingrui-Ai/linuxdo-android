@@ -568,6 +568,10 @@ fun TopicDetailScreen(
         clipboardManager.setText(AnnotatedString(url))
         noticeToast = "链接已复制到剪贴板"
     }
+    var dockedComposerHeightPx by remember(topicId) { mutableIntStateOf(0) }
+    val composerBottomSpace = with(LocalDensity.current) {
+        if (composer.open && dockedComposerHeightPx > 0) dockedComposerHeightPx.toDp() + 12.dp else 0.dp
+    }
     val overlayActive = composer.open || boostTarget != null || pictureGallery != null ||
         manageTarget != null || deleteTarget != null || state.flagDialogPost != null || browserUrl != null
     LaunchedEffect(overlayActive) {
@@ -1374,7 +1378,7 @@ fun TopicDetailScreen(
                         LazyColumn(
                             state = list,
                             modifier = Modifier.fillMaxSize(),
-                            contentPadding = PaddingValues(bottom = 76.dp),
+                            contentPadding = PaddingValues(bottom = maxOf(76.dp, composerBottomSpace)),
                         ) {
                             item("title") {
                                 Column(Modifier.fillMaxWidth().padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -1664,6 +1668,7 @@ fun TopicDetailScreen(
                         onClose = onCloseComposer,
                         onAttach = onAttach,
                         onRemoveAttachment = onRemoveComposerAttachment,
+                        onDockedHeightChange = { dockedComposerHeightPx = it },
                     )
                 }
             }
