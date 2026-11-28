@@ -40,7 +40,6 @@ import androidx.media3.ui.PlayerView
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.drop
 import org.linuxdo.android.data.TopicReadingPosition
-import org.linuxdo.android.ui.html.segmentCookedBlocks
 import kotlin.math.abs
 import kotlin.math.roundToInt
 import androidx.compose.foundation.horizontalScroll
@@ -52,6 +51,8 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.text.selection.SelectionContainer
+import androidx.compose.foundation.text.selection.DisableSelection
+import org.linuxdo.android.ui.design.ContinuousTextSelection
 import androidx.compose.foundation.relocation.BringIntoViewRequester
 import androidx.compose.foundation.relocation.bringIntoViewRequester
 import androidx.compose.foundation.text.BasicTextField
@@ -129,9 +130,7 @@ import androidx.compose.ui.input.pointer.PointerEventPass
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
-import androidx.compose.ui.platform.LocalTextToolbar
 import androidx.compose.ui.platform.LocalUriHandler
-import androidx.compose.ui.platform.TextToolbarStatus
 import androidx.compose.ui.text.LinkAnnotation
 import androidx.compose.ui.text.TextRange
 import androidx.compose.ui.text.input.TextFieldValue
@@ -285,7 +284,6 @@ import org.linuxdo.android.net.isTransientImageError
 
 private val LocalOpenTopic = compositionLocalOf<((Long, String, Int?) -> Unit)?> { null }
 private val LocalOpenPicture = compositionLocalOf<((List<ImageViewerItem>, Int) -> Unit)?> { null }
-private val LocalSelectionResetKey = compositionLocalOf { 0 }
 private val LocalOpenExternalUrl = compositionLocalOf<(String) -> Unit> { {} }
 private val LocalVotePoll = compositionLocalOf<(Long, String, List<String>) -> Unit> { { _, _, _ -> } }
 private val LocalPollBusy = compositionLocalOf<(Long) -> Boolean> { { false } }
@@ -341,113 +339,17 @@ internal object TopicFloorNavigation {
     }
 }
 
-private class SelectionClipboard(private val delegate: androidx.compose.ui.platform.ClipboardManager) :
-    androidx.compose.ui.platform.ClipboardManager by delegate {
-    var capture: ((AnnotatedString) -> Unit)? = null
-    override fun setText(annotatedString: AnnotatedString) {
-        val receiver = capture
-        if (receiver != null) receiver(annotatedString) else delegate.setText(annotatedString)
-    }
-}
-
-private class CopyInterceptingTextToolbar(
-    private val delegate: androidx.compose.ui.platform.TextToolbar,
-    private val view: android.view.View,
-    private val onQuote: (((() -> Unit)) -> Unit)?,
-    private val onCopied: () -> Unit,
-) : androidx.compose.ui.platform.TextToolbar {
-    private var mode: android.view.ActionMode? = null
-    companion object {
-        private var active: java.lang.ref.WeakReference<CopyInterceptingTextToolbar>? = null
-        val hasActive: Boolean get() = active?.get()?.mode != null
-        fun hideActive() { active?.get()?.hide() }
-    }
-    override val status: TextToolbarStatus get() = if (mode != null) TextToolbarStatus.Shown else delegate.status
-
-    override fun showMenu(
-        rect: Rect,
-        onCopyRequested: (() -> Unit)?,
-        onPasteRequested: (() -> Unit)?,
-        onCutRequested: (() -> Unit)?,
-        onSelectAllRequested: (() -> Unit)?,
-    ) {
-        if (onQuote != null && onCopyRequested != null) {
-            hide()
-            hideActive()
-            val actions = linkedMapOf<Int, Pair<String, () -> Unit>>()
-            actions[android.R.id.copy] = "复制" to { onCopyRequested(); onCopied() }
-            actions[android.view.Menu.FIRST + 70] = "引用回复" to { onQuote.invoke(onCopyRequested) }
-            onSelectAllRequested?.let { actions[android.R.id.selectAll] = "全选" to it }
-            onCutRequested?.let { actions[android.R.id.cut] = "剪切" to it }
-            onPasteRequested?.let { actions[android.R.id.paste] = "粘贴" to it }
-            mode = view.startActionMode(object : android.view.ActionMode.Callback2() {
-                override fun onCreateActionMode(mode: android.view.ActionMode, menu: android.view.Menu): Boolean {
-                    actions.entries.forEachIndexed { index, (id, action) ->
-                        menu.add(0, id, index, action.first).setShowAsAction(android.view.MenuItem.SHOW_AS_ACTION_IF_ROOM)
-                    }
-                    return true
-                }
-                override fun onPrepareActionMode(mode: android.view.ActionMode, menu: android.view.Menu) = false
-                override fun onActionItemClicked(mode: android.view.ActionMode, item: android.view.MenuItem): Boolean {
-                    val action = actions[item.itemId] ?: return false
-                    action.second()
-                    if (item.itemId != android.R.id.selectAll) mode.finish()
-                    return true
-                }
-                override fun onDestroyActionMode(mode: android.view.ActionMode) {
-                    this@CopyInterceptingTextToolbar.mode = null
-                    if (active?.get() === this@CopyInterceptingTextToolbar) active = null
-                }
-                override fun onGetContentRect(mode: android.view.ActionMode, view: android.view.View, outRect: android.graphics.Rect) {
-                    outRect.set(rect.left.toInt(), rect.top.toInt(), rect.right.toInt(), rect.bottom.toInt())
-                }
-            }, android.view.ActionMode.TYPE_FLOATING)
-            if (mode != null) {
-                active = java.lang.ref.WeakReference(this)
-                return
-            }
-        }
-        delegate.showMenu(
-            rect,
-            onCopyRequested?.let { copy -> { copy(); onCopied() } },
-            onPasteRequested,
-            onCutRequested,
-            onSelectAllRequested,
-        )
-    }
-
-    override fun hide() {
-        mode?.finish()
-        mode = null
-        if (active?.get() === this) active = null
-        delegate.hide()
-    }
-}
-
 @Composable
 private fun DecryptableSelection(content: @Composable () -> Unit) {
-    val delegate = LocalTextToolbar.current
-    val originalClipboard = LocalClipboardManager.current
-    val clipboard = remember(originalClipboard) { SelectionClipboard(originalClipboard) }
-    val view = LocalView.current
     val post = LocalSelectionPost.current
     val quoteSelection = LocalQuoteSelection.current
-    val onSelectionCopied = LocalDecryptSelection.current
-    val toolbar = remember(delegate, clipboard, onSelectionCopied, view, post, quoteSelection) {
-        val quote: ((() -> Unit) -> Unit)? = if (post != null && quoteSelection != null) { copy ->
-            var selected: AnnotatedString? = null
-            clipboard.capture = { selected = it }
-            try { copy() } finally { clipboard.capture = null }
-            selected?.text?.takeIf { it.isNotBlank() }?.let { quoteSelection(post, it) }
-        } else null
-        CopyInterceptingTextToolbar(delegate, view, quote) {
-            clipboard.getText()?.text?.takeIf { it.isNotBlank() }?.let(onSelectionCopied)
-        }
-    }
-    DisposableEffect(toolbar) { onDispose { toolbar.hide() } }
-    CompositionLocalProvider(LocalTextToolbar provides toolbar, LocalClipboardManager provides clipboard) {
-        SelectionContainer(content = content)
-    }
+    ContinuousTextSelection(
+        onCopied = LocalDecryptSelection.current,
+        onQuote = if (post != null && quoteSelection != null) {
+            { selected -> quoteSelection(post, selected) }
+        } else null,
+        content = content,
+    )
 }
 
 private data class BoostTarget(
@@ -521,8 +423,6 @@ fun TopicDetailScreen(
     val list = rememberLazyListState()
     val pullState = rememberPullToRefreshState()
     val scope = rememberCoroutineScope()
-    val textToolbar = LocalTextToolbar.current
-    var selectionResetKey by remember { mutableIntStateOf(0) }
     var pictureGallery by remember { mutableStateOf<Pair<List<ImageViewerItem>, Int>?>(null) }
     var collapsed by rememberSaveable { mutableStateOf(emptyList<Long>()) }
     var expanded by rememberSaveable { mutableStateOf(emptyList<Long>()) }
@@ -627,7 +527,9 @@ fun TopicDetailScreen(
                     val plain = org.jsoup.Jsoup.parseBodyFragment(post.cooked).text()
                     listOf(CookedBlock.Paragraph(listOf(InlineText(plain))))
                 }
-                PreparedPostBody(post, blocks, segmentCookedBlocks(blocks), extractPostImages(blocks), collectHeadings(blocks))
+                // Each floor remains lazy, but its body must be composed as one document:
+                // separate lazy slices lose off-screen text from selection and Select All.
+                PreparedPostBody(post, blocks, listOf(blocks), extractPostImages(blocks), collectHeadings(blocks))
             }
             preparedBodies = preparedBodies + (post.id to body)
             // 分帧发布已准备好的楼层，首屏不等待整批正文。
@@ -1295,7 +1197,6 @@ fun TopicDetailScreen(
 
     CompositionLocalProvider(
         LocalOpenTopic provides onOpenTopic,
-        LocalSelectionResetKey provides selectionResetKey,
         LocalOpenExternalUrl provides { url ->
             val username = parseInternalUserProfileUrl(url)
             if (username != null) onOpenUserProfile(username) else browserUrl = url
@@ -1317,40 +1218,7 @@ fun TopicDetailScreen(
         } else null,
         LocalPostHistory provides { historyPost = it },
     ) {
-        Box(
-            Modifier
-                .fillMaxSize()
-                .pointerInput(textToolbar) {
-                    awaitEachGesture {
-                        val down = awaitFirstDown(pass = PointerEventPass.Initial)
-                        val downPos = down.position
-                        val downTime = System.currentTimeMillis()
-                        var moved = false
-
-                        while (true) {
-                            val event = awaitPointerEvent(pass = PointerEventPass.Initial)
-                            val change = event.changes.firstOrNull { it.id == down.id }
-                            if (change == null || !change.pressed) {
-                                val elapsed = System.currentTimeMillis() - downTime
-                                if (!moved && elapsed < 400L) {
-                                    if (textToolbar.status == TextToolbarStatus.Shown || CopyInterceptingTextToolbar.hasActive) {
-                                        textToolbar.hide()
-                                        CopyInterceptingTextToolbar.hideActive()
-                                        selectionResetKey++
-                                    }
-                                }
-                                break
-                            } else {
-                                val dx = change.position.x - downPos.x
-                                val dy = change.position.y - downPos.y
-                                if (dx * dx + dy * dy > 400f || event.changes.size > 1) {
-                                    moved = true
-                                }
-                            }
-                        }
-                    }
-                }
-        ) {
+        Box(Modifier.fillMaxSize()) {
             Column(Modifier.fillMaxSize().background(IosTheme.colors.groupedBackground)) {
                 IosNavBar(
                     title = "",
@@ -5015,34 +4883,32 @@ internal fun CookedContent(
         LocalSelectionPost provides pollPost,
         LocalOpenPicture provides onPicture,
     ) {
+    DecryptableSelection {
     Column(verticalArrangement = Arrangement.spacedBy(if (compact || subReply) 6.dp else 10.dp)) {
         blocks.forEach { block ->
             when (block) {
                 is CookedBlock.Paragraph -> RichParagraph(block.runs, compact = compact, subReply = subReply)
                 is CookedBlock.Heading -> CookedHeading(block)
-                is CookedBlock.Video -> InlineMediaCard(block.url, block.title, block.posterUrl, block.mimeType, video = true, width = block.width, height = block.height)
-                is CookedBlock.Audio -> InlineMediaCard(block.url, block.title, mimeType = block.mimeType, video = false)
+                is CookedBlock.Video -> DisableSelection { InlineMediaCard(block.url, block.title, block.posterUrl, block.mimeType, video = true, width = block.width, height = block.height) }
+                is CookedBlock.Audio -> DisableSelection { InlineMediaCard(block.url, block.title, mimeType = block.mimeType, video = false) }
                 is CookedBlock.Details -> DetailsCard(block, onPicture, postImages, compact, subReply, pollPost)
                 is CookedBlock.Table -> CookedTable(block, onPicture, postImages, pollPost)
-                is CookedBlock.ImageGrid -> PictureGrid(block, onPicture, postImages)
-                is CookedBlock.Onebox -> OneboxCard(block)
-                is CookedBlock.Poll -> PollCard(block, pollPost?.id)
+                is CookedBlock.ImageGrid -> DisableSelection { PictureGrid(block, onPicture, postImages) }
+                is CookedBlock.Onebox -> DisableSelection { OneboxCard(block) }
+                is CookedBlock.Poll -> DisableSelection { PollCard(block, pollPost?.id) }
                 is CookedBlock.Code -> {
                     if (block.copyText != null) {
                         val clipboard = LocalClipboardManager.current
-                        TextButton(onClick = { clipboard.setText(AnnotatedString(block.copyText)) }) {
-                            Text("复制完整代码", style = IosTheme.type.caption, color = IosTheme.colors.accent)
+                        DisableSelection {
+                            TextButton(onClick = { clipboard.setText(AnnotatedString(block.copyText)) }) {
+                                Text("复制完整代码", style = IosTheme.type.caption, color = IosTheme.colors.accent)
+                            }
                         }
                     }
-                    val codeResetKey = LocalSelectionResetKey.current
-                    key(codeResetKey) {
-                        DecryptableSelection {
-                            Text(block.text, fontFamily = FontFamily.Monospace, style = IosTheme.type.footnote,
-                                modifier = Modifier.fillMaxWidth().background(
-                                    if (subReply) IosTheme.colors.card else IosTheme.colors.fieldBackground,
-                                ).horizontalScroll(rememberScrollState()).padding(10.dp))
-                        }
-                    }
+                    Text(block.text, fontFamily = FontFamily.Monospace, style = IosTheme.type.footnote,
+                        modifier = Modifier.fillMaxWidth().background(
+                            if (subReply) IosTheme.colors.card else IosTheme.colors.fieldBackground,
+                        ).horizontalScroll(rememberScrollState()).padding(10.dp))
                 }
                 is CookedBlock.Quote -> Row(
                     Modifier
@@ -5057,7 +4923,7 @@ internal fun CookedContent(
                         CookedContent(block.blocks, onPicture, postImages = postImages, compact = compact, subReply = subReply, pollPost = pollPost)
                     }
                 }
-                is CookedBlock.Picture -> {
+                is CookedBlock.Picture -> DisableSelection {
                     val maxPortraitHeight = if (subReply) 220.dp else 320.dp
                     var currentUrl by remember(block.url) { mutableStateOf(block.url) }
                     var isError by remember(block.url) { mutableStateOf(false) }
@@ -5276,6 +5142,7 @@ internal fun CookedContent(
         }
     }
     }
+    }
 }
 
 @Composable
@@ -5324,7 +5191,9 @@ private fun DetailsCard(
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(8.dp),
         ) {
-            Text(if (expanded) "▾" else "▸", color = IosTheme.colors.secondaryLabel)
+            DisableSelection {
+                Text(if (expanded) "▾" else "▸", color = IosTheme.colors.secondaryLabel)
+            }
             Box(Modifier.weight(1f)) { RichParagraph(block.summary, compact = true) }
         }
         if (expanded) {
@@ -6666,7 +6535,6 @@ private fun RichParagraph(
     val openExternal = LocalOpenExternalUrl.current
     val updatedOpenExternal by rememberUpdatedState(openExternal)
     val scope = rememberCoroutineScope()
-    val resetKey = LocalSelectionResetKey.current
     val hasSpoiler = remember(runs) { runs.any { it.spoiler } }
     var revealedSpoilers by remember(runs) { mutableStateOf(false) }
     val annotated = remember(runs, colors, context, openExternal, revealedSpoilers) {
@@ -6763,26 +6631,16 @@ private fun RichParagraph(
     } else {
         Modifier
     }
-    key(resetKey) {
-        when {
-            compact -> Text(annotated, style = IosTheme.type.caption, inlineContent = inline, modifier = spoilerClickModifier)
-            subReply -> DecryptableSelection {
-                Text(
-                    annotated,
-                    style = IosTheme.type.subheadline.copy(fontSize = 14.sp, lineHeight = 19.5.sp),
-                    inlineContent = inline,
-                    modifier = spoilerClickModifier,
-                )
-            }
-            else -> DecryptableSelection {
-                Text(
-                    annotated,
-                    style = style ?: IosTheme.type.body.copy(fontSize = 15.5.sp, lineHeight = 22.sp),
-                    inlineContent = inline,
-                    modifier = spoilerClickModifier,
-                )
-            }
-        }
+    if (compact) {
+        Text(annotated, style = IosTheme.type.caption, inlineContent = inline, modifier = spoilerClickModifier)
+    } else DecryptableSelection {
+        Text(
+            annotated,
+            style = if (subReply) IosTheme.type.subheadline.copy(fontSize = 14.sp, lineHeight = 19.5.sp)
+                else style ?: IosTheme.type.body.copy(fontSize = 15.5.sp, lineHeight = 22.sp),
+            inlineContent = inline,
+            modifier = spoilerClickModifier,
+        )
     }
 }
 
