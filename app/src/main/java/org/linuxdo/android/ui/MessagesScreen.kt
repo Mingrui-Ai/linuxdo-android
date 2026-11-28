@@ -685,6 +685,16 @@ private fun MessageFilterPill(
     }
 }
 
+internal fun shouldSnapListToHeadOnHeadChange(
+    previousHeadId: Any?,
+    currentHeadId: Any?,
+    wasNearTop: Boolean,
+    wasInactive: Boolean,
+): Boolean {
+    if (previousHeadId == null || currentHeadId == null || previousHeadId == currentHeadId) return false
+    return wasNearTop || wasInactive
+}
+
 @Composable
 private fun NotificationList(
     state: ProfileUiState,
@@ -711,6 +721,33 @@ private fun NotificationList(
         }
     }
     LaunchedEffect(cleanQuery) { list.scrollToItem(0) }
+    // 后台轮询或进入消息页刷新在列表头部插入新通知时，防止 LazyColumn 继续锚定旧首条而把新通知顶出视口上方。
+    val currentHeadId = entries.firstOrNull()?.id
+    var lastHeadId by remember { mutableStateOf<String?>(null) }
+    var lastActiveHeadId by remember { mutableStateOf<String?>(null) }
+    var wasActive by remember { mutableStateOf(active) }
+    LaunchedEffect(currentHeadId, active) {
+        val enteringForeground = active && !wasActive
+        val isNearTop = list.firstVisibleItemIndex <= 1
+        val headChangedWhileAway = enteringForeground &&
+            lastActiveHeadId != null &&
+            currentHeadId != null &&
+            currentHeadId != lastActiveHeadId
+        val headChanged = shouldSnapListToHeadOnHeadChange(
+            previousHeadId = lastHeadId,
+            currentHeadId = currentHeadId,
+            wasNearTop = isNearTop,
+            wasInactive = !active || enteringForeground,
+        )
+        if (headChanged || headChangedWhileAway || (enteringForeground && entries.firstOrNull()?.unread == true && isNearTop)) {
+            list.scrollToItem(0)
+        }
+        lastHeadId = currentHeadId
+        if (active) {
+            lastActiveHeadId = currentHeadId
+        }
+        wasActive = active
+    }
     val nearEnd by remember {
         derivedStateOf {
             val layout = list.layoutInfo
@@ -740,6 +777,8 @@ private fun NotificationList(
                 .scrollListBars(list, active),
             contentPadding = PaddingValues(bottom = 72.dp),
         ) {
+            // 固定顶部零高锚点：在列表顶部时插入新通知不会触发 LazyColumn 追踪旧首条 ID 而向下偏移。
+            item(key = "notifications_top_anchor") { Spacer(Modifier.height(0.dp)) }
             itemsIndexed(entries, key = { _, entry -> entry.id }) { index, entry ->
                 NotificationRow(entry, onOpenTopic, onRead, onOpenUser)
                 if (index < entries.lastIndex) {

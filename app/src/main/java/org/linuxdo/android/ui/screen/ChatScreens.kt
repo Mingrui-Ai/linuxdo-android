@@ -286,6 +286,33 @@ internal fun ChatList(
     val list = rememberLazyListState()
     org.linuxdo.android.ui.design.ScrollToTopOnRequest(list, scrollToTopRequest)
     LaunchedEffect(searchQuery, dmFilter, channelFilter) { list.scrollToItem(0) }
+    // 新会话顶置或后台刷新置顶时，防止 LazyColumn 跟随旧首条 ID 向下偏移。
+    val currentHeadId = currentList.firstOrNull()?.id
+    var lastHeadId by remember { mutableStateOf<Long?>(null) }
+    var lastActiveHeadId by remember { mutableStateOf<Long?>(null) }
+    var wasActive by remember { mutableStateOf(active) }
+    LaunchedEffect(currentHeadId, active) {
+        val enteringForeground = active && !wasActive
+        val isNearTop = list.firstVisibleItemIndex <= 1
+        val headChangedWhileAway = enteringForeground &&
+            lastActiveHeadId != null &&
+            currentHeadId != null &&
+            currentHeadId != lastActiveHeadId
+        val headChanged = org.linuxdo.android.ui.shouldSnapListToHeadOnHeadChange(
+            previousHeadId = lastHeadId,
+            currentHeadId = currentHeadId,
+            wasNearTop = isNearTop,
+            wasInactive = !active || enteringForeground,
+        )
+        if (headChanged || headChangedWhileAway) {
+            list.scrollToItem(0)
+        }
+        lastHeadId = currentHeadId
+        if (active) {
+            lastActiveHeadId = currentHeadId
+        }
+        wasActive = active
+    }
 
     val showQuickStrip = directMessages &&
         showQuickContactsBar &&
@@ -307,6 +334,7 @@ internal fun ChatList(
                 .fillMaxSize()
                 .scrollListBars(list, active),
         ) {
+            item(key = "chat_list_top_anchor") { Spacer(Modifier.height(0.dp)) }
             if (showQuickStrip) {
                 item(key = "dm_quick_contacts_strip") {
                     DirectMessageQuickContactsBar(
