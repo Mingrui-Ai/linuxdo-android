@@ -1981,9 +1981,22 @@ private fun MainNavigation(state: UiState, viewModel: MainViewModel, lifecycle: 
                 viewModel::openTopicSearchHit, viewModel::closeTopicSearch)
         }
         if (browsing && metadataEditor.open) {
-            TopicMetadataEditorSheet(metadataEditor, viewModel::updateMetadataTitle, viewModel::updateMetadataCategory,
-                viewModel::updateMetadataTags, viewModel::searchMetadataTags, viewModel::submitTopicMetadata,
-                { viewModel.openTopicMetadataEditor(metadataEditor.topicId, preserveInput = true) }, viewModel::closeTopicMetadataEditor)
+            Box(Modifier.fillMaxSize().zIndex(2f)) {
+                key(metadataEditor.topicId) {
+                    org.linuxdo.android.ui.screen.TopicMetadataEditorSheet(
+                        state = metadataEditor,
+                        categories = categories,
+                        onTogglePinCategory = viewModel::togglePinCategory,
+                        onTitle = viewModel::updateMetadataTitle,
+                        onCategory = viewModel::updateMetadataCategory,
+                        onTags = viewModel::updateMetadataTags,
+                        onTagQuery = viewModel::searchMetadataTags,
+                        onSave = viewModel::submitTopicMetadata,
+                        onRetry = { viewModel.openTopicMetadataEditor(metadataEditor.topicId, preserveInput = true) },
+                        onClose = viewModel::closeTopicMetadataEditor,
+                    )
+                }
+            }
         }
         androidx.compose.animation.AnimatedVisibility(
             visible = shouldShowTabBar,

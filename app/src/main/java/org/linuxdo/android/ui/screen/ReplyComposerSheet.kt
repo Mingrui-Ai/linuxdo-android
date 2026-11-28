@@ -140,14 +140,15 @@ internal fun ReplyComposerSheet(
     val heading = when (target) {
         is ComposerTarget.NewReply -> "发表评论"
         is ComposerTarget.ReplyTo -> "回复 @${target.username}"
-        is ComposerTarget.Edit -> "编辑 #${target.postNumber}"
+        is ComposerTarget.Edit -> if (target.postNumber <= 1) "编辑主帖" else "编辑 #${target.postNumber}"
     }
     val sendText = if (target is ComposerTarget.Edit) "保存" else "发表"
+    val isEdit = target is ComposerTarget.Edit
     MarkdownComposerSheet(
         sessionKey = target,
         heading = heading,
         sendLabel = sendText,
-        placeholder = "说点什么… 支持 Markdown",
+        placeholder = if (isEdit) "编辑正文… 支持 Markdown" else "说点什么… 支持 Markdown",
         draft = composer.draft,
         attachments = composer.attachments,
         emojiUrls = emojiUrls,
@@ -159,6 +160,7 @@ internal fun ReplyComposerSheet(
         error = composer.error,
         topicId = target.topicId,
         allowPoll = true,
+        initialFullScreen = isEdit,
         dockOnKeyboardHide = true,
         onDockedHeightChange = onDockedHeightChange,
         onDraftChange = onDraftChange,
