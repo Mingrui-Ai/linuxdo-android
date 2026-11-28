@@ -679,9 +679,7 @@ class BrowserSession(
                         retryingLoginWithHcaptchaToken = false
                         pendingHcaptchaToken = null
                         val resObj = try { JSONObject(body) } catch (_: Exception) { null }
-                        val error = resObj?.let {
-                            UserErrorMessage.fromHttpBody(status, body, fallback = "").takeIf { m -> m.isNotBlank() }
-                        }
+                        val error = UserErrorMessage.serverError(body)
                         val user = resObj?.optJSONObject("user")?.optString("username")
 
                         val has2faToken = !cachedSecondFactor.isNullOrBlank()
@@ -1526,7 +1524,7 @@ class BrowserSession(
                                         diagnostics.log("CSRF 遇到 Cloudflare 盾 (403)，正在安全弹窗内启动 /challenge 验证...")
                                         launchCfChallenge()
                                     } else {
-                                        submissionCallback(false, "安全防护拦截 (HTTP 403)，请重试或开启网络加速", false)
+                                        submissionCallback(false, "安全防护拦截，请重试或开启网络加速", false)
                                     }
                                 } else if (resp.code == 429) {
                                     val remainingSec = (TopicRepository.rateLimitRemainingMs() / 1000L).coerceAtLeast(1L)
@@ -1709,9 +1707,8 @@ class BrowserSession(
                             diagnostics.log("邮件令牌兑换响应 HTTP ${resp.code}: ${bodyStr.take(200)}")
 
                             val resObj = try { JSONObject(bodyStr) } catch (_: Exception) { null }
-                            val error = if (!resp.isSuccessful || resObj?.has("error") == true || resObj?.has("errors") == true) {
-                                UserErrorMessage.fromHttpBody(resp.code, bodyStr, fallback = "").takeIf { it.isNotBlank() }
-                            } else null
+                            // 仅业务错误提前返回；HTTP 错误继续走下方安全验证、限流及失效链接分支。
+                            val error = UserErrorMessage.serverError(bodyStr)
                             val has2faToken = !secondFactorToken.isNullOrBlank()
                             val secondFactorRequired = isSecondFactorResponse(resObj, has2faToken)
 

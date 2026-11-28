@@ -22,7 +22,8 @@ import kotlinx.serialization.json.contentOrNull
 object UserErrorMessage {
 
     private val json = Json { ignoreUnknownKeys = true; isLenient = true }
-    private val htmlTagPattern = Regex("<\\s*(!doctype|html|head|body|title|h1|p|div|script|style)\\b", RegexOption.IGNORE_CASE)
+    private val htmlTagPattern = Regex("<\\s*(?:!doctype\\b|/?[a-z][a-z0-9:-]*\\b[^>]*>)", RegexOption.IGNORE_CASE)
+    private val embeddedJsonPattern = Regex("[{\\[]\\s*\"")
     private val rawHttpPrefixPattern = Regex("^HTTP\\s+\\d{3}\\s*:?\\s*", RegexOption.IGNORE_CASE)
     private val jsonEnvelopePattern = Regex("^\\s*[{\\[].*[}\\]]\\s*$", setOf(RegexOption.DOT_MATCHES_ALL))
     private val chineseCharPattern = Regex("[\\u4e00-\\u9fff]")
@@ -36,11 +37,26 @@ object UserErrorMessage {
         if (raw.isNotEmpty() && !looksLikeHtml(raw)) {
             parseDiscourseError(raw)?.let { return it }
             // 纯文本但非 JSON/HTML 且包含中文（部分接口会返回纯文本中文原因）
-            if (!looksLikeRawJson(raw) && raw.length <= 200 && chineseCharPattern.containsMatchIn(raw)) {
-                return sanitizePlainText(raw)
+            if (!looksLikeRawJson(raw) && raw.length <= 200) {
+                cleanUserText(raw)?.let { return it }
             }
         }
         return fallback?.takeIf { it.isNotBlank() } ?: defaultForHttpStatus(status)
+    }
+
+    /** 登录响应可能成功且不含 user；仅明确的 error/errors 才表示业务拒绝。 */
+    fun serverError(body: String?, fallback: String = "登录失败，请稍后重试"): String? {
+        val obj = runCatching { json.parseToJsonElement(body.orEmpty()) as? JsonObject }.getOrNull() ?: return null
+        fun hasError(value: kotlinx.serialization.json.JsonElement?): Boolean = when (value) {
+            is JsonArray -> value.any(::hasError)
+            is JsonObject -> value.isNotEmpty()
+            is JsonPrimitive -> value.contentOrNull?.trim()?.let {
+                it.isNotEmpty() && it != "null" && it != "[]" && it != "false"
+            } == true
+            else -> false
+        }
+        if (!hasError(obj["error"]) && !hasError(obj["errors"])) return null
+        return parseDiscourseError(body.orEmpty()) ?: fallback
     }
 
     /**
@@ -195,11 +211,7 @@ object UserErrorMessage {
             return parseDiscourseError(stripped) ?: defaultForHttpStatus(status)
         }
         translateKnownServerPhrase(stripped, null)?.let { return it }
-        return if (chineseCharPattern.containsMatchIn(stripped)) {
-            sanitizePlainText(stripped)
-        } else {
-            defaultForHttpStatus(status)
-        }
+        return cleanUserText(stripped) ?: defaultForHttpStatus(status)
     }
 
     private fun formatIoMessage(raw: String?, fallback: String): String {
@@ -220,8 +232,7 @@ object UserErrorMessage {
             lower.contains("ssl") || lower.contains("handshake") || lower.contains("cert") ->
                 "安全连接建立失败，请检查网络或切换网络模式"
             lower.startsWith("http ") -> sanitize(text, fallback)
-            chineseCharPattern.containsMatchIn(text) && !looksLikeHtml(text) && !looksLikeRawJson(text) ->
-                sanitizePlainText(text)
+            chineseCharPattern.containsMatchIn(text) -> cleanUserText(text) ?: fallback
             else -> fallback
         }
     }
@@ -235,6 +246,9 @@ object UserErrorMessage {
             val status = Regex("^HTTP\\s+(\\d{3})", RegexOption.IGNORE_CASE).find(text)?.groupValues?.getOrNull(1)?.toIntOrNull() ?: 0
             val rest = rawHttpPrefixPattern.replaceFirst(text, "").trim()
             return fromHttpBody(status, rest)
+        }
+        embeddedJsonPattern.find(text)?.let { match ->
+            return parseDiscourseError(text.substring(match.range.first))
         }
         translateKnownServerPhrase(text, null)?.let { return it }
         // 含中文且不是明显的技术拼接（如 "响应: {..."）则直接返回干净文案
@@ -252,6 +266,7 @@ object UserErrorMessage {
             (jsonEnvelopePattern.matches(text) || text.contains("\"errors\"") || text.contains("\"error\"") || text.contains("\"error_type\""))
 
     private fun sanitizePlainText(text: String): String = text
+        .replace(rawHttpPrefixPattern, "")
         .replace(Regex("\\s*\\(HTTP\\s+\\d{3}\\)", RegexOption.IGNORE_CASE), "")
         .replace(Regex("[:：]\\s*HTTP\\s+\\d{3}$", RegexOption.IGNORE_CASE), "")
         .trim()
